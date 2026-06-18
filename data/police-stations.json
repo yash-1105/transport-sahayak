@@ -1,0 +1,63 @@
+{
+  "_meta": {
+    "label": "Sample data — replace with official dataset.",
+    "source": "Major police stations in Guwahati; contact numbers are illustrative."
+  },
+  "policeStations": [
+    {
+      "id": "ps-001",
+      "sample": true,
+      "name": "Panbazar Police Station",
+      "lat": 26.1844,
+      "lng": 91.7452,
+      "district": "Kamrup Metropolitan",
+      "circle": "Guwahati East",
+      "phone": "0361-2543105",
+      "emergency": "100"
+    },
+    {
+      "id": "ps-002",
+      "sample": true,
+      "name": "Dispur Police Station",
+      "lat": 26.1388,
+      "lng": 91.7820,
+      "district": "Kamrup Metropolitan",
+      "circle": "Guwahati South",
+      "phone": "0361-2362001",
+      "emergency": "100"
+    },
+    {
+      "id": "ps-003",
+      "sample": true,
+      "name": "Jalukbari Police Station",
+      "lat": 26.1534,
+      "lng": 91.6950,
+      "district": "Kamrup Metropolitan",
+      "circle": "Guwahati West",
+      "phone": "0361-2660201",
+      "emergency": "100"
+    },
+    {
+      "id": "ps-004",
+      "sample": true,
+      "name": "Basistha Police Station",
+      "lat": 26.0980,
+      "lng": 91.7550,
+      "district": "Kamrup Metropolitan",
+      "circle": "Guwahati South",
+      "phone": "0361-2308201",
+      "emergency": "100"
+    },
+    {
+      "id": "ps-005",
+      "sample": true,
+      "name": "Noonmati Police Station",
+      "lat": 26.1638,
+      "lng": 91.7283,
+      "district": "Kamrup Metropolitan",
+      "circle": "Guwahati Central",
+      "phone": "0361-2550201",
+      "emergency": "100"
+    }
+  ]
+}

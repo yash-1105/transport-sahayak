@@ -1,0 +1,68 @@
+{
+  "_meta": {
+    "label": "Sample data — replace with official dataset.",
+    "source": "Illustrative Suraksha Mitra patrol posts on Guwahati-area highways."
+  },
+  "surakshaMitras": [
+    {
+      "id": "sm-001",
+      "sample": true,
+      "name": "Jalukbari Toll Plaza Post",
+      "lat": 26.1480,
+      "lng": 91.6830,
+      "highway": "NH-27",
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "70990-XXXXX",
+      "patrolStretch": "NH-27, km 4 – km 12 (Jalukbari to Azara)",
+      "shift": "24x7 (2 shifts)"
+    },
+    {
+      "id": "sm-002",
+      "sample": true,
+      "name": "Jorabat Interchange Post",
+      "lat": 26.1190,
+      "lng": 91.8620,
+      "highway": "NH-27 / NH-37 Junction",
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "70990-XXXXX",
+      "patrolStretch": "NH-27/37 interchange radius 3 km",
+      "shift": "24x7 (2 shifts)"
+    },
+    {
+      "id": "sm-003",
+      "sample": true,
+      "name": "Sonapur Bridge Post",
+      "lat": 26.1562,
+      "lng": 92.0034,
+      "highway": "NH-37",
+      "district": "Kamrup",
+      "contactNumber": "70990-XXXXX",
+      "patrolStretch": "NH-37, km 18 – km 28 (Sonapur bridge section)",
+      "shift": "06:00 – 22:00"
+    },
+    {
+      "id": "sm-004",
+      "sample": true,
+      "name": "Kahilipara Flyover Post",
+      "lat": 26.1290,
+      "lng": 91.7440,
+      "highway": "NH-17",
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "70990-XXXXX",
+      "patrolStretch": "NH-17, Kahilipara stretch 4 km",
+      "shift": "06:00 – 22:00"
+    },
+    {
+      "id": "sm-005",
+      "sample": true,
+      "name": "Noonmati–Khanapara Corridor",
+      "lat": 26.1480,
+      "lng": 91.7680,
+      "highway": "NH-27",
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "70990-XXXXX",
+      "patrolStretch": "NH-27, km 14 – km 22 (Noonmati to Khanapara)",
+      "shift": "24x7 (2 shifts)"
+    }
+  ]
+}

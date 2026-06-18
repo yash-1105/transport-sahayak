@@ -1,0 +1,125 @@
+{
+  "_meta": {
+    "label": "Sample data — replace with official dataset.",
+    "source": "Illustrative blackspots based on publicly reported accident-prone zones in and around Guwahati. Not validated against NCRB/MoRTH records."
+  },
+  "blackspots": [
+    {
+      "id": "bs-001",
+      "sample": true,
+      "name": "Jalukbari Flyover Approach",
+      "lat": 26.1480,
+      "lng": 91.6830,
+      "highway": "NH-27",
+      "district": "Kamrup Metropolitan",
+      "accidentsLast3Years": 34,
+      "deathsLast3Years": 8,
+      "primaryHazard": "High-speed merging, poor night visibility, uncontrolled ramps",
+      "periodOfPeak": "Night (20:00 – 04:00)"
+    },
+    {
+      "id": "bs-002",
+      "sample": true,
+      "name": "Jorabat T-Point",
+      "lat": 26.1190,
+      "lng": 91.8620,
+      "highway": "NH-27 / NH-37",
+      "district": "Kamrup Metropolitan",
+      "accidentsLast3Years": 29,
+      "deathsLast3Years": 11,
+      "primaryHazard": "Uncontrolled 3-way junction, heavy truck traffic, poor sight lines",
+      "periodOfPeak": "Dawn and dusk"
+    },
+    {
+      "id": "bs-003",
+      "sample": true,
+      "name": "Sonapur Bridge, NH-37",
+      "lat": 26.1562,
+      "lng": 92.0034,
+      "highway": "NH-37",
+      "district": "Kamrup",
+      "accidentsLast3Years": 22,
+      "deathsLast3Years": 7,
+      "primaryHazard": "Narrow bridge deck, pedestrian conflict, poor lighting, sudden narrowing",
+      "periodOfPeak": "Night (21:00 – 05:00)"
+    },
+    {
+      "id": "bs-004",
+      "sample": true,
+      "name": "Khanapara Overbridge",
+      "lat": 26.1340,
+      "lng": 91.7860,
+      "highway": "NH-27",
+      "district": "Kamrup Metropolitan",
+      "accidentsLast3Years": 18,
+      "deathsLast3Years": 4,
+      "primaryHazard": "Pedestrians crossing at grade, high-speed traffic, no median",
+      "periodOfPeak": "Morning (07:00 – 09:00)"
+    },
+    {
+      "id": "bs-005",
+      "sample": true,
+      "name": "Noonmati Refinery Crossing",
+      "lat": 26.1638,
+      "lng": 91.7283,
+      "highway": "NH-27",
+      "district": "Kamrup Metropolitan",
+      "accidentsLast3Years": 15,
+      "deathsLast3Years": 3,
+      "primaryHazard": "Industrial vehicle cross-traffic, tanker turns, dust reducing visibility",
+      "periodOfPeak": "Daytime (06:00 – 18:00)"
+    },
+    {
+      "id": "bs-006",
+      "sample": true,
+      "name": "Kahilipara–Basistha Stretch",
+      "lat": 26.1200,
+      "lng": 91.7520,
+      "highway": "NH-17",
+      "district": "Kamrup Metropolitan",
+      "accidentsLast3Years": 21,
+      "deathsLast3Years": 5,
+      "primaryHazard": "Undulating road, waterlogging in monsoon, poor drainage",
+      "periodOfPeak": "Monsoon season"
+    },
+    {
+      "id": "bs-007",
+      "sample": true,
+      "name": "Azara Airport Road Intersection",
+      "lat": 26.1020,
+      "lng": 91.7380,
+      "highway": "Airport Road",
+      "district": "Kamrup Metropolitan",
+      "accidentsLast3Years": 12,
+      "deathsLast3Years": 2,
+      "primaryHazard": "Mixed traffic speeds, unregulated U-turns, two-wheelers",
+      "periodOfPeak": "Evening (17:00 – 20:00)"
+    },
+    {
+      "id": "bs-008",
+      "sample": true,
+      "name": "Maligaon Railway Level Crossing",
+      "lat": 26.1645,
+      "lng": 91.7048,
+      "highway": "State Road",
+      "district": "Kamrup Metropolitan",
+      "accidentsLast3Years": 9,
+      "deathsLast3Years": 3,
+      "primaryHazard": "Unmanned level crossing, speeding two-wheelers ignoring gates",
+      "periodOfPeak": "All hours"
+    },
+    {
+      "id": "bs-009",
+      "sample": true,
+      "name": "Guwahati–Shillong Road Curve, Jorabat",
+      "lat": 26.1050,
+      "lng": 91.8750,
+      "highway": "NH-6",
+      "district": "Kamrup Metropolitan",
+      "accidentsLast3Years": 26,
+      "deathsLast3Years": 9,
+      "primaryHazard": "Sharp hairpin, hill road with sheer drop, overloaded vehicles",
+      "periodOfPeak": "Night and monsoon"
+    }
+  ]
+}

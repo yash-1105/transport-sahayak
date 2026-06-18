@@ -1,0 +1,59 @@
+{
+  "_meta": {
+    "label": "Sample data — replace with official dataset.",
+    "source": "Illustrative only. Static roster only — no live GPS tracking infrastructure exists.",
+    "lastUpdated": "2024-01"
+  },
+  "ambulances": [
+    {
+      "id": "amb-001",
+      "callSign": "AS-AMB-001",
+      "type": "ALS",
+      "baseHospitalId": "hosp-001",
+      "baseLat": 26.1797,
+      "baseLng": 91.7386,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108"
+    },
+    {
+      "id": "amb-002",
+      "callSign": "AS-AMB-002",
+      "type": "BLS",
+      "baseHospitalId": "hosp-001",
+      "baseLat": 26.1797,
+      "baseLng": 91.7386,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108"
+    },
+    {
+      "id": "amb-003",
+      "callSign": "AS-AMB-003",
+      "type": "BLS",
+      "baseHospitalId": "hosp-003",
+      "baseLat": 26.1843,
+      "baseLng": 91.7523,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108"
+    },
+    {
+      "id": "amb-004",
+      "callSign": "AS-AMB-004",
+      "type": "ALS",
+      "baseHospitalId": "hosp-004",
+      "baseLat": 26.7509,
+      "baseLng": 94.2037,
+      "district": "Jorhat",
+      "contactNumber": "108"
+    },
+    {
+      "id": "amb-005",
+      "callSign": "AS-AMB-005",
+      "type": "BLS",
+      "baseHospitalId": "hosp-005",
+      "baseLat": 27.4728,
+      "baseLng": 94.9120,
+      "district": "Dibrugarh",
+      "contactNumber": "108"
+    }
+  ]
+}

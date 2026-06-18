@@ -1,0 +1,63 @@
+{
+  "_meta": {
+    "label": "Sample data — replace with official dataset.",
+    "source": "Illustrative highway-side garages and breakdown response points."
+  },
+  "mechanics": [
+    {
+      "id": "mech-001",
+      "sample": true,
+      "name": "NH-27 Highway Garage, Jalukbari",
+      "lat": 26.1510,
+      "lng": 91.6920,
+      "district": "Kamrup Metropolitan",
+      "phone": "98541-XXXXX",
+      "services": ["Tyre change", "Towing", "Minor repairs", "Fuel supply"],
+      "operatingHours": "06:00 – 22:00"
+    },
+    {
+      "id": "mech-002",
+      "sample": true,
+      "name": "Sonapur Road Workshop",
+      "lat": 26.1600,
+      "lng": 91.9800,
+      "district": "Kamrup",
+      "phone": "98542-XXXXX",
+      "services": ["Tyre change", "Towing", "Engine repair"],
+      "operatingHours": "07:00 – 21:00"
+    },
+    {
+      "id": "mech-003",
+      "sample": true,
+      "name": "Beltola Auto Service",
+      "lat": 26.1280,
+      "lng": 91.7750,
+      "district": "Kamrup Metropolitan",
+      "phone": "94355-XXXXX",
+      "services": ["Tyre change", "Battery jump-start", "Towing"],
+      "operatingHours": "08:00 – 20:00"
+    },
+    {
+      "id": "mech-004",
+      "sample": true,
+      "name": "Maligaon Depot Workshop",
+      "lat": 26.1720,
+      "lng": 91.7050,
+      "district": "Kamrup Metropolitan",
+      "phone": "96789-XXXXX",
+      "services": ["Towing", "Heavy vehicle repair", "Tyre change"],
+      "operatingHours": "24x7"
+    },
+    {
+      "id": "mech-005",
+      "sample": true,
+      "name": "Azara Roadside Garage",
+      "lat": 26.1020,
+      "lng": 91.7250,
+      "district": "Kamrup Metropolitan",
+      "phone": "99540-XXXXX",
+      "services": ["Tyre change", "Minor repairs", "Fuel supply"],
+      "operatingHours": "06:00 – 21:00"
+    }
+  ]
+}

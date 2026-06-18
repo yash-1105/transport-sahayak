@@ -24,3 +24,67 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ── Accessibility: keyboard focus ring ────────────────────────────────────── */
+/* Force a visible outline on keyboard navigation — overrides focus:outline-none
+   from Tailwind utility classes. Mouse clicks use :focus (not :focus-visible)
+   so they never see this ring. */
+:focus-visible {
+  outline: 2px solid #0f2044 !important;
+  outline-offset: 2px !important;
+  border-radius: 3px;
+}
+
+/* ── Accessibility: reduced motion ─────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Mobile: remove 300 ms tap delay on all interactive elements ───────────── */
+button, a, select, label, [role="button"] {
+  touch-action: manipulation;
+}
+
+/* ── Map: crosshair when dropping incident pin ─────────────────────────────── */
+.picking-pin .leaflet-container {
+  cursor: crosshair !important;
+}
+
+/* ── Mobile: hide horizontal scrollbar on filter chip rows ─────────────────── */
+.chips-row {
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* IE / Edge legacy */
+}
+.chips-row::-webkit-scrollbar {
+  display: none;                /* Chrome / Safari */
+}
+
+/* ── Print styles for Incident Record ─────────────────────────────────────── */
+.print-only { display: none; }
+
+@media print {
+  /* Hide all body content; the record panel restores visibility for itself */
+  body { visibility: hidden; }
+  [data-print-root] {
+    visibility: visible;
+    position: fixed;
+    inset: 0;
+    background: white;
+    overflow: visible;
+    max-height: none !important;
+  }
+  [data-print-root] * { visibility: visible; }
+  .no-print  { display: none !important; }
+  .print-only { display: block !important; }
+  .print-content { overflow: visible !important; max-height: none !important; }
+
+  @page {
+    margin: 1.5cm;
+    size: A4 portrait;
+  }
+}

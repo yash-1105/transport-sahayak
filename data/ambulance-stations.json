@@ -1,0 +1,112 @@
+{
+  "_meta": {
+    "label": "Sample data — replace with official dataset.",
+    "source": "Illustrative station locations around Guwahati. Static roster — no live GPS tracking."
+  },
+  "ambulanceStations": [
+    {
+      "id": "amb-stn-001",
+      "sample": true,
+      "name": "GMCH Ambulance Bay",
+      "lat": 26.1797,
+      "lng": 91.7386,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108",
+      "ambulanceCount": 6,
+      "types": ["ALS", "BLS"],
+      "operatingHours": "24x7",
+      "notes": "Primary trauma hospital dispatch point"
+    },
+    {
+      "id": "amb-stn-002",
+      "sample": true,
+      "name": "Jalukbari Highway Post",
+      "lat": 26.1534,
+      "lng": 91.6892,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108",
+      "ambulanceCount": 2,
+      "types": ["BLS"],
+      "operatingHours": "24x7",
+      "notes": "Covers NH-27 western approach to Guwahati"
+    },
+    {
+      "id": "amb-stn-003",
+      "sample": true,
+      "name": "Dispur Health Centre",
+      "lat": 26.1406,
+      "lng": 91.7836,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108",
+      "ambulanceCount": 3,
+      "types": ["ALS", "BLS"],
+      "operatingHours": "24x7",
+      "notes": "Covers Dispur and south Guwahati area"
+    },
+    {
+      "id": "amb-stn-004",
+      "sample": true,
+      "name": "Maligaon Railway Quarters Post",
+      "lat": 26.1668,
+      "lng": 91.7025,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108",
+      "ambulanceCount": 2,
+      "types": ["BLS"],
+      "operatingHours": "24x7",
+      "notes": "Covers Maligaon and western Guwahati"
+    },
+    {
+      "id": "amb-stn-005",
+      "sample": true,
+      "name": "Narengi Station",
+      "lat": 26.1632,
+      "lng": 91.8002,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108",
+      "ambulanceCount": 2,
+      "types": ["BLS"],
+      "operatingHours": "24x7",
+      "notes": "Covers north-east Guwahati and Narengi"
+    },
+    {
+      "id": "amb-stn-006",
+      "sample": true,
+      "name": "Beltola Community Health Centre",
+      "lat": 26.1260,
+      "lng": 91.7800,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108",
+      "ambulanceCount": 2,
+      "types": ["BLS"],
+      "operatingHours": "24x7",
+      "notes": "Covers Beltola and Basistha areas"
+    },
+    {
+      "id": "amb-stn-007",
+      "sample": true,
+      "name": "Azara PHC",
+      "lat": 26.1000,
+      "lng": 91.7200,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108",
+      "ambulanceCount": 1,
+      "types": ["BLS"],
+      "operatingHours": "24x7",
+      "notes": "Covers Azara and airport road corridor"
+    },
+    {
+      "id": "amb-stn-008",
+      "sample": true,
+      "name": "Jorabat Post",
+      "lat": 26.1190,
+      "lng": 91.8620,
+      "district": "Kamrup Metropolitan",
+      "contactNumber": "108",
+      "ambulanceCount": 2,
+      "types": ["BLS"],
+      "operatingHours": "24x7",
+      "notes": "Covers NH-27 eastern corridor and Jorabat interchange"
+    }
+  ]
+}
