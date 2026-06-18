@@ -94,8 +94,8 @@ export function heuristicAssess(incident: AccidentReport): AssessmentResult {
 
   const rationale =
     reasons.length > 0
-      ? `Heuristic indicators: ${reasons.join("; ")}. Score ${score} maps to ${SEVERITY_LABELS[severity]}.`
-      : `No high-risk indicators in flags or description. Score ${score} — ${SEVERITY_LABELS[severity]}.`;
+      ? `Heuristic indicators: ${reasons.join("; ")}. Severity ${severity} — ${SEVERITY_LABELS[severity]}.`
+      : `No high-risk indicators in flags or description. Severity ${severity} — ${SEVERITY_LABELS[severity]}.`;
 
   return {
     severity,

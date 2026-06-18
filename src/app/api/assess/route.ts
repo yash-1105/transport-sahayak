@@ -8,6 +8,8 @@ import { heuristicAssess } from "@/lib/heuristic";
 
 const SYSTEM_PROMPT = `You are a road accident severity assessor for the Assam Transport Department emergency operations centre.
 
+The incident description may be in Hindi, Assamese, or any other language. Always respond in English only.
+
 Given an incident report, return ONLY valid JSON — no markdown, no prose, no code fences, nothing outside the JSON object.
 
 Required output format (all fields mandatory):
@@ -71,7 +73,7 @@ export async function POST(req: NextRequest) {
     const { GoogleGenerativeAI } = await import("@google/generative-ai");
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash",
       systemInstruction: SYSTEM_PROMPT,
     });
 
@@ -86,7 +88,7 @@ export async function POST(req: NextRequest) {
 
     const response = await model.generateContent({
       contents: [{ role: "user", parts: [{ text: userContent }] }],
-      generationConfig: { maxOutputTokens: 512 },
+      generationConfig: { maxOutputTokens: 1024 },
     });
 
     const text = response.response.text();
