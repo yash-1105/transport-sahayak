@@ -1,6 +1,5 @@
-// Severity assessment route handler
-// Calls Claude (claude-sonnet-4-6) with a rule-based fallback.
-// NEVER called from client-side code — API key stays server-side.
+// Legacy severity endpoint — kept for backwards compatibility.
+// New code should use /api/assess instead. This route uses Gemini with a rule-based fallback.
 
 import { NextRequest, NextResponse } from "next/server";
 import type { SeverityLevel } from "@/lib/types";
@@ -17,7 +16,6 @@ interface SeverityResponse {
   reasoning: string;
 }
 
-// Rule-based fallback — used when AI is unavailable or key is missing
 function ruleBased(req: SeverityRequest): SeverityResponse {
   const { vehiclesInvolved, estimatedCasualties } = req;
   let severity: SeverityLevel = "MINOR";
@@ -37,23 +35,23 @@ function ruleBased(req: SeverityRequest): SeverityResponse {
 export async function POST(req: NextRequest) {
   const body: SeverityRequest = await req.json();
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return NextResponse.json(ruleBased(body));
   }
 
   try {
-    // Lazy import to keep the bundle clean — only runs server-side
-    const Anthropic = (await import("@anthropic-ai/sdk")).default;
-    const client = new Anthropic({ apiKey });
+    const { GoogleGenerativeAI } = await import("@google/generative-ai");
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-    const message = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 256,
-      messages: [
+    const response = await model.generateContent({
+      contents: [
         {
           role: "user",
-          content: `You are a road accident severity classifier for the Assam Transport Department.
+          parts: [
+            {
+              text: `You are a road accident severity classifier for the Assam Transport Department.
 Classify the accident severity as one of: CRITICAL, SERIOUS, MINOR, or UNKNOWN.
 
 Respond with JSON only, no prose:
@@ -63,11 +61,14 @@ Accident details:
 - Vehicles involved: ${body.vehiclesInvolved}
 - Estimated casualties: ${body.estimatedCasualties}
 - Description: ${body.description}`,
+            },
+          ],
         },
       ],
+      generationConfig: { maxOutputTokens: 256 },
     });
 
-    const text = message.content[0].type === "text" ? message.content[0].text : "";
+    const text = response.response.text().replace(/^```(?:json)?\s*/im, "").replace(/\s*```\s*$/m, "").trim();
     const parsed = JSON.parse(text) as { severity: SeverityLevel; reasoning: string };
 
     return NextResponse.json({
@@ -76,7 +77,6 @@ Accident details:
       reasoning: parsed.reasoning,
     } satisfies SeverityResponse);
   } catch {
-    // AI failed — fall back to rules transparently
     return NextResponse.json(ruleBased(body));
   }
 }

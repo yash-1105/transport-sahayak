@@ -1,5 +1,5 @@
 // Severity assessment route handler.
-// Always returns HTTP 200 with a valid AssessmentResult — either from Claude or
+// Always returns HTTP 200 with a valid AssessmentResult — either from Gemini or
 // the rule-based heuristic fallback. The client can rely on 200 = usable result.
 
 import { NextRequest, NextResponse } from "next/server";
@@ -35,7 +35,6 @@ SOS with no detail: assign severity 4, priority critical — unknown information
 Absence of details should increase, not decrease, the assessed risk.`;
 
 function safeParseAssessment(text: string): Partial<AssessmentResult> {
-  // Strip markdown code fences if the model includes them despite instructions
   const stripped = text
     .replace(/^```(?:json)?\s*/im, "")
     .replace(/\s*```\s*$/m, "")
@@ -60,7 +59,7 @@ export async function POST(req: NextRequest) {
   const incident: AccidentReport = await req.json();
   const now = new Date().toISOString();
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
 
   if (!apiKey) {
     const result = heuristicAssess(incident);
@@ -69,8 +68,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const Anthropic = (await import("@anthropic-ai/sdk")).default;
-    const client = new Anthropic({ apiKey });
+    const { GoogleGenerativeAI } = await import("@google/generative-ai");
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      systemInstruction: SYSTEM_PROMPT,
+    });
 
     const userContent = [
       `Incident ID: ${incident.id}`,
@@ -81,16 +84,12 @@ export async function POST(req: NextRequest) {
       `Description: ${incident.description || "(none provided)"}`,
     ].join("\n");
 
-    const message = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 512,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userContent }],
+    const response = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: userContent }] }],
+      generationConfig: { maxOutputTokens: 512 },
     });
 
-    const text =
-      message.content[0].type === "text" ? message.content[0].text : "";
-
+    const text = response.response.text();
     const parsed = safeParseAssessment(text);
 
     if (!isValidResult(parsed)) {
@@ -105,7 +104,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(result);
   } catch (err) {
-    // AI call failed — heuristic covers us
     const reason =
       err instanceof Error ? err.message.slice(0, 120) : "Unknown error";
     const result = heuristicAssess(incident);
