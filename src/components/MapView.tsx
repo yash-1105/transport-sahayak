@@ -12,6 +12,7 @@ import { useRoutingStore } from "@/store/routingStore";
 import { useEventLog } from "@/store/eventLog";
 import TimelinePanel from "@/components/TimelinePanel";
 import LanguageToggle from "@/components/LanguageToggle";
+import InstallPWA from "@/components/InstallPWA";
 import IncidentRecord from "@/components/IncidentRecord";
 import { useT } from "@/hooks/useI18n";
 import { usePlaces, LAYER_TO_PLACE_TYPE } from "@/hooks/usePlaces";
@@ -654,6 +655,7 @@ export default function MapView() {
             <p className="text-[10px] text-blue-200 leading-tight truncate hidden sm:block">{t("appTagline")}</p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            <InstallPWA />
             <LanguageToggle />
           </div>
         </div>
