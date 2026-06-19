@@ -813,18 +813,6 @@ export default function MapView() {
         onClose={closeReport}
       />
 
-      {/* ── Bottom attribution + sample-data banner ───────────────────────────── */}
-      <div className="absolute bottom-0 left-0 right-0 z-[1000] pointer-events-none">
-        <div className="pointer-events-auto bg-amber-50 border-t border-amber-300 px-4 py-1.5 flex items-center justify-between gap-4">
-          {/* Google attribution required when displaying Places data */}
-          <span className="text-[10px] text-gray-500 flex-shrink-0">
-            {t("googlePoweredNote")}
-          </span>
-          <p className="text-[11px] text-amber-800 font-medium text-right">
-            {t("sampleDataBanner")}
-          </p>
-        </div>
-      </div>
 
       {/* ── Timeline panel ────────────────────────────────────────────────────── */}
       <TimelinePanel
