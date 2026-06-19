@@ -3,8 +3,25 @@
 // the rule-based heuristic fallback. The client can rely on 200 = usable result.
 
 import { NextRequest, NextResponse } from "next/server";
+import { SchemaType, type ResponseSchema } from "@google/generative-ai";
 import type { AccidentReport, AssessmentResult } from "@/lib/types";
 import { heuristicAssess } from "@/lib/heuristic";
+
+// Forces Gemini to emit complete, well-formed JSON in this exact shape.
+const RESPONSE_SCHEMA: ResponseSchema = {
+  type: SchemaType.OBJECT,
+  properties: {
+    severity: { type: SchemaType.INTEGER },
+    rationale: { type: SchemaType.STRING },
+    recommendedResponse: { type: SchemaType.STRING },
+    priority: {
+      type: SchemaType.STRING,
+      format: "enum",
+      enum: ["low", "medium", "high", "critical"],
+    },
+  },
+  required: ["severity", "rationale", "recommendedResponse", "priority"],
+};
 
 const SYSTEM_PROMPT = `You are a road accident severity assessor for the Assam Transport Department emergency operations centre.
 
@@ -41,7 +58,11 @@ function safeParseAssessment(text: string): Partial<AssessmentResult> {
     .replace(/^```(?:json)?\s*/im, "")
     .replace(/\s*```\s*$/m, "")
     .trim();
-  return JSON.parse(stripped) as Partial<AssessmentResult>;
+  // Extract the first {...} block in case the model wraps it in stray prose.
+  const start = stripped.indexOf("{");
+  const end = stripped.lastIndexOf("}");
+  const json = start !== -1 && end > start ? stripped.slice(start, end + 1) : stripped;
+  return JSON.parse(json) as Partial<AssessmentResult>;
 }
 
 function isValidResult(obj: Partial<AssessmentResult>): obj is AssessmentResult {
@@ -57,6 +78,22 @@ function isValidResult(obj: Partial<AssessmentResult>): obj is AssessmentResult 
   );
 }
 
+// Models tried in order. The free tier throttles aggressively (503 "high demand"
+// / 429), so if the primary is overloaded we fall through to lighter models that
+// are usually less congested.
+const MODEL_CHAIN = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"];
+
+// Transient, worth-retrying conditions: capacity (503), rate limit (429), or a
+// raw network/fetch hiccup. A hard 400/401/403 is NOT retried.
+function isTransient(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b(429|503|500|UNAVAILABLE|RESOURCE_EXHAUSTED|overloaded|high demand|fetch failed|ECONNRESET|ETIMEDOUT)\b/i.test(
+    msg,
+  );
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 export async function POST(req: NextRequest) {
   const incident: AccidentReport = await req.json();
   const now = new Date().toISOString();
@@ -69,29 +106,57 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result);
   }
 
+  const userContent = [
+    `Incident ID: ${incident.id}`,
+    `Mode: ${incident.reportMode}`,
+    `Location: ${incident.locationLabel}`,
+    `Persons involved: ${incident.vehiclesInvolved ?? "unknown"}`,
+    `Flags: ${incident.flags.length > 0 ? incident.flags.join(", ") : "none"}`,
+    `Description: ${incident.description || "(none provided)"}`,
+  ].join("\n");
+
   try {
     const { GoogleGenerativeAI } = await import("@google/generative-ai");
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
-      systemInstruction: SYSTEM_PROMPT,
-    });
 
-    const userContent = [
-      `Incident ID: ${incident.id}`,
-      `Mode: ${incident.reportMode}`,
-      `Location: ${incident.locationLabel}`,
-      `Persons involved: ${incident.vehiclesInvolved ?? "unknown"}`,
-      `Flags: ${incident.flags.length > 0 ? incident.flags.join(", ") : "none"}`,
-      `Description: ${incident.description || "(none provided)"}`,
-    ].join("\n");
+    let text: string | null = null;
+    let lastErr: unknown = null;
 
-    const response = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: userContent }] }],
-      generationConfig: { maxOutputTokens: 1024 },
-    });
+    // Try each model; retry transient failures with exponential backoff before
+    // moving to the next model. ~6 total attempts before giving up to heuristic.
+    outer: for (const modelName of MODEL_CHAIN) {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        systemInstruction: SYSTEM_PROMPT,
+      });
 
-    const text = response.response.text();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const response = await model.generateContent({
+            contents: [{ role: "user", parts: [{ text: userContent }] }],
+            // gemini-2.5-flash is a thinking model: reasoning tokens are drawn from
+            // the same output budget, so a small cap truncates the JSON mid-string.
+            // Give it ample room and force a strict JSON schema so the body is complete.
+            generationConfig: {
+              maxOutputTokens: 4096,
+              responseMimeType: "application/json",
+              responseSchema: RESPONSE_SCHEMA,
+            },
+          });
+          text = response.response.text();
+          break outer;
+        } catch (e) {
+          lastErr = e;
+          if (!isTransient(e)) break; // hard error → try next model immediately
+          await sleep(600 * (attempt + 1)); // 600ms, then 1200ms
+        }
+      }
+    }
+
+    if (text === null) {
+      throw lastErr instanceof Error ? lastErr : new Error("All models unavailable");
+    }
+
     const parsed = safeParseAssessment(text);
 
     if (!isValidResult(parsed)) {
