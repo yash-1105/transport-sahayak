@@ -1,4 +1,4 @@
 fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.6
-google-generativeai>=0.7   # OPTIONAL — only needed if you set GEMINI_API_KEY for the fallback
+google-generativeai>=0.7
