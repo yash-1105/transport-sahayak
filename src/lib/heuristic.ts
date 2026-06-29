@@ -1,108 +1,57 @@
-// Rule-based severity scoring — used when AI assessment is unavailable.
-// Importable in both server (route handler) and client (network-error fallback).
+// Rule-based severity scoring — retained for reference / future re-wiring.
+// No longer called from the UI since the Python engine took over /api/assess.
 
-import type { AccidentReport, AssessmentResult, AssessmentSeverity, AssessmentPriority } from "./types";
+import type { AccidentReport, AssessmentResult, AssessmentSeverity } from "./types";
 
-const RESPONSE_TEMPLATES: Record<AssessmentSeverity, string> = {
-  1: "Send nearest patrol vehicle. No immediate medical response required. Clear road if obstructed.",
-  2: "Dispatch BLS ambulance. Notify nearest police station. Document for traffic management.",
-  3: "Dispatch ALS ambulance and police. Alert district hospital emergency unit. Establish traffic control point.",
-  4: "Dispatch multiple ambulances (ALS preferred). Notify trauma centre. Request police and fire services. Set up on-scene incident command.",
-  5: "Mass casualty protocol — all available emergency services. Immediate notification to GMC/nearest Level-1 trauma centre. Request ambulances from adjacent districts. Activate district disaster management cell.",
+const IMPACT_NOTES: Record<AssessmentSeverity, string> = {
+  1: "Minor incident — no confirmed casualties. Basic road clearance response.",
+  2: "Possible minor injuries requiring medical evaluation. BLS ambulance advisable.",
+  3: "Confirmed casualties requiring immediate ambulance and police response.",
+  4: "Multiple casualties or critical life-threatening conditions. Full emergency response required.",
 };
 
-const SEVERITY_LABELS: Record<AssessmentSeverity, string> = {
-  1: "minor road incident with no apparent casualties",
-  2: "possible minor injuries requiring medical evaluation",
-  3: "confirmed casualties requiring immediate ambulance response",
-  4: "serious casualties or confirmed entrapment requiring full emergency response",
-  5: "mass casualty event or critical life-threatening conditions",
+const AGENCY_SETS: Record<AssessmentSeverity, { code: string; label: string }[]> = {
+  1: [{ code: "TRAFFIC", label: "Traffic Police" }],
+  2: [{ code: "AMBULANCE", label: "Ambulance (108)" }, { code: "POLICE", label: "Police" }],
+  3: [{ code: "AMBULANCE", label: "Ambulance (108)" }, { code: "POLICE", label: "Police" }, { code: "HOSPITAL", label: "District Hospital" }],
+  4: [{ code: "AMBULANCE", label: "Ambulance (108)" }, { code: "POLICE", label: "Police" }, { code: "HOSPITAL", label: "Level-1 Trauma Centre" }, { code: "FIRE", label: "Fire & Rescue" }],
 };
 
 export function heuristicAssess(incident: AccidentReport): AssessmentResult {
   let score = 0;
-  const reasons: string[] = [];
+  const modifiers: string[] = [];
 
-  // SOS — unknown detail is a risk, not a reason to downgrade
-  if (incident.flags.includes("SOS")) {
-    score += 5;
-    reasons.push("SOS alert with no additional detail");
-  }
+  if (incident.flags.includes("SOS")) { score += 4; modifiers.push("SOS alert — unknown detail treated as high risk"); }
+  if (incident.flags.includes("Heavy bleeding")) { score += 3; modifiers.push("heavy bleeding reported"); }
+  if (incident.flags.includes("Trapped")) { score += 3; modifiers.push("person(s) trapped"); }
 
-  // Observed condition flags
-  if (incident.flags.includes("Heavy bleeding")) {
-    score += 3;
-    reasons.push("heavy bleeding reported");
-  }
-  if (incident.flags.includes("Trapped")) {
-    score += 3;
-    reasons.push("person(s) trapped");
-  }
-  // Breathing not confirmed is a passive risk signal only when other flags are present
-  if (
-    incident.flags.length > 0 &&
-    !incident.flags.includes("SOS") &&
-    !incident.flags.includes("Breathing") &&
-    incident.flags.includes("Conscious")
-  ) {
-    score += 1;
-    reasons.push("conscious but breathing not confirmed");
-  }
-
-  // Persons involved (stored in vehiclesInvolved field from the form)
   const persons = incident.vehiclesInvolved ?? incident.estimatedCasualties ?? 0;
-  if (persons >= 5) {
-    score += 3;
-    reasons.push(`${persons} persons involved`);
-  } else if (persons >= 3) {
-    score += 2;
-    reasons.push(`${persons} persons involved`);
-  } else if (persons >= 1) {
-    score += 1;
-    reasons.push(`${persons} person(s) involved`);
-  }
+  if (persons >= 5) { score += 3; modifiers.push(`${persons} persons involved`); }
+  else if (persons >= 2) { score += 1; modifiers.push(`${persons} persons involved`); }
 
-  // Description keyword signals
   const desc = (incident.description ?? "").toLowerCase();
-  if (/fatal|dead\b|died|death|killed/.test(desc)) {
-    score += 4;
-    reasons.push("fatality language in description");
-  }
-  if (/unconscious|unresponsive|not breathing/.test(desc)) {
-    score += 3;
-    reasons.push("unconscious/unresponsive mentioned");
-  }
-  if (/fire|burn|explos/.test(desc)) {
-    score += 3;
-    reasons.push("fire or explosion mentioned");
-  }
-  if (/multiple|several|many|overturned|rollover/.test(desc)) {
-    score += 1;
-    reasons.push("multiple vehicles or rollovers mentioned");
-  }
-  if (/truck|lorry|bus|tanker|heavy vehicle/.test(desc)) {
-    score += 1;
-    reasons.push("heavy vehicle involved");
-  }
+  if (/fatal|dead\b|died|death|killed/.test(desc)) { score += 4; modifiers.push("fatality language in description"); }
+  if (/unconscious|unresponsive|not breathing/.test(desc)) { score += 3; modifiers.push("unconscious/unresponsive mentioned"); }
+  if (/fire|burn|explos/.test(desc)) { score += 2; modifiers.push("fire or explosion mentioned"); }
 
-  // Map score → severity
-  const severity: AssessmentSeverity =
-    score >= 9 ? 5 : score >= 6 ? 4 : score >= 4 ? 3 : score >= 2 ? 2 : 1;
+  const severityScore: AssessmentSeverity =
+    score >= 8 ? 4 : score >= 5 ? 3 : score >= 2 ? 2 : 1;
 
-  const priority: AssessmentPriority =
-    severity >= 4 ? "critical" : severity === 3 ? "high" : severity === 2 ? "medium" : "low";
+  const severityLabel = (["LOW", "MEDIUM", "HIGH", "CRITICAL"] as const)[severityScore - 1];
 
-  const rationale =
-    reasons.length > 0
-      ? `Heuristic indicators: ${reasons.join("; ")}. Severity ${severity} — ${SEVERITY_LABELS[severity]}.`
-      : `No high-risk indicators in flags or description. Severity ${severity} — ${SEVERITY_LABELS[severity]}.`;
+  const dataGaps: string[] = [];
+  if (!incident.estimatedCasualties) dataGaps.push("How many persons are injured?");
+  if (!incident.flags.length) dataGaps.push("Are there visible injuries or trapped persons?");
 
   return {
-    severity,
-    rationale,
-    recommendedResponse: RESPONSE_TEMPLATES[severity],
-    priority,
-    source: "HEURISTIC",
-    assessedAt: new Date().toISOString(),
+    severity: severityLabel,
+    severityScore,
+    impactNote: IMPACT_NOTES[severityScore],
+    appliedModifiers: modifiers,
+    agencies: AGENCY_SETS[severityScore],
+    dataGaps,
+    classifiedBy: "rules",
+    llmUsed: false,
+    lowConfidence: modifiers.length === 0,
   };
 }

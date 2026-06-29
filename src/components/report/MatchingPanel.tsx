@@ -26,8 +26,8 @@ import { useEventLog } from "@/store/eventLog";
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-const SEV_COLOR: Record<AssessmentSeverity, string> = {
-  1: "#15803d", 2: "#4d7c0f", 3: "#b45309", 4: "#c2410c", 5: "#b91c1c",
+const SEV_COLOR: Record<1|2|3|4, string> = {
+  1: "#15803d", 2: "#b45309", 3: "#c2410c", 4: "#b91c1c",
 };
 
 function makeDispatchId() {
@@ -432,7 +432,7 @@ export default function MatchingPanel({
   assessment,
   onReady,
 }: MatchingPanelProps) {
-  const sev = assessment.severity as AssessmentSeverity;
+  const sev = assessment.severityScore as AssessmentSeverity;
   const accentColor = SEV_COLOR[sev];
 
   const [phase, setPhase] = useState<Phase>("fetching_places");
@@ -458,7 +458,7 @@ export default function MatchingPanel({
       let googlePlaces: GooglePlace[] = [];
       try {
         const res = await fetch(
-          `/api/places/nearby?type=hospital&lat=${incident.location.lat}&lng=${incident.location.lng}&radius=30000`,
+          `/api/places/nearby?type=hospital&lat=${incident.location.lat}&lng=${incident.location.lng}&radius=30000&for_matching=1`,
           { cache: "no-store" }
         );
         if (res.ok) {

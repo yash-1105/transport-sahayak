@@ -1,10 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
-import { useVoiceInput, type VoiceLocale } from "@/hooks/useVoiceInput";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useEventLog } from "@/store/eventLog";
 import { reverseGeocode } from "@/lib/geocode";
-import { heuristicAssess } from "@/lib/heuristic";
 import { checkDuplicate, type DuplicateMatch } from "@/lib/dedup";
 import MatchingPanel from "@/components/report/MatchingPanel";
 import { useRoutingStore } from "@/store/routingStore";
@@ -14,7 +12,6 @@ import type {
   AccidentReport,
   AssessmentResult,
   AssessmentSeverity,
-  AssessmentPriority,
   GeoPoint,
   Hospital,
   PoliceStation,
@@ -185,27 +182,308 @@ function IncidentHintCard({ hint }: { hint: IncidentClass }) {
   );
 }
 
-// ── Severity visual config ────────────────────────────────────────────────────
+// ── Severity visual config (4-level: 1=LOW 2=MEDIUM 3=HIGH 4=CRITICAL) ────────
 
-const SEV: Record<
-  AssessmentSeverity,
-  { label: string; bg: string; text: string; border: string; track: string }
-> = {
-  1: { label: "Minor",    bg: "#f0fdf4", text: "#15803d", border: "#86efac", track: "#22c55e" },
-  2: { label: "Low",      bg: "#f7fee7", text: "#4d7c0f", border: "#bef264", track: "#84cc16" },
-  3: { label: "Moderate", bg: "#fffbeb", text: "#b45309", border: "#fcd34d", track: "#f59e0b" },
-  4: { label: "Serious",  bg: "#fff7ed", text: "#c2410c", border: "#fdba74", track: "#f97316" },
-  5: { label: "Critical", bg: "#fef2f2", text: "#b91c1c", border: "#fca5a5", track: "#ef4444" },
+const SEV: Record<AssessmentSeverity, { bg: string; text: string; border: string; track: string }> = {
+  1: { bg: "#f0fdf4", text: "#15803d", border: "#86efac", track: "#22c55e" },
+  2: { bg: "#fffbeb", text: "#b45309", border: "#fcd34d", track: "#f59e0b" },
+  3: { bg: "#fff7ed", text: "#c2410c", border: "#fdba74", track: "#f97316" },
+  4: { bg: "#fef2f2", text: "#b91c1c", border: "#fca5a5", track: "#ef4444" },
 };
 
-const PRI: Record<AssessmentPriority, { label: string; bg: string; text: string }> = {
-  low:      { label: "LOW PRIORITY",      bg: "#f3f4f6", text: "#6b7280" },
-  medium:   { label: "MEDIUM PRIORITY",   bg: "#dbeafe", text: "#1d4ed8" },
-  high:     { label: "HIGH PRIORITY",     bg: "#ffedd5", text: "#c2410c" },
-  critical: { label: "CRITICAL PRIORITY", bg: "#fee2e2", text: "#b91c1c" },
+const CLASSIFIED_LABEL: Record<string, string> = {
+  operator: "Operator selected",
+  rules:    "Rule engine",
+  llm:      "AI-assisted",
 };
 
-// ── Assessment result card (the centrepiece) ──────────────────────────────────
+// ── Incident type picker — two-tier + auto-detect ─────────────────────────────
+
+type GuessResult = {
+  subType: string | null;
+  category: string | null;
+  confidence: number;
+  lowConfidence: boolean;
+  candidates: Array<{ subType: string; category: string }>;
+};
+
+type CategoryItem = { category: string; count: number };
+
+type PickerPhase =
+  | { kind: "idle" }
+  | { kind: "guessing" }
+  | { kind: "confirm"; guess: GuessResult }
+  | { kind: "browse"; categories: CategoryItem[] | null; catError: boolean }
+  | { kind: "subtypes"; category: string; subtypes: string[]; filter: string }
+  | { kind: "done"; subType: string; category: string };
+
+function IncidentTypePicker({
+  description,
+  value,
+  onChange,
+}: {
+  description: string;
+  value: string;
+  onChange: (subType: string, category: string) => void;
+}) {
+  const [phase, setPhase] = useState<PickerPhase>({ kind: "idle" });
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const phaseRef = useRef<PickerPhase["kind"]>("idle");
+  phaseRef.current = phase.kind;
+
+  // If parent clears value (form reset), go back to idle
+  useEffect(() => {
+    if (!value) setPhase({ kind: "idle" });
+  }, [value]);
+
+  // Auto-detect: debounce description → POST /api/guess
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const pk = phaseRef.current;
+    // Don't interrupt manual browsing or a confirmed selection
+    if (pk === "done" || pk === "browse" || pk === "subtypes") return;
+
+    if (description.trim().length < 8) {
+      if (pk === "guessing" || pk === "confirm") setPhase({ kind: "idle" });
+      return;
+    }
+
+    setPhase({ kind: "guessing" });
+    timerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/guess", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ description: description.trim() }),
+          cache: "no-store",
+        });
+        if (!res.ok) { setPhase({ kind: "idle" }); return; }
+        const g: GuessResult = await res.json();
+        if (!g.subType) { setPhase({ kind: "idle" }); return; }
+        setPhase({ kind: "confirm", guess: g });
+      } catch {
+        setPhase({ kind: "idle" });
+      }
+    }, 400);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [description]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function confirm(subType: string, category: string) {
+    onChange(subType, category);
+    setPhase({ kind: "done", subType, category });
+  }
+
+  function clear() {
+    onChange("", "");
+    setPhase({ kind: "idle" });
+  }
+
+  async function startBrowse() {
+    setPhase({ kind: "browse", categories: null, catError: false });
+    try {
+      const res = await fetch("/api/categories", { cache: "no-store" });
+      if (!res.ok) throw new Error();
+      setPhase({ kind: "browse", categories: await res.json(), catError: false });
+    } catch {
+      setPhase({ kind: "browse", categories: null, catError: true });
+    }
+  }
+
+  async function openCategory(cat: string) {
+    setPhase({ kind: "subtypes", category: cat, subtypes: [], filter: "" });
+    try {
+      const res = await fetch(`/api/categories/subtypes?name=${encodeURIComponent(cat)}`, { cache: "no-store" });
+      if (!res.ok) throw new Error();
+      const subs: string[] = await res.json();
+      setPhase({ kind: "subtypes", category: cat, subtypes: subs, filter: "" });
+    } catch { /* leave empty — error visible via empty list */ }
+  }
+
+  // ── confirmed ──
+  if (phase.kind === "done") {
+    return (
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">Incident Type</label>
+        <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          <span className="flex-1 text-sm font-semibold text-green-900 truncate">{phase.subType}</span>
+          <span className="text-[10px] text-green-600 flex-shrink-0">{phase.category}</span>
+          <button onClick={clear} className="text-gray-400 hover:text-red-500 flex-shrink-0 ml-1 leading-none">✕</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── subtype list (per category) ──
+  if (phase.kind === "subtypes") {
+    const filtered =
+      phase.filter.length < 2
+        ? phase.subtypes
+        : phase.subtypes.filter((s) => s.toLowerCase().includes(phase.filter.toLowerCase()));
+    return (
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          <button onClick={startBrowse} className="text-[#0f2044] underline">{phase.category}</button>
+          {" "}→ pick sub-type
+        </label>
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <div className="p-2 border-b border-gray-100 flex items-center gap-2">
+            <button onClick={startBrowse} className="text-xs text-gray-400 hover:text-gray-700 flex-shrink-0">
+              ← Back
+            </button>
+            <input
+              autoFocus
+              value={phase.filter}
+              onChange={(e) => setPhase({ ...phase, filter: e.target.value })}
+              placeholder={`Search ${phase.subtypes.length} types…`}
+              className="flex-1 text-xs px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-[#0f2044]/30"
+            />
+          </div>
+          {/* Allow submit at category level */}
+          <button
+            onClick={() => confirm("", phase.category)}
+            className="w-full text-left px-3 py-2 text-xs border-b border-gray-100 hover:bg-[#0f2044]/5 flex items-center gap-2"
+          >
+            <span className="font-semibold text-[#0f2044]">{phase.category}</span>
+            <span className="text-gray-400 text-[10px]">— use category only</span>
+          </button>
+          <div style={{ maxHeight: 200, overflowY: "auto" }}>
+            {phase.subtypes.length === 0 && (
+              <div className="p-3 text-xs text-gray-400 flex items-center gap-2">
+                <div className="w-3 h-3 border-2 border-gray-300 border-t-[#0f2044] rounded-full animate-spin" />
+                Loading…
+              </div>
+            )}
+            {phase.subtypes.length > 0 && filtered.length === 0 && (
+              <p className="text-xs text-gray-400 p-3">No matches</p>
+            )}
+            {filtered.map((s) => (
+              <button
+                key={s}
+                onClick={() => confirm(s, phase.category)}
+                className="w-full text-left px-3 py-2 text-xs font-medium text-gray-900 hover:bg-gray-50 border-b border-gray-100 last:border-0"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── browse: category tiles ──
+  if (phase.kind === "browse") {
+    return (
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          Incident Type{" "}
+          <button onClick={clear} className="font-normal text-gray-400 underline text-[11px]">cancel</button>
+        </label>
+        {phase.catError ? (
+          <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
+            Engine unreachable — type list unavailable.
+          </p>
+        ) : !phase.categories ? (
+          <div className="flex items-center gap-2 py-2 text-xs text-gray-400">
+            <div className="w-3.5 h-3.5 border-2 border-gray-300 border-t-[#0f2044] rounded-full animate-spin" />
+            Loading categories…
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-1.5">
+            {phase.categories.map(({ category, count }) => (
+              <button
+                key={category}
+                onClick={() => openCategory(category)}
+                className="text-left px-3 py-2.5 border border-gray-200 rounded-lg hover:border-[#0f2044] hover:bg-[#0f2044]/5 text-xs font-medium text-gray-800 transition-colors"
+              >
+                <span className="block truncate">{category}</span>
+                <span className="block text-[10px] text-gray-400 mt-0.5">{count} types</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── confirm card (auto-detected) ──
+  if (phase.kind === "confirm") {
+    const g = phase.guess;
+    return (
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">Incident Type — detected</label>
+        <div className="border border-[#0f2044]/20 rounded-lg overflow-hidden">
+          <div className="px-3 py-2.5 flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-bold text-gray-900 leading-tight">{g.subType}</p>
+              <p className="text-[11px] text-gray-400 mt-0.5">{g.category}</p>
+            </div>
+            <button
+              onClick={() => confirm(g.subType!, g.category!)}
+              className="flex-shrink-0 text-xs font-bold px-3 py-1.5 bg-[#0f2044] text-white rounded-md hover:bg-[#1a3567]"
+            >
+              Confirm
+            </button>
+          </div>
+          {g.lowConfidence && g.candidates.length > 1 && (
+            <div className="border-t border-gray-100 px-3 py-2">
+              <p className="text-[10px] text-gray-400 mb-1.5">Or did you mean:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {g.candidates.slice(0, 3).map((c) => (
+                  <button
+                    key={`${c.category}::${c.subType}`}
+                    onClick={() => confirm(c.subType, c.category)}
+                    className="text-[11px] px-2 py-1 border border-gray-200 rounded-full hover:border-[#0f2044] hover:text-[#0f2044] text-gray-600"
+                  >
+                    {c.subType}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="border-t border-gray-100 px-3 py-1.5 flex items-center justify-between">
+            <button onClick={startBrowse} className="text-[11px] text-gray-400 hover:text-gray-700">
+              Not right? Browse manually
+            </button>
+            <button onClick={clear} className="text-[11px] text-gray-400 hover:text-gray-600">Skip</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── guessing (debounce in flight) ──
+  if (phase.kind === "guessing") {
+    return (
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">Incident Type — detecting…</label>
+        <div className="flex items-center gap-2 py-2 px-1 text-xs text-gray-400">
+          <div className="w-3.5 h-3.5 border-2 border-gray-300 border-t-[#0f2044] rounded-full animate-spin" />
+          Analysing description…
+        </div>
+      </div>
+    );
+  }
+
+  // ── idle: auto-detects from description, or browse manually ──
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+        Incident Type{" "}
+        <span className="font-normal text-gray-400">— auto-detects as you type</span>
+      </label>
+      <button
+        type="button"
+        onClick={startBrowse}
+        className="w-full border border-dashed border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-400 hover:border-[#0f2044] hover:text-[#0f2044] transition-colors flex items-center justify-center gap-2"
+      >
+        Browse incident types…
+      </button>
+    </div>
+  );
+}
+
+// ── Assessment result card ────────────────────────────────────────────────────
 
 function AssessmentCard({
   result,
@@ -214,13 +492,14 @@ function AssessmentCard({
   result: AssessmentResult;
   incidentId: string;
 }) {
-  const sev = SEV[result.severity as AssessmentSeverity];
-  const pri = PRI[result.priority as AssessmentPriority];
-  const isAI = result.source === "AI";
+  const score = (result.severityScore ?? 1) as AssessmentSeverity;
+  const sev = SEV[score] ?? SEV[1];
+  const [modOpen, setModOpen] = useState(false);
+  const classLabel = CLASSIFIED_LABEL[result.classifiedBy] ?? result.classifiedBy;
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Incident created confirmation — compact */}
+      {/* Incident created confirmation */}
       <div className="flex items-center gap-2 px-1">
         <div className="w-5 h-5 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
           <svg className="w-3 h-3 text-green-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -232,126 +511,121 @@ function AssessmentCard({
         </p>
       </div>
 
-      {/* ── Assessment card ── */}
-      <div
-        className="rounded-xl border-2 overflow-hidden"
-        style={{ borderColor: sev.border, background: sev.bg }}
-      >
-        {/* Card header */}
-        <div
-          className="px-4 py-2 flex items-center justify-between"
-          style={{ background: sev.track }}
-        >
-          <p className="text-[11px] font-black tracking-widest text-white uppercase">
-            Severity Assessment
-          </p>
-          <p className="text-[11px] text-white/80 font-medium">
-            {isAI ? "claude-sonnet-4-6" : "Heuristic"}
-          </p>
+      {/* Assessment card */}
+      <div className="rounded-xl border-2 overflow-hidden" style={{ borderColor: sev.border, background: sev.bg }}>
+        {/* Header */}
+        <div className="px-4 py-2 flex items-center justify-between" style={{ background: sev.track }}>
+          <p className="text-[11px] font-black tracking-widest text-white uppercase">Severity Assessment</p>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/20 text-white">
+              {classLabel}
+            </span>
+            {result.lowConfidence && (
+              <span className="text-[10px] text-white/80 italic">low-confidence input</span>
+            )}
+          </div>
         </div>
 
-        {/* Severity number + label */}
-        <div className="pt-5 pb-4 flex flex-col items-center gap-2">
-          {/* Big numbered circle */}
-          <div
-            className="w-24 h-24 rounded-full border-4 flex items-center justify-center"
-            style={{
-              borderColor: sev.border,
-              background: "#fff",
-            }}
-          >
-            <span
-              className="text-6xl font-black leading-none tabular-nums"
-              style={{ color: sev.text }}
-            >
-              {result.severity}
+        {/* SubType */}
+        {result.subType && (
+          <div className="px-4 pt-3">
+            <p className="text-[10px] font-black tracking-widest uppercase mb-0.5" style={{ color: sev.text }}>Incident Type</p>
+            <p className="text-sm font-semibold text-gray-900">{result.subType}</p>
+          </div>
+        )}
+
+        {/* Score circle + label + track */}
+        <div className="pt-4 pb-3 flex flex-col items-center gap-2">
+          <div className="w-24 h-24 rounded-full border-4 flex items-center justify-center"
+            style={{ borderColor: sev.border, background: "#fff" }}>
+            <span className="text-6xl font-black leading-none tabular-nums" style={{ color: sev.text }}>
+              {score}
             </span>
           </div>
-
-          {/* Severity label */}
-          <p
-            className="text-xl font-black tracking-wide uppercase"
-            style={{ color: sev.text }}
-          >
-            {sev.label}
+          <p className="text-xl font-black tracking-wide uppercase" style={{ color: sev.text }}>
+            {result.severity}
           </p>
-
-          {/* Progress track — 5 segments */}
           <div className="flex gap-1 mt-1">
-            {([1, 2, 3, 4, 5] as AssessmentSeverity[]).map((n) => (
-              <div
-                key={n}
-                className="w-8 h-2 rounded-full transition-all"
-                style={{
-                  background: n <= result.severity ? SEV[n].track : "#e5e7eb",
-                }}
-              />
+            {([1, 2, 3, 4] as AssessmentSeverity[]).map((n) => (
+              <div key={n} className="w-8 h-2 rounded-full transition-all"
+                style={{ background: n <= score ? SEV[n].track : "#e5e7eb" }} />
             ))}
           </div>
-
-          {/* Priority badge */}
-          <span
-            className="mt-1 text-[11px] font-black tracking-widest px-3 py-1 rounded-full"
-            style={{ background: pri.bg, color: pri.text }}
-          >
-            {pri.label}
-          </span>
         </div>
 
-        {/* Rationale + recommended response */}
         <div className="px-4 pb-4 flex flex-col gap-3">
+          {/* Impact note */}
           <div>
-            <p
-              className="text-[10px] font-black tracking-widest uppercase mb-1"
-              style={{ color: sev.text }}
-            >
-              Rationale
+            <p className="text-[10px] font-black tracking-widest uppercase mb-1" style={{ color: sev.text }}>
+              Impact Assessment
             </p>
-            <p className="text-sm text-gray-800 leading-relaxed">{result.rationale}</p>
+            <p className="text-sm text-gray-800 leading-relaxed">{result.impactNote}</p>
           </div>
 
-          <div
-            className="border-t pt-3"
-            style={{ borderColor: sev.border }}
-          >
-            <p
-              className="text-[10px] font-black tracking-widest uppercase mb-1"
-              style={{ color: sev.text }}
-            >
-              Recommended Response
-            </p>
-            <p className="text-sm text-gray-800 leading-relaxed">
-              {result.recommendedResponse}
-            </p>
-          </div>
+          {/* Agency chips */}
+          {result.agencies.length > 0 && (
+            <div className="border-t pt-3" style={{ borderColor: sev.border }}>
+              <p className="text-[10px] font-black tracking-widest uppercase mb-2" style={{ color: sev.text }}>
+                Agencies to Notify
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {result.agencies.map((a) => (
+                  <span key={a.code}
+                    className="text-xs font-semibold px-2.5 py-1 rounded-full border"
+                    style={{ borderColor: sev.border, color: sev.text, background: "#fff" }}>
+                    {a.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
 
-          {/* Source tag */}
-          <div
-            className="flex items-start gap-2 border-t pt-3"
-            style={{ borderColor: sev.border }}
-          >
-            {isAI ? (
-              <>
-                <span className="text-base leading-none mt-0.5">🤖</span>
-                <div>
-                  <p className="text-xs font-semibold text-gray-700">AI assessment</p>
-                  <p className="text-[11px] text-gray-400">Model: claude-sonnet-4-6 · Operator should verify before acting</p>
-                </div>
-              </>
-            ) : (
-              <>
-                <span className="text-base leading-none mt-0.5">⚙️</span>
-                <div>
-                  <p className="text-xs font-semibold text-amber-700">Heuristic fallback</p>
-                  <p className="text-[11px] text-amber-600">
-                    {result.fallbackReason === "no API key"
-                      ? "No API key configured — rule-based scoring used"
-                      : `API call failed (${result.fallbackReason ?? "unknown"}) — rule-based scoring used`}
-                  </p>
-                  <p className="text-[11px] text-gray-400 mt-0.5">Operator should verify before acting</p>
-                </div>
-              </>
-            )}
+          {/* Why this rating */}
+          {result.appliedModifiers.length > 0 && (
+            <div className="border-t pt-3" style={{ borderColor: sev.border }}>
+              <button type="button" onClick={() => setModOpen((v) => !v)}
+                className="flex items-center gap-1 text-[11px] font-semibold text-gray-500 hover:text-gray-800">
+                <svg className={`w-3 h-3 transition-transform ${modOpen ? "rotate-90" : ""}`}
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                </svg>
+                Why this rating
+              </button>
+              {modOpen && (
+                <ul className="mt-2 flex flex-col gap-1">
+                  {result.appliedModifiers.map((m, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                      <span className="text-gray-400 flex-shrink-0 mt-0.5">+</span>{m}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {/* Ask-next checklist */}
+          {result.dataGaps.length > 0 && (
+            <div className="border-t pt-3" style={{ borderColor: sev.border }}>
+              <p className="text-[10px] font-black tracking-widest uppercase mb-2" style={{ color: sev.text }}>
+                Ask Next
+              </p>
+              <ol className="flex flex-col gap-1.5">
+                {result.dataGaps.map((gap, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                    <span className="w-4 text-gray-400 font-semibold flex-shrink-0">{i + 1}.</span>{gap}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          {/* Source footer */}
+          <div className="border-t pt-3" style={{ borderColor: sev.border }}>
+            <p className="text-[11px] text-gray-400 leading-relaxed">
+              Assessed by: <span className="font-semibold text-gray-600">{classLabel}</span>
+              {result.llmUsed && " · LLM used for type classification only"}
+              <span className="block mt-0.5">Operator should verify before acting.</span>
+            </p>
           </div>
         </div>
       </div>
@@ -374,8 +648,7 @@ function AssessingView({ incidentId }: { incidentId: string }) {
         <p className="text-xs text-gray-400 mt-1 font-mono">{incidentId}</p>
       </div>
       <p className="text-xs text-gray-400 text-center">
-        Contacting AI assessment service.<br />
-        A heuristic score is ready as fallback.
+        Contacting severity engine.
       </p>
     </div>
   );
@@ -447,119 +720,15 @@ function SOSView({
 
 // ── Voice section ─────────────────────────────────────────────────────────────
 
-function VoiceSection({
-  voice,
-  locale,
-  onLocaleChange,
-  onTranscriptReady,
-}: {
-  voice: ReturnType<typeof useVoiceInput>;
-  locale: VoiceLocale;
-  onLocaleChange: (l: VoiceLocale) => void;
-  onTranscriptReady: (text: string) => void;
-}) {
-  useEffect(() => {
-    onTranscriptReady(voice.transcript);
-  }, [voice.transcript, onTranscriptReady]);
-
-  if (!voice.supported) {
-    return (
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-500">
-        Voice input is not supported in this browser. Use the Text tab instead.
-        <br />
-        <span className="text-gray-400">Supported: Chrome / Edge on desktop and Android.</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">
-          Recognition Language
-        </label>
-        <select
-          value={locale}
-          onChange={(e) => {
-            if (voice.listening) voice.stop();
-            onLocaleChange(e.target.value as VoiceLocale);
-          }}
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#0f2044]/30"
-        >
-          <option value="en-IN">English — India (en-IN)</option>
-          <option value="hi-IN">हिंदी — Hindi (hi-IN)</option>
-          <option value="as-IN">অসমীয়া — Assamese (as-IN) ⚠ Experimental</option>
-        </select>
-        {locale === "as-IN" && (
-          <p className="mt-1.5 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
-            Experimental — browser support for as-IN is limited. Production deployments should
-            integrate Bhashini or Google Cloud Speech-to-Text.
-          </p>
-        )}
-      </div>
-
-      <div className="flex flex-col items-center gap-2">
-        <button
-          onClick={() => (voice.listening ? voice.stop() : voice.start(locale))}
-          className={`w-16 h-16 rounded-full border-2 flex items-center justify-center transition-all ${
-            voice.listening
-              ? "bg-red-600 border-red-700 shadow-lg shadow-red-200 scale-105"
-              : "bg-white border-gray-300 hover:border-[#0f2044] hover:shadow"
-          }`}
-        >
-          <svg
-            className={`w-7 h-7 ${voice.listening ? "text-white" : "text-gray-500"}`}
-            fill="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2zm7 8a1 1 0 0 1 1 1 8 8 0 0 1-7 7.938V21h2a1 1 0 0 1 0 2H9a1 1 0 0 1 0-2h2v-1.062A8 8 0 0 1 4 12a1 1 0 0 1 2 0 6 6 0 0 0 12 0 1 1 0 0 1 1-1z" />
-          </svg>
-        </button>
-        <p className="text-xs text-gray-500">
-          {voice.listening ? "Recording — tap to stop" : "Tap to start recording"}
-        </p>
-      </div>
-
-      {(voice.transcript || voice.interimTranscript || voice.listening) && (
-        <div className="bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-xs min-h-[56px]">
-          <p className="text-[10px] font-black tracking-widest text-gray-400 uppercase mb-1">
-            Live Transcript
-          </p>
-          <span className="text-gray-800">{voice.transcript}</span>
-          {voice.interimTranscript && (
-            <span className="text-gray-400 italic"> {voice.interimTranscript}</span>
-          )}
-          {voice.listening && !voice.transcript && !voice.interimTranscript && (
-            <span className="text-gray-400 italic">Listening…</span>
-          )}
-        </div>
-      )}
-
-      {voice.transcript && (
-        <button onClick={voice.clearTranscript} className="text-xs text-gray-400 underline self-start">
-          Clear transcript
-        </button>
-      )}
-
-      {voice.error && (
-        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2.5">
-          {voice.error}
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ── Shared form (TEXT + VOICE) ────────────────────────────────────────────────
+// ── Shared form (TEXT) ───────────────────────────────────────────────────────
 
 interface FormViewProps {
-  mode: "TEXT" | "VOICE";
-  voice: ReturnType<typeof useVoiceInput>;
-  locale: VoiceLocale;
-  onLocaleChange: (l: VoiceLocale) => void;
   pinnedLocation: GeoPoint | null;
   pinnedLabel: string;
   onRequestPin: () => void;
+  selectedSubType: string;
+  selectedCategory: string;
+  onSubType: (v: string, cat: string) => void;
   description: string;
   onDescription: (v: string) => void;
   victims: string;
@@ -571,26 +740,15 @@ interface FormViewProps {
 }
 
 function FormView({
-  mode, voice, locale, onLocaleChange,
   pinnedLocation, pinnedLabel, onRequestPin,
+  selectedSubType, selectedCategory, onSubType,
   description, onDescription, victims, onVictims,
   selectedFlags, onToggleFlag, onSubmit, canSubmit,
 }: FormViewProps) {
-  const handleTranscript = useCallback(
-    (text: string) => onDescription(text),
-    [onDescription]
-  );
-
   return (
     <div className="p-4 flex flex-col gap-4">
-      {mode === "VOICE" && (
-        <VoiceSection
-          voice={voice}
-          locale={locale}
-          onLocaleChange={onLocaleChange}
-          onTranscriptReady={handleTranscript}
-        />
-      )}
+      {/* Incident type — auto-detect + two-tier browse */}
+      <IncidentTypePicker description={description} value={selectedSubType || selectedCategory} onChange={onSubType} />
 
       {/* Location */}
       <div>
@@ -632,9 +790,6 @@ function FormView({
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1.5">
           Description
-          {mode === "VOICE" && (
-            <span className="font-normal text-gray-400"> — from transcript, editable</span>
-          )}
         </label>
         <textarea
           rows={3}
@@ -727,7 +882,7 @@ export interface ReportPanelProps {
   onClose: () => void;
 }
 
-type ReportMode = "SOS" | "TEXT" | "VOICE";
+type ReportMode = "SOS" | "TEXT";
 type PanelStatus = "IDLE" | "BUSY" | "ASSESSING" | "MATCHING" | "COMPLETE" | "ERROR";
 
 export default function ReportPanel({
@@ -743,13 +898,13 @@ export default function ReportPanel({
   const [description, setDescription] = useState("");
   const [victims, setVictims] = useState("");
   const [selectedFlags, setSelectedFlags] = useState<Set<string>>(new Set());
-  const [locale, setLocale] = useState<VoiceLocale>("en-IN");
+  const [selectedSubType, setSelectedSubType] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("");
   const [createdIncident, setCreatedIncident] = useState<AccidentReport | null>(null);
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [dupMatch, setDupMatch] = useState<DuplicateMatch | null>(null);
   const [pendingIncident, setPendingIncident] = useState<AccidentReport | null>(null);
 
-  const voice = useVoiceInput();
   const appendReport = useEventLog((s) => s.appendReport);
   const appendAssessment = useEventLog((s) => s.appendAssessment);
   const appendDuplicateFlagged = useEventLog((s) => s.appendDuplicateFlagged);
@@ -762,38 +917,66 @@ export default function ReportPanel({
     setDescription("");
     setVictims("");
     setSelectedFlags(new Set());
+    setSelectedSubType("");
+    setSelectedCategory("");
     setCreatedIncident(null);
     setAssessmentResult(null);
     setDupMatch(null);
     setPendingIncident(null);
     clearRoutes();
-    voice.clearTranscript();
   }
 
   function switchMode(m: ReportMode) {
-    if (voice.listening) voice.stop();
     setMode(m);
     resetForm();
   }
 
   async function runAssessment(incident: AccidentReport) {
     setPanelStatus("ASSESSING");
+    const body = {
+      incident: {
+        ...(selectedSubType ? { subType: selectedSubType } : {}),
+        ...(selectedCategory && !selectedSubType ? { category: selectedCategory } : {}),
+        description: incident.description,
+      },
+      signals: {
+        casualties: incident.estimatedCasualties ?? 0,
+        vehiclesInvolved: incident.vehiclesInvolved ?? 1,
+        entrapment: incident.flags.includes("Trapped"),
+        vulnerableVictim: incident.flags.includes("Heavy bleeding"),
+      },
+      ...(incident.location
+        ? { location: { latlng: [incident.location.lat, incident.location.lng] } }
+        : {}),
+    };
     try {
       const res = await fetch("/api/assess", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(incident),
+        body: JSON.stringify(body),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
       const result: AssessmentResult = await res.json();
       setAssessmentResult(result);
       appendAssessment(incident.id, result);
-    } catch {
-      // Network is down — run heuristic client-side
-      const result = heuristicAssess(incident);
-      result.fallbackReason = "network error — assessed client-side";
-      setAssessmentResult(result);
-      appendAssessment(incident.id, result);
+    } catch (e) {
+      // Engine unreachable — show honest error stub, never fabricate
+      const stub: AssessmentResult = {
+        severity: "HIGH",
+        severityScore: 3,
+        impactNote: `Severity engine unreachable — treat as HIGH. ${e instanceof Error ? e.message : ""}`.trim(),
+        appliedModifiers: [],
+        agencies: [],
+        dataGaps: ["Retry assessment when engine is available"],
+        classifiedBy: "rules",
+        llmUsed: false,
+        lowConfidence: true,
+      };
+      setAssessmentResult(stub);
+      appendAssessment(incident.id, stub);
     } finally {
       setPanelStatus("MATCHING");
     }
@@ -881,7 +1064,7 @@ export default function ReportPanel({
       locationLabel:
         pinnedLabel ||
         `${pinnedLocation.lat.toFixed(5)}, ${pinnedLocation.lng.toFixed(5)}`,
-      reportMode: mode === "VOICE" ? "VOICE" : "TEXT",
+      reportMode: "TEXT",
       vehiclesInvolved: victims ? Number(victims) : null,
       estimatedCasualties: null,
       description: description.trim(),
@@ -992,7 +1175,7 @@ export default function ReportPanel({
         {/* Mode tabs — hidden while processing */}
         {panelStatus === "IDLE" || panelStatus === "ERROR" ? (
           <div className="flex border-b border-gray-100 mx-1 flex-shrink-0">
-            {(["SOS", "TEXT", "VOICE"] as ReportMode[]).map((m) => (
+            {(["SOS", "TEXT"] as ReportMode[]).map((m) => (
               <button
                 key={m}
                 onClick={() => switchMode(m)}
@@ -1004,7 +1187,7 @@ export default function ReportPanel({
                     : "border-transparent text-gray-400 hover:text-gray-600"
                 }`}
               >
-                {m === "SOS" ? "🚨 SOS" : m === "TEXT" ? "📝 Text" : "🎙 Voice"}
+                {m === "SOS" ? "🚨 SOS" : "📝 Text"}
               </button>
             ))}
           </div>
@@ -1063,13 +1246,12 @@ export default function ReportPanel({
             />
           ) : (
             <FormView
-              mode={mode as "TEXT" | "VOICE"}
-              voice={voice}
-              locale={locale}
-              onLocaleChange={setLocale}
               pinnedLocation={pinnedLocation}
               pinnedLabel={pinnedLabel}
               onRequestPin={onRequestPin}
+              selectedSubType={selectedSubType}
+              selectedCategory={selectedCategory}
+              onSubType={(v, cat) => { setSelectedSubType(v); setSelectedCategory(cat); }}
               description={description}
               onDescription={setDescription}
               victims={victims}

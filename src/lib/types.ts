@@ -14,7 +14,6 @@ export interface GeoPoint {
 export type ServiceLayerType =
   | "HOSPITAL"
   | "AMBULANCE_STATION"
-  | "SURAKSHA_MITRA"
   | "MECHANIC"
   | "POLICE"
   | "PHARMACY"
@@ -75,19 +74,6 @@ export interface AmbulanceStation {
   notes: string;
 }
 
-export interface SurakshaMitra {
-  id: string;
-  sample: true;
-  name: string;
-  lat: number;
-  lng: number;
-  highway: string;
-  district: string;
-  contactNumber: string;
-  patrolStretch: string;
-  shift: string;
-}
-
 export interface Mechanic {
   id: string;
   sample: true;
@@ -142,18 +128,26 @@ export interface Pothole {
 
 // ── Assessment ───────────────────────────────────────────────────────────────
 
-export type AssessmentSeverity = 1 | 2 | 3 | 4 | 5;
-export type AssessmentPriority = "low" | "medium" | "high" | "critical";
-export type AssessmentSource = "AI" | "HEURISTIC";
+export type AssessmentSeverity = 1 | 2 | 3 | 4; // 1=LOW 2=MEDIUM 3=HIGH 4=CRITICAL
+export type ClassifiedBy = "operator" | "rules" | "llm";
 
 export interface AssessmentResult {
-  severity: AssessmentSeverity;
-  rationale: string;
-  recommendedResponse: string;
-  priority: AssessmentPriority;
-  source: AssessmentSource;
-  fallbackReason?: string; // set when AI was attempted but failed
-  assessedAt: string; // ISO 8601
+  // Classification
+  category?: string;
+  subType?: string;
+  // Severity — always rule-computed, never from LLM
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"; // string label from engine
+  severityScore: AssessmentSeverity;                  // numeric 1–4
+  impactNote: string;                                 // replaces rationale
+  appliedModifiers: string[];
+  // Dispatch
+  agencies: { code: string; label: string }[];
+  dataGaps: string[];
+  // Provenance
+  classifiedBy: ClassifiedBy;
+  llmUsed: boolean;
+  lowConfidence: boolean;
+  jurisdictionState?: string;
 }
 
 // ── Hospital candidate (hybrid: curated + Google Places) ─────────────────────

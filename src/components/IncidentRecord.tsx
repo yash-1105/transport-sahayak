@@ -4,16 +4,15 @@ import { useMemo, useCallback } from "react";
 import { useEventLog } from "@/store/eventLog";
 import { useT } from "@/hooks/useI18n";
 import { buildIncidentRecord, recordToText } from "@/lib/incidentRecord";
-import type { AssessmentSeverity } from "@/lib/types";
 
 // ── Severity colours ──────────────────────────────────────────────────────────
 
-const SEV_COLOR: Record<number, string> = {
-  1: "#22c55e", 2: "#84cc16", 3: "#f59e0b", 4: "#f97316", 5: "#ef4444",
+const SEV_COLOR: Record<1|2|3|4, string> = {
+  1: "#15803d", 2: "#b45309", 3: "#c2410c", 4: "#b91c1c",
 };
 
-const SEV_BG: Record<number, string> = {
-  1: "#dcfce7", 2: "#ecfccb", 3: "#fef9c3", 4: "#ffedd5", 5: "#fee2e2",
+const SEV_BG: Record<1|2|3|4, string> = {
+  1: "#dcfce7", 2: "#fef9c3", 3: "#ffedd5", 4: "#fee2e2",
 };
 
 // ── IST formatter ─────────────────────────────────────────────────────────────
@@ -144,7 +143,7 @@ export default function IncidentRecord({
         {/* ── Print-only header ── */}
         <div className="print-only hidden px-6 pt-6 pb-2">
           <p className="text-xl font-black text-gray-900">Transport Sahayak — Incident Record</p>
-          <p className="text-xs text-gray-500">Assam Transport Department · Road Safety Operations</p>
+          <p className="text-xs text-gray-500">Delhi–Dehradun Expressway Corridor · Road Safety Operations</p>
           <p className="text-xs text-gray-500 mt-0.5">Ref: {incidentId} · Generated: {toIST(data.generatedAt)} IST</p>
           <hr className="mt-3 border-gray-300" />
         </div>
@@ -200,31 +199,44 @@ export default function IncidentRecord({
           <Section title={t("recordSectionAssessment")}>
             {assessment ? (
               <div className="flex flex-col gap-2">
+                {assessment.subType && (
+                  <p className="text-xs font-semibold text-gray-800">{assessment.subType}</p>
+                )}
                 <div className="flex items-center gap-2 flex-wrap">
                   <span
                     className="inline-flex items-center gap-1 text-xs font-black px-2.5 py-1 rounded-full"
                     style={{
-                      color: SEV_COLOR[assessment.severity as AssessmentSeverity],
-                      background: SEV_BG[assessment.severity as AssessmentSeverity],
+                      color: SEV_COLOR[(assessment.severityScore ?? 1) as 1|2|3|4],
+                      background: SEV_BG[(assessment.severityScore ?? 1) as 1|2|3|4],
                     }}
                   >
-                    {assessment.severity}/5
+                    {assessment.severityScore}/4
                   </span>
                   <span className="text-xs font-semibold text-gray-700 uppercase">
-                    {assessment.priority}
+                    {assessment.severity}
                   </span>
                   <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
-                    {assessment.source === "AI" ? t("assessSourceAI") : t("assessSourceHeuristic")}
+                    {assessment.classifiedBy === "llm" ? t("assessSourceAI") : t("assessSourceHeuristic")}
                   </span>
+                  {assessment.lowConfidence && (
+                    <span className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                      low-confidence
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs text-gray-700 leading-relaxed">
-                  <span className="font-semibold text-gray-500 block mb-0.5">{t("assessRationale")}:</span>
-                  {assessment.rationale}
+                  <span className="font-semibold text-gray-500 block mb-0.5">Impact:</span>
+                  {assessment.impactNote}
                 </div>
-                <div className="text-xs text-gray-700 leading-relaxed">
-                  <span className="font-semibold text-gray-500 block mb-0.5">{t("assessRecommended")}:</span>
-                  {assessment.recommendedResponse}
-                </div>
+                {assessment.agencies.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {assessment.agencies.map((a) => (
+                      <span key={a.code} className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 font-medium">
+                        {a.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
               <p className="text-xs text-gray-400 italic">{t("recordNoneYet")}</p>

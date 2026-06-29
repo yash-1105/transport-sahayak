@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Transport Sahayak — Assam Transport Department",
+  title: "Transport Sahayak — Delhi–Dehradun Expressway Corridor",
   description: "Road Accident First Response — Proof of Concept",
   manifest: "/manifest.json",
   icons: {

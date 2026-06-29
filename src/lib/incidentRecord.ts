@@ -103,7 +103,7 @@ export function recordToText(data: IncidentRecordData): string {
 
   push(
     "TRANSPORT SAHAYAK — INCIDENT RECORD",
-    "Assam Transport Department — Road Safety Operations",
+    "Delhi–Dehradun Expressway Corridor — Road Safety Operations",
     HR,
     `Ref: ${data.id}`,
     `Generated: ${toIST(data.generatedAt)} IST`,
@@ -144,12 +144,13 @@ export function recordToText(data: IncidentRecordData): string {
   if (data.assessment) {
     const a = data.assessment;
     push(
-      `Severity : ${a.severity}/5`,
-      `Priority : ${a.priority.toUpperCase()}`,
-      `Source   : ${a.source === "AI" ? "AI assessment (claude-sonnet-4-6)" : "Heuristic fallback (rule-based)"}`,
-      ...(a.fallbackReason ? [`Fallback : ${a.fallbackReason}`] : []),
-      `Rationale: ${a.rationale}`,
-      `Recommended response: ${a.recommendedResponse}`
+      ...(a.subType ? [`Type     : ${a.subType}`] : []),
+      `Severity : ${a.severity} (${a.severityScore}/4)`,
+      `Assessed : ${a.classifiedBy}${a.llmUsed ? " (LLM used for classification)" : ""}`,
+      ...(a.lowConfidence ? ["⚠        Low-confidence input — verify assessment"] : []),
+      `Impact   : ${a.impactNote}`,
+      ...(a.agencies.length ? [`Agencies : ${a.agencies.map((x) => x.label).join(", ")}`] : []),
+      ...(a.dataGaps.length ? [`Ask next : ${a.dataGaps.join(" | ")}`] : [])
     );
   } else {
     push("Not yet assessed");

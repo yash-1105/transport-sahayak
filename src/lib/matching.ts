@@ -32,11 +32,10 @@ export function haversineKm(
 // ── Specialty relevance by severity ──────────────────────────────────────────
 
 const RELEVANT_SPECIALTIES: Record<number, string[]> = {
-  5: ["Trauma", "Multi-speciality", "Neurosurgery", "Burns", "Cardiology"],
-  4: ["Trauma", "Multi-speciality", "Neurosurgery", "Burns", "Cardiology", "ICU"],
-  3: ["Trauma", "General Surgery", "Orthopaedics", "ICU", "Multi-speciality"],
-  2: ["General Medicine", "General Surgery", "Paediatrics", "Obstetrics"],
-  1: ["General Medicine", "General Surgery"],
+  4: ["Trauma", "Multi-speciality", "Neurosurgery", "Burns", "Cardiology", "ICU"], // CRITICAL
+  3: ["Trauma", "General Surgery", "Orthopaedics", "ICU", "Multi-speciality"],      // HIGH
+  2: ["General Medicine", "General Surgery", "Paediatrics", "Obstetrics"],           // MEDIUM
+  1: ["General Medicine", "General Surgery"],                                         // LOW
 };
 
 function relevantSpecialties(severity: AssessmentSeverity): string[] {
@@ -52,7 +51,7 @@ function score(
   specialtyMatches: string[]
 ): number {
   // Trauma weight rises steeply with severity so Level-1 centres float to top
-  const traumaWeight = severity >= 4 ? 3.5 : severity === 3 ? 2 : 1;
+  const traumaWeight = severity >= 3 ? 3.5 : severity === 2 ? 2 : 1;
 
   let s = 0;
 
@@ -60,8 +59,8 @@ function score(
     // Level 1 = 30 pts, Level 2 = 20 pts, Level 3 = 10 pts — then multiplied
     const baseTrauma = Math.max(0, (4 - hospital.traumaLevel) * 10);
     s += baseTrauma * traumaWeight;
-  } else if (severity >= 3) {
-    // Non-trauma hospital is a penalty at moderate-to-high severity
+  } else if (severity >= 2) {
+    // Non-trauma hospital is a penalty at medium-to-high severity
     s -= 15;
   }
 
@@ -116,14 +115,14 @@ export function generateReasoning(
     parts.push(`Specialties relevant to this incident: ${specialtyMatches.slice(0, 3).join(", ")}.`);
   } else if (specialtyMatches.length === 1) {
     parts.push(`One relevant specialty: ${specialtyMatches[0]}.`);
-  } else if (severity >= 3) {
+  } else if (severity >= 2) {
     parts.push(`No declared specialties directly matched to this incident type.`);
   }
 
   // Clinical guidance for high severity + limited capability
-  if (!hospital.traumaCapable && severity >= 4) {
+  if (!hospital.traumaCapable && severity >= 3) {
     parts.push(`⚠ Stabilisation only — arrange transfer to a Level-1 centre.`);
-  } else if (hospital.traumaCapable && hospital.traumaLevel === 1 && severity >= 4) {
+  } else if (hospital.traumaCapable && hospital.traumaLevel === 1 && severity >= 3) {
     parts.push(`Suitable for definitive care at this severity level.`);
   }
 
@@ -154,7 +153,7 @@ export function rankHospitals(
   incident: AccidentReport,
   assessment: AssessmentResult
 ): RankedHospital[] {
-  const sev = assessment.severity as AssessmentSeverity;
+  const sev = assessment.severityScore as AssessmentSeverity;
   const relevant = relevantSpecialties(sev);
 
   const scored = hospitals.map((hospital) => {

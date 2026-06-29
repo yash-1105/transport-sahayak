@@ -4,11 +4,7 @@
 import type { AccidentReport, AssessmentResult } from "./types";
 
 const SEV_LABEL: Record<number, string> = {
-  1: "Minor", 2: "Low", 3: "Moderate", 4: "Serious", 5: "Critical",
-};
-
-const PRI_LABEL: Record<string, string> = {
-  low: "LOW", medium: "MEDIUM", high: "HIGH", critical: "CRITICAL",
+  1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL",
 };
 
 function toIST(iso: string): string {
@@ -49,7 +45,7 @@ export function generateHospitalAlert(
   roadKm: number | null,
   roadMin: number | null
 ): string {
-  const sev = assessment.severity;
+  const sev = assessment.severityScore;
   const victims = fmtVictims(
     incident.estimatedCasualties ?? incident.vehiclesInvolved
   );
@@ -61,16 +57,16 @@ export function generateHospitalAlert(
     `Reported : ${toIST(incident.timestamp)}`,
     `Mode     : ${incident.reportMode}`,
     "─".repeat(40),
-    `Severity : ${sev}/5  ${SEV_LABEL[sev]}  |  Priority: ${PRI_LABEL[assessment.priority]}`,
+    `Severity : ${assessment.severity} (${sev}/4)  ${SEV_LABEL[sev]}`,
+    ...(assessment.subType ? [`Type     : ${assessment.subType}`] : []),
     "",
     `Location : ${incident.locationLabel}`,
     `GPS      : ${incident.location.lat.toFixed(5)} N, ${incident.location.lng.toFixed(5)} E`,
     `Persons  : ${victims}`,
     ...(incident.flags.length ? [`Flags    : ${incident.flags.join(", ")}`] : []),
     "",
-    `Assessment: ${assessment.rationale}`,
-    "",
-    `Recommended response: ${assessment.recommendedResponse}`,
+    `Assessment: ${assessment.impactNote}`,
+    ...(assessment.agencies.length ? [`Agencies : ${assessment.agencies.map((a) => a.label).join(", ")}`] : []),
     "─".repeat(40),
     `To       : ${hospitalName} (Emergency Dept.)`,
     `Distance : ${fmtDist(roadKm, roadMin)}`,
@@ -83,7 +79,7 @@ export function generateHospitalAlert(
     "by this notification.",
     "",
     "Delivery channel: SMS / Push Notification",
-    "Transport Sahayak  |  Assam Transport Dept.",
+    "Transport Sahayak  |  Delhi–Dehradun Corridor",
   ].join("\n");
 }
 
@@ -96,7 +92,7 @@ export function generatePoliceAlert(
   roadKm: number | null,
   roadMin: number | null
 ): string {
-  const sev = assessment.severity;
+  const sev = assessment.severityScore;
   const victims = fmtVictims(
     incident.estimatedCasualties ?? incident.vehiclesInvolved
   );
@@ -108,14 +104,15 @@ export function generatePoliceAlert(
     `Reported : ${toIST(incident.timestamp)}`,
     `Mode     : ${incident.reportMode}`,
     "─".repeat(40),
-    `Severity : ${sev}/5  ${SEV_LABEL[sev]}  |  Priority: ${PRI_LABEL[assessment.priority]}`,
+    `Severity : ${assessment.severity} (${sev}/4)  ${SEV_LABEL[sev]}`,
+    ...(assessment.subType ? [`Type     : ${assessment.subType}`] : []),
     "",
     `Location : ${incident.locationLabel}`,
     `GPS      : ${incident.location.lat.toFixed(5)} N, ${incident.location.lng.toFixed(5)} E`,
     `Persons  : ${victims}`,
     ...(incident.flags.length ? [`Flags    : ${incident.flags.join(", ")}`] : []),
     "",
-    `Assessment: ${assessment.rationale}`,
+    `Assessment: ${assessment.impactNote}`,
     "─".repeat(40),
     `To       : ${stationName}`,
     `Distance : ${fmtDist(roadKm, roadMin)}`,
@@ -129,6 +126,6 @@ export function generatePoliceAlert(
     "by this notification.",
     "",
     "Delivery channel: SMS / Push Notification",
-    "Transport Sahayak  |  Assam Transport Dept.",
+    "Transport Sahayak  |  Delhi–Dehradun Corridor",
   ].join("\n");
 }

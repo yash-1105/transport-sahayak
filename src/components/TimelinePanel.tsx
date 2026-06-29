@@ -11,7 +11,6 @@ import type {
   RouteEstimatedPayload,
   DispatchRecord,
   DuplicateFlaggedPayload,
-  AssessmentSeverity,
 } from "@/lib/types";
 import type { StringKey } from "@/i18n/strings";
 
@@ -29,12 +28,8 @@ function toIST(iso: string) {
 
 // ── Domain labels ─────────────────────────────────────────────────────────────
 
-const SEV_DOT: Record<number, string> = {
-  1: "#22c55e", 2: "#84cc16", 3: "#f59e0b", 4: "#f97316", 5: "#ef4444",
-};
-
-const SEV_LABEL_KEY: Record<number, StringKey> = {
-  1: "sev1", 2: "sev2", 3: "sev3", 4: "sev4", 5: "sev5",
+const SEV_DOT: Record<1|2|3|4, string> = {
+  1: "#22c55e", 2: "#f59e0b", 3: "#f97316", 4: "#ef4444",
 };
 
 // ── Incident-id extractor ─────────────────────────────────────────────────────
@@ -183,8 +178,7 @@ function StepContent({ step }: { step: TimelineStep }) {
 
     case "SEVERITY_ASSESSED": {
       const { assessment } = step.entries[0].payload as SeverityAssessedPayload;
-      const sev = assessment.severity as AssessmentSeverity;
-      const isAI = assessment.source === "AI";
+      const sev = (assessment.severityScore ?? 1) as 1|2|3|4;
       return (
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -192,21 +186,22 @@ function StepContent({ step }: { step: TimelineStep }) {
               className="inline-flex items-center gap-1 text-xs font-black px-2 py-0.5 rounded-full text-white"
               style={{ background: SEV_DOT[sev] }}
             >
-              {sev}/5 {t(SEV_LABEL_KEY[sev])}
+              {sev}/4 {assessment.severity}
             </span>
-            <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">
-              {assessment.priority}
-            </span>
+            {assessment.subType && (
+              <span className="text-[10px] text-gray-600 font-medium">{assessment.subType}</span>
+            )}
           </div>
           <p className="text-[11px] text-gray-500 leading-snug line-clamp-2">
-            {assessment.rationale}
+            {assessment.impactNote}
           </p>
           <p className="text-[10px] text-gray-400 flex items-center gap-1">
-            {isAI ? (
-              <><span>🤖</span> {t("assessSourceAI")} · claude-sonnet-4-6</>
+            {assessment.llmUsed ? (
+              <><span>🤖</span> {t("assessSourceAI")}</>
             ) : (
               <><span>⚙️</span> {t("assessSourceHeuristic")}</>
             )}
+            {assessment.lowConfidence && <span className="text-amber-500 ml-1">· low-confidence</span>}
           </p>
         </div>
       );

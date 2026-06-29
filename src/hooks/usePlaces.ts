@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { GooglePlace, GooglePlaceType } from "@/lib/types";
+import type { CorridorWaypoint } from "@/lib/corridorWaypoints";
 
 export const GOOGLE_PLACE_TYPES = [
   "hospital",
@@ -30,15 +31,7 @@ const ALL_LOADING: PlacesLoading = {
   gas_station: true,
 };
 
-const ALL_DONE: PlacesLoading = {
-  hospital: false,
-  police: false,
-  car_repair: false,
-  pharmacy: false,
-  gas_station: false,
-};
-
-export function usePlaces(lat: number, lng: number, radiusM: number) {
+export function usePlaces(waypoints: CorridorWaypoint[], radiusM: number) {
   const [results, setResults] = useState<PlacesResults>(EMPTY_RESULTS);
   const [loading, setLoading] = useState<PlacesLoading>(ALL_LOADING);
   const [hasError, setHasError] = useState(false);
@@ -46,10 +39,15 @@ export function usePlaces(lat: number, lng: number, radiusM: number) {
   useEffect(() => {
     let cancelled = false;
 
+    // Encode waypoints as lat/lng pairs — details are never persisted (Google ToS §3.2.4).
+    const waypointsParam = encodeURIComponent(
+      JSON.stringify(waypoints.map((w) => ({ lat: w.lat, lng: w.lng })))
+    );
+
     async function fetchOne(type: GooglePlaceType) {
       try {
         const res = await fetch(
-          `/api/places/nearby?type=${encodeURIComponent(type)}&lat=${lat}&lng=${lng}&radius=${radiusM}`,
+          `/api/places/nearby?type=${encodeURIComponent(type)}&waypoints=${waypointsParam}&radius=${radiusM}`,
           { cache: "no-store" }
         );
         const data = await res.json();
@@ -71,8 +69,9 @@ export function usePlaces(lat: number, lng: number, radiusM: number) {
     GOOGLE_PLACE_TYPES.forEach(fetchOne);
 
     return () => { cancelled = true; };
+  // waypoints is CORRIDOR_WAYPOINTS — a module-level constant, stable across renders.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lat, lng, radiusM]);
+  }, [waypoints, radiusM]);
 
   const anyLoading = Object.values(loading).some(Boolean);
 

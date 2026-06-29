@@ -21,11 +21,10 @@ import { haversineKm } from "./matching";
 // ── Specialty relevance table ─────────────────────────────────────────────────
 
 const RELEVANT_SPECIALTIES: Record<number, string[]> = {
-  5: ["Trauma", "Multi-speciality", "Neurosurgery", "Burns", "Cardiology"],
-  4: ["Trauma", "Multi-speciality", "Neurosurgery", "Burns", "Cardiology", "ICU"],
-  3: ["Trauma", "General Surgery", "Orthopaedics", "ICU", "Multi-speciality"],
-  2: ["General Medicine", "General Surgery", "Paediatrics", "Obstetrics"],
-  1: ["General Medicine", "General Surgery"],
+  4: ["Trauma", "Multi-speciality", "Neurosurgery", "Burns", "Cardiology", "ICU"], // CRITICAL
+  3: ["Trauma", "General Surgery", "Orthopaedics", "ICU", "Multi-speciality"],      // HIGH
+  2: ["General Medicine", "General Surgery", "Paediatrics", "Obstetrics"],           // MEDIUM
+  1: ["General Medicine", "General Surgery"],                                         // LOW
 };
 
 // ── Curated → candidate conversion ───────────────────────────────────────────
@@ -123,10 +122,12 @@ export interface TrafficResult {
 
 function capabilityBonus(c: HospitalCandidate, sev: AssessmentSeverity): number {
   if (c.capabilitySource === "unverified") return -50;
-  if (!c.traumaCapable) return sev >= 3 ? -20 : 0;
-  const levelMap: Record<number, number> = { 1: 200, 2: 100, 3: 50 };
+  if (!c.traumaCapable) return sev >= 2 ? -20 : 0;
+  // Bonuses are intentionally small so ETA governs — a Level-1 only wins over a closer
+  // Level-2 if it's within ~20 minutes. Keeps proximity as the primary ranking signal.
+  const levelMap: Record<number, number> = { 1: 40, 2: 20, 3: 8 };
   const base = levelMap[c.traumaLevel ?? 3] ?? 0;
-  return sev >= 4 ? base : sev >= 3 ? Math.round(base * 0.5) : Math.round(base * 0.25);
+  return sev >= 3 ? base : sev >= 2 ? Math.round(base * 0.5) : Math.round(base * 0.25);
 }
 
 export function rankCandidatesByTraffic(
@@ -135,7 +136,7 @@ export function rankCandidatesByTraffic(
   incident: AccidentReport,
   assessment: AssessmentResult
 ): RankedHospital[] {
-  const sev = assessment.severity as AssessmentSeverity;
+  const sev = assessment.severityScore as AssessmentSeverity;
   const relevant = RELEVANT_SPECIALTIES[sev] ?? RELEVANT_SPECIALTIES[1];
 
   // Index traffic results by originIndex for fast lookup
@@ -192,7 +193,7 @@ export function rankCandidatesByDistance(
   incident: AccidentReport,
   assessment: AssessmentResult
 ): RankedHospital[] {
-  const sev = assessment.severity as AssessmentSeverity;
+  const sev = assessment.severityScore as AssessmentSeverity;
   const relevant = RELEVANT_SPECIALTIES[sev] ?? RELEVANT_SPECIALTIES[1];
 
   const scored = shortlisted.map(({ candidate: c, straightLineKm }) => {
@@ -271,11 +272,11 @@ export function generateCandidateReasoning(
     parts.push(`Specialties relevant to this incident: ${specialtyMatches.slice(0, 3).join(", ")}.`);
   } else if (specialtyMatches.length === 1) {
     parts.push(`One relevant specialty: ${specialtyMatches[0]}.`);
-  } else if (severity >= 3) {
+  } else if (severity >= 2) {
     parts.push(`No declared specialties matched this incident type.`);
   }
 
-  if (!h.traumaCapable && severity >= 4) {
+  if (!h.traumaCapable && severity >= 3) {
     parts.push(`⚠ Stabilisation only — arrange transfer to a Level-1 centre.`);
   }
 

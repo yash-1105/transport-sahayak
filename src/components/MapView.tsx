@@ -16,18 +16,18 @@ import InstallPWA from "@/components/InstallPWA";
 import IncidentRecord from "@/components/IncidentRecord";
 import { useT } from "@/hooks/useI18n";
 import { usePlaces, LAYER_TO_PLACE_TYPE } from "@/hooks/usePlaces";
+import { CORRIDOR_WAYPOINTS, CORRIDOR_CENTER, CORRIDOR_WAYPOINT_RADIUS_M } from "@/lib/corridorWaypoints";
 import type { StringKey } from "@/i18n/strings";
 import type { GooglePlace } from "@/lib/types";
 
 // Synthetic-only layers still loaded from seed files
 import ambulanceData from "../../data/ambulance-stations.json";
-import surakshaMitraData from "../../data/suraksha-mitras.json";
 import blackspotsData from "../../data/blackspots.json";
 import potholesData from "../../data/potholes.json";
 
 import type {
   AmbulanceStation,
-  SurakshaMitra,
+  AccidentReport,
   Blackspot,
   Pothole,
   ServiceLayerType,
@@ -39,8 +39,7 @@ import ReportPanel from "@/components/report/ReportPanel";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const GUWAHATI: { lat: number; lng: number } = { lat: 26.14, lng: 91.74 };
-const PLACES_RADIUS_M = 50_000; // 50 km around Guwahati
+// Corridor constants imported from @/lib/corridorWaypoints
 
 // ── Layer config ──────────────────────────────────────────────────────────────
 
@@ -53,7 +52,6 @@ const SERVICE_LAYERS: {
 }[] = [
   { key: "HOSPITAL",          labelKey: "layerHospitals", color: "#2563eb", strokeColor: "#1d4ed8", source: "google" },
   { key: "AMBULANCE_STATION", labelKey: "layerAmbulance", color: "#16a34a", strokeColor: "#15803d", source: "synthetic" },
-  { key: "SURAKSHA_MITRA",    labelKey: "layerSuraksha",  color: "#d97706", strokeColor: "#b45309", source: "synthetic" },
   { key: "MECHANIC",          labelKey: "layerMechanics", color: "#6b7280", strokeColor: "#4b5563", source: "google" },
   { key: "POLICE",            labelKey: "layerPolice",    color: "#1e3a8a", strokeColor: "#1e3069", source: "google" },
   { key: "PHARMACY",          labelKey: "layerPharmacy",  color: "#7c3aed", strokeColor: "#6d28d9", source: "google" },
@@ -129,15 +127,6 @@ function GasIcon() {
       <path d="M8.5 5.5L11 4v3.5a1 1 0 002 0V4" stroke="white"
         strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
       <path d="M3.5 6.5h4" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
-    </svg>
-  );
-}
-function SurakshaIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <circle cx="7" cy="4.5" r="2.2" fill="white"/>
-      <path d="M2.5 13c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5"
-        stroke="white" strokeWidth="1.4" strokeLinecap="round" fill="none"/>
     </svg>
   );
 }
@@ -232,7 +221,6 @@ type MarkerShape = "square" | "circle" | "triangle" | "diamond";
 const LAYER_MARKER: Record<string, { shape: MarkerShape; Icon: () => React.JSX.Element }> = {
   HOSPITAL:          { shape: "square",   Icon: HospitalIcon },
   AMBULANCE_STATION: { shape: "circle",   Icon: AmbulanceIcon },
-  SURAKSHA_MITRA:    { shape: "circle",   Icon: SurakshaIcon },
   MECHANIC:          { shape: "square",   Icon: MechanicIcon },
   POLICE:            { shape: "square",   Icon: PoliceIcon },
   PHARMACY:          { shape: "square",   Icon: PharmacyIcon },
@@ -358,23 +346,6 @@ function AmbulancePopup({ a }: { a: AmbulanceStation }) {
   );
 }
 
-function SurakshaMitraPopup({ s }: { s: SurakshaMitra }) {
-  return (
-    <div className="text-xs leading-relaxed min-w-[200px]">
-      <p className="font-semibold text-sm text-gray-900">{s.name}</p>
-      <p className="text-gray-500 mb-1">{s.highway} · {s.district}</p>
-      <table className="w-full text-gray-700">
-        <tbody>
-          <tr><td className="pr-2 text-gray-500">Patrol</td><td>{s.patrolStretch}</td></tr>
-          <tr><td className="pr-2 text-gray-500">Shift</td><td>{s.shift}</td></tr>
-          <tr><td className="pr-2 text-gray-500">Contact</td><td>{s.contactNumber}</td></tr>
-        </tbody>
-      </table>
-      <p className="text-amber-700 text-[10px] mt-2">⚠ Sample data</p>
-    </div>
-  );
-}
-
 function BlackspotPopup({ b }: { b: Blackspot }) {
   return (
     <div className="text-xs leading-relaxed min-w-[220px]">
@@ -444,16 +415,33 @@ export default function MapView() {
   const mapRoutes = useRoutingStore((s) => s.routes);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [recordIncidentId, setRecordIncidentId] = useState<string | null>(null);
-  const eventCount = useEventLog((s) => s.entries.length);
+  const entries = useEventLog((s) => s.entries);
+  const eventCount = entries.length;
+
+  // Derive committed incident location from event log so the pin always appears —
+  // including SOS mode, where geolocation runs inside ReportPanel and never
+  // propagates back to MapView's pinnedLocation state.
+  const activeIncident = useMemo(() => {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i].type === "REPORT_CREATED") {
+        const r = entries[i].payload as AccidentReport;
+        return { location: r.location, label: r.locationLabel };
+      }
+    }
+    return null;
+  }, [entries]);
+
+  // Show the user's live map-pin while picking; fall back to the committed incident.
+  const incidentPinLocation: GeoPoint | null = pinnedLocation ?? activeIncident?.location ?? null;
+  const incidentPinLabel = pinnedLabel || activeIncident?.label || "";
 
   // ── Google Places (live, server-fetched) ──────────────────────────────────
   const { results: places, loading: placesLoading, hasError: placesError } = usePlaces(
-    GUWAHATI.lat, GUWAHATI.lng, PLACES_RADIUS_M
+    CORRIDOR_WAYPOINTS, CORRIDOR_WAYPOINT_RADIUS_M
   );
 
   // ── Synthetic seed data (labelled as sample) ──────────────────────────────
   const ambulances    = useMemo(() => ambulanceData.ambulanceStations as AmbulanceStation[], []);
-  const surakshaMitras= useMemo(() => surakshaMitraData.surakshaMitras as SurakshaMitra[], []);
   const blackspots    = useMemo(() => blackspotsData.blackspots as Blackspot[], []);
   const potholes      = useMemo(() => potholesData.potholes as Pothole[], []);
 
@@ -511,8 +499,8 @@ export default function MapView() {
       <APIProvider apiKey={browserKey}>
         <Map
           mapId="DEMO_MAP_ID"
-          defaultCenter={GUWAHATI}
-          defaultZoom={12}
+          defaultCenter={CORRIDOR_CENTER}
+          defaultZoom={8}
           gestureHandling="greedy"
           className="w-full h-full"
           draggableCursor={isPickingPin ? "crosshair" : ""}
@@ -554,18 +542,6 @@ export default function MapView() {
                   </AdvancedMarker>
                 ))}
 
-              {/* Suraksha Mitras — synthetic */}
-              {activeServices.has("SURAKSHA_MITRA") &&
-                surakshaMitras.map((s) => (
-                  <AdvancedMarker
-                    key={s.id}
-                    position={{ lat: s.lat, lng: s.lng }}
-                    title={s.name}
-                    onClick={() => setOpenInfo({ position: { lat: s.lat, lng: s.lng }, content: <SurakshaMitraPopup s={s} /> })}
-                  >
-                    <LayerMarker layerKey="SURAKSHA_MITRA" color={LAYER_COLOR.SURAKSHA_MITRA.color} strokeColor={LAYER_COLOR.SURAKSHA_MITRA.strokeColor} />
-                  </AdvancedMarker>
-                ))}
             </>
           )}
 
@@ -597,18 +573,18 @@ export default function MapView() {
             </>
           )}
 
-          {/* ── Pinned incident location ──────────────────────────────────── */}
-          {pinnedLocation && (
+          {/* ── Incident location pin ────────────────────────────────────── */}
+          {incidentPinLocation && (
             <AdvancedMarker
-              position={pinnedLocation}
+              position={incidentPinLocation}
               title="Incident location"
               onClick={() =>
                 setOpenInfo({
-                  position: pinnedLocation,
+                  position: incidentPinLocation,
                   content: (
                     <div className="text-xs">
-                      <p className="font-semibold text-gray-900">Incident pin</p>
-                      <p className="text-gray-500 break-words max-w-[200px]">{pinnedLabel}</p>
+                      <p className="font-semibold text-gray-900">Incident location</p>
+                      <p className="text-gray-500 break-words max-w-[200px]">{incidentPinLabel}</p>
                     </div>
                   ),
                 })
@@ -620,19 +596,17 @@ export default function MapView() {
 
           {/* ── Route polylines ───────────────────────────────────────────── */}
           {mapRoutes.map((route) => {
-            const dashed = Boolean(route.dashArray);
+            // Police route has dashArray set — render thinner + semi-transparent
+            // to distinguish from the solid hospital route without relying on
+            // the `icons` prop (which @vis.gl/react-google-maps silently ignores).
+            const isSecondary = Boolean(route.dashArray);
             return (
               <Polyline
                 key={route.id}
                 path={route.coords.map(([lat, lng]) => ({ lat, lng }))}
                 strokeColor={route.color}
-                strokeWeight={4}
-                strokeOpacity={dashed ? 0 : 0.85}
-                icons={
-                  dashed
-                    ? [{ icon: { path: "M 0,-1 0,1", strokeOpacity: 1, strokeColor: route.color, scale: 4 }, offset: "0", repeat: "18px" }]
-                    : undefined
-                }
+                strokeWeight={isSecondary ? 3 : 4}
+                strokeOpacity={isSecondary ? 0.6 : 0.85}
               />
             );
           })}

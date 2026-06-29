@@ -1,0 +1,23 @@
+{
+  "corridorId": "DEL-DDN-NH709B",
+  "name": "Delhi-Dehradun Expressway",
+  "totalKm": 210,
+  "segments": [
+    { "name": "Delhi (Akshardham-EPE)",        "kmFrom": 0,   "kmTo": 32,  "state": "DELHI" },
+    { "name": "UP (Baghpat-Saharanpur)",        "kmFrom": 32,  "kmTo": 168, "state": "UP" },
+    { "name": "Uttarakhand (Rajaji-Dehradun)",  "kmFrom": 168, "kmTo": 210, "state": "UTTARAKHAND" }
+  ],
+  "zones": {
+    "wildlifeCorridor": { "kmFrom": 190, "kmTo": 202, "note": "Rajaji NP elevated section - elephant/leopard risk" },
+    "tunnels": [
+      { "name": "Twin-tube tunnel", "kmApprox": 203 },
+      { "name": "Datkali tunnel",   "kmApprox": 207 }
+    ],
+    "tollPlazas": 5
+  },
+  "jurisdictionByState": {
+    "DELHI":       { "POLICE": "Delhi Traffic Police",         "SDRF": "NDRF (Delhi)",     "FOREST_DEPT": "Delhi Forest Dept" },
+    "UP":          { "POLICE": "UP Police (Highway)",          "SDRF": "UP SDRF",          "FOREST_DEPT": "UP Forest Dept" },
+    "UTTARAKHAND": { "POLICE": "Uttarakhand Police (Highway)", "SDRF": "Uttarakhand SDRF", "FOREST_DEPT": "Rajaji / Uttarakhand Forest (Shivalik Div.)" }
+  }
+}

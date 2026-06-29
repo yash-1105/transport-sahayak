@@ -5,7 +5,6 @@ import type { Locale } from "@/i18n/strings";
 const LOCALES: { code: Locale; label: string }[] = [
   { code: "EN", label: "EN" },
   { code: "HI", label: "हि" },
-  { code: "AS", label: "অ" },
 ];
 
 export default function LanguageToggle() {

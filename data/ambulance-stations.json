@@ -1,112 +1,112 @@
 {
   "_meta": {
     "label": "Sample data — replace with official dataset.",
-    "source": "Illustrative station locations around Guwahati. Static roster — no live GPS tracking."
+    "source": "Illustrative 108 ambulance posts along the Delhi–Dehradun Expressway. Static roster — no live GPS tracking."
   },
   "ambulanceStations": [
     {
       "id": "amb-stn-001",
       "sample": true,
-      "name": "GMCH Ambulance Bay",
-      "lat": 26.1797,
-      "lng": 91.7386,
-      "district": "Kamrup Metropolitan",
+      "name": "108 Post — Delhi EPE Junction",
+      "lat": 28.630,
+      "lng": 77.330,
+      "district": "East Delhi",
       "contactNumber": "108",
-      "ambulanceCount": 6,
+      "ambulanceCount": 4,
       "types": ["ALS", "BLS"],
       "operatingHours": "24x7",
-      "notes": "Primary trauma hospital dispatch point"
+      "notes": "Covers Eastern Peripheral Expressway northern entry"
     },
     {
       "id": "amb-stn-002",
       "sample": true,
-      "name": "Jalukbari Highway Post",
-      "lat": 26.1534,
-      "lng": 91.6892,
-      "district": "Kamrup Metropolitan",
+      "name": "108 Post — Baghpat",
+      "lat": 28.944,
+      "lng": 77.218,
+      "district": "Baghpat",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": ["BLS"],
       "operatingHours": "24x7",
-      "notes": "Covers NH-27 western approach to Guwahati"
+      "notes": "Covers Baghpat expressway interchange"
     },
     {
       "id": "amb-stn-003",
       "sample": true,
-      "name": "Dispur Health Centre",
-      "lat": 26.1406,
-      "lng": 91.7836,
-      "district": "Kamrup Metropolitan",
+      "name": "108 Post — Baraut",
+      "lat": 29.099,
+      "lng": 77.254,
+      "district": "Baghpat",
       "contactNumber": "108",
-      "ambulanceCount": 3,
-      "types": ["ALS", "BLS"],
+      "ambulanceCount": 2,
+      "types": ["BLS"],
       "operatingHours": "24x7",
-      "notes": "Covers Dispur and south Guwahati area"
+      "notes": "Covers Baraut stretch and surrounding villages"
     },
     {
       "id": "amb-stn-004",
       "sample": true,
-      "name": "Maligaon Railway Quarters Post",
-      "lat": 26.1668,
-      "lng": 91.7025,
-      "district": "Kamrup Metropolitan",
+      "name": "108 Post — Shamli",
+      "lat": 29.450,
+      "lng": 77.310,
+      "district": "Shamli",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": ["ALS", "BLS"],
       "operatingHours": "24x7",
-      "notes": "Covers Maligaon and western Guwahati"
+      "notes": "Covers Shamli bypass and state highway junction"
     },
     {
       "id": "amb-stn-005",
       "sample": true,
-      "name": "Narengi Station",
-      "lat": 26.1632,
-      "lng": 91.8002,
-      "district": "Kamrup Metropolitan",
+      "name": "108 Post — Saharanpur",
+      "lat": 29.967,
+      "lng": 77.546,
+      "district": "Saharanpur",
       "contactNumber": "108",
-      "ambulanceCount": 2,
-      "types": ["BLS"],
+      "ambulanceCount": 3,
+      "types": ["ALS", "BLS"],
       "operatingHours": "24x7",
-      "notes": "Covers north-east Guwahati and Narengi"
+      "notes": "Primary dispatch for Saharanpur district"
     },
     {
       "id": "amb-stn-006",
       "sample": true,
-      "name": "Beltola Community Health Centre",
-      "lat": 26.1260,
-      "lng": 91.7800,
-      "district": "Kamrup Metropolitan",
+      "name": "108 Post — Ganeshpur",
+      "lat": 30.150,
+      "lng": 77.870,
+      "district": "Haridwar",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": ["BLS"],
       "operatingHours": "24x7",
-      "notes": "Covers Beltola and Basistha areas"
+      "notes": "Covers Ganeshpur and Roorkee approach"
     },
     {
       "id": "amb-stn-007",
       "sample": true,
-      "name": "Azara PHC",
-      "lat": 26.1000,
-      "lng": 91.7200,
-      "district": "Kamrup Metropolitan",
+      "name": "108 Post — Haridwar",
+      "lat": 29.945,
+      "lng": 78.164,
+      "district": "Haridwar",
       "contactNumber": "108",
-      "ambulanceCount": 1,
-      "types": ["BLS"],
+      "ambulanceCount": 3,
+      "types": ["ALS", "BLS"],
       "operatingHours": "24x7",
-      "notes": "Covers Azara and airport road corridor"
+      "notes": "Covers Haridwar city and Rishikesh approach"
     },
     {
       "id": "amb-stn-008",
       "sample": true,
-      "name": "Jorabat Post",
-      "lat": 26.1190,
-      "lng": 91.8620,
-      "district": "Kamrup Metropolitan",
+      "name": "108 Post — Dehradun",
+      "lat": 30.316,
+      "lng": 78.032,
+      "district": "Dehradun",
       "contactNumber": "108",
-      "ambulanceCount": 2,
-      "types": ["BLS"],
+      "ambulanceCount": 4,
+      "types": ["ALS", "BLS"],
       "operatingHours": "24x7",
-      "notes": "Covers NH-27 eastern corridor and Jorabat interchange"
+      "notes": "Primary dispatch for Dehradun district"
     }
   ]
 }

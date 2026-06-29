@@ -1,23 +1,23 @@
 // i18n string map for Transport Sahayak
-// Languages: EN (English), HI (Hindi / Devanagari), AS (Assamese / অসমীয়া)
+// Languages: EN (English), HI (Hindi / Devanagari)
 
-export type Locale = "EN" | "HI" | "AS";
+export type Locale = "EN" | "HI";
 
 export const strings = {
   // ── App shell ────────────────────────────────────────────────────────────────
   appName:    { EN: "Transport Sahayak",     HI: "ट्रांसपोर्ट सहायक",        AS: "ট্ৰান্সপ'ৰ্ট সহায়ক" },
-  appTagline: { EN: "Assam Transport Dept. — Road Accident First Response",
-                HI: "असम परिवहन विभाग — सड़क दुर्घटना प्रथम प्रतिक्रिया",
-                AS: "অসম পৰিবহন বিভাগ — পথ দুৰ্ঘটনা প্ৰথম সাড়া" },
+  appTagline: { EN: "Delhi–Dehradun Expressway — Road Accident First Response",
+                HI: "दिल्ली–देहरादून एक्सप्रेसवे — सड़क दुर्घटना प्रथम प्रतिक्रिया",
+                AS: "দিল্লী–দেহৰাদূন এক্সপ্ৰেছৱে — পথ দুৰ্ঘটনা প্ৰথম সাড়া" },
   mapSources: { EN: "Map: Google Maps · POI: Google Places · Routing: Google Routes API",
                 HI: "मानचित्र: Google Maps · POI: Google Places · मार्ग: Google Routes API",
                 AS: "মানচিত্ৰ: Google Maps · POI: Google Places · পথ: Google Routes API" },
 
   // ── Banners ──────────────────────────────────────────────────────────────────
   sampleDataBanner: {
-    EN: "⚠ Ambulance stations · Suraksha Mitras · Hotspots · Potholes: sample data — replace with official dataset.",
-    HI: "⚠ एम्बुलेंस · सुरक्षा मित्र · हॉटस्पॉट · गड्ढे: नमूना डेटा — आधिकारिक डेटासेट से बदलें।",
-    AS: "⚠ এম্বুলেন্স · সুৰক্ষা মিত্ৰ · হটস্পট · গাঁত: নমুনা তথ্য — চৰকাৰী তথ্যসমূহেৰে সলনি কৰক।",
+    EN: "⚠ Ambulance stations · Hotspots · Potholes: sample data — replace with official dataset.",
+    HI: "⚠ एम्बुलेंस · हॉटस्पॉट · गड्ढे: नमूना डेटा — आधिकारिक डेटासेट से बदलें।",
+    AS: "⚠ এম্বুলেন্স · হটস্পট · গাঁত: নমুনা তথ্য — চৰকাৰী তথ্যসমূহেৰে সলনি কৰক।",
   },
   googlePoweredNote: {
     EN: "Service markers: Google Places",
@@ -37,7 +37,6 @@ export const strings = {
   // ── Layer filter chips ───────────────────────────────────────────────────────
   layerHospitals:   { EN: "Hospitals",           HI: "अस्पताल",              AS: "চিকিৎসালয়" },
   layerAmbulance:   { EN: "Ambulance Stations",  HI: "एम्बुलेंस केंद्र",    AS: "এম্বুলেন্স কেন্দ্ৰ" },
-  layerSuraksha:    { EN: "Suraksha Mitras",     HI: "सुरक्षा मित्र",        AS: "সুৰক্ষা মিত্ৰ" },
   layerMechanics:   { EN: "Mechanics",           HI: "मैकेनिक",              AS: "মেকানিক" },
   layerPolice:      { EN: "Police Stations",     HI: "पुलिस थाने",           AS: "আৰক্ষী থানা" },
   layerPharmacy:    { EN: "Pharmacies",          HI: "फ़ार्मेसी",             AS: "ঔষধালয়" },
