@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useVoiceInput, type VoiceLocale } from "@/hooks/useVoiceInput";
 import { useEventLog } from "@/store/eventLog";
 import { reverseGeocode } from "@/lib/geocode";
 import { checkDuplicate, type DuplicateMatch } from "@/lib/dedup";
@@ -720,9 +721,109 @@ function SOSView({
 
 // ── Voice section ─────────────────────────────────────────────────────────────
 
-// ── Shared form (TEXT) ───────────────────────────────────────────────────────
+function VoiceSection({
+  voice,
+  locale,
+  onLocaleChange,
+  onTranscriptReady,
+}: {
+  voice: ReturnType<typeof useVoiceInput>;
+  locale: VoiceLocale;
+  onLocaleChange: (l: VoiceLocale) => void;
+  onTranscriptReady: (text: string) => void;
+}) {
+  useEffect(() => {
+    onTranscriptReady(voice.transcript);
+  }, [voice.transcript, onTranscriptReady]);
+
+  if (!voice.supported) {
+    return (
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-500">
+        Voice input is not supported in this browser. Use the Text tab instead.
+        <br />
+        <span className="text-gray-400">Supported: Chrome / Edge on desktop and Android.</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">
+          Recognition Language
+        </label>
+        <select
+          value={locale}
+          onChange={(e) => {
+            if (voice.listening) voice.stop();
+            onLocaleChange(e.target.value as VoiceLocale);
+          }}
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#0f2044]/30"
+        >
+          <option value="en-IN">English — India (en-IN)</option>
+          <option value="hi-IN">हिंदी — Hindi (hi-IN)</option>
+        </select>
+      </div>
+
+      <div className="flex flex-col items-center gap-2">
+        <button
+          onClick={() => (voice.listening ? voice.stop() : voice.start(locale))}
+          className={`w-16 h-16 rounded-full border-2 flex items-center justify-center transition-all ${
+            voice.listening
+              ? "bg-red-600 border-red-700 shadow-lg shadow-red-200 scale-105"
+              : "bg-white border-gray-300 hover:border-[#0f2044] hover:shadow"
+          }`}
+        >
+          <svg
+            className={`w-7 h-7 ${voice.listening ? "text-white" : "text-gray-500"}`}
+            fill="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2zm7 8a1 1 0 0 1 1 1 8 8 0 0 1-7 7.938V21h2a1 1 0 0 1 0 2H9a1 1 0 0 1 0-2h2v-1.062A8 8 0 0 1 4 12a1 1 0 0 1 2 0 6 6 0 0 0 12 0 1 1 0 0 1 1-1z" />
+          </svg>
+        </button>
+        <p className="text-xs text-gray-500">
+          {voice.listening ? "Recording — tap to stop" : "Tap to start recording"}
+        </p>
+      </div>
+
+      {(voice.transcript || voice.interimTranscript || voice.listening) && (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-xs min-h-[56px]">
+          <p className="text-[10px] font-black tracking-widest text-gray-400 uppercase mb-1">
+            Live Transcript
+          </p>
+          <span className="text-gray-800">{voice.transcript}</span>
+          {voice.interimTranscript && (
+            <span className="text-gray-400 italic"> {voice.interimTranscript}</span>
+          )}
+          {voice.listening && !voice.transcript && !voice.interimTranscript && (
+            <span className="text-gray-400 italic">Listening…</span>
+          )}
+        </div>
+      )}
+
+      {voice.transcript && (
+        <button onClick={voice.clearTranscript} className="text-xs text-gray-400 underline self-start">
+          Clear transcript
+        </button>
+      )}
+
+      {voice.error && (
+        <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2.5">
+          {voice.error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Shared form (TEXT + VOICE) ────────────────────────────────────────────────
 
 interface FormViewProps {
+  mode: "TEXT" | "VOICE";
+  voice: ReturnType<typeof useVoiceInput>;
+  locale: VoiceLocale;
+  onLocaleChange: (l: VoiceLocale) => void;
   pinnedLocation: GeoPoint | null;
   pinnedLabel: string;
   onRequestPin: () => void;
@@ -740,13 +841,28 @@ interface FormViewProps {
 }
 
 function FormView({
+  mode, voice, locale, onLocaleChange,
   pinnedLocation, pinnedLabel, onRequestPin,
   selectedSubType, selectedCategory, onSubType,
   description, onDescription, victims, onVictims,
   selectedFlags, onToggleFlag, onSubmit, canSubmit,
 }: FormViewProps) {
+  const handleTranscript = useCallback(
+    (text: string) => onDescription(text),
+    [onDescription]
+  );
+
   return (
     <div className="p-4 flex flex-col gap-4">
+      {mode === "VOICE" && (
+        <VoiceSection
+          voice={voice}
+          locale={locale}
+          onLocaleChange={onLocaleChange}
+          onTranscriptReady={handleTranscript}
+        />
+      )}
+
       {/* Incident type — auto-detect + two-tier browse */}
       <IncidentTypePicker description={description} value={selectedSubType || selectedCategory} onChange={onSubType} />
 
@@ -790,6 +906,9 @@ function FormView({
       <div>
         <label className="block text-xs font-semibold text-gray-600 mb-1.5">
           Description
+          {mode === "VOICE" && (
+            <span className="font-normal text-gray-400"> — from transcript, editable</span>
+          )}
         </label>
         <textarea
           rows={3}
@@ -882,7 +1001,7 @@ export interface ReportPanelProps {
   onClose: () => void;
 }
 
-type ReportMode = "SOS" | "TEXT";
+type ReportMode = "SOS" | "TEXT" | "VOICE";
 type PanelStatus = "IDLE" | "BUSY" | "ASSESSING" | "MATCHING" | "COMPLETE" | "ERROR";
 
 export default function ReportPanel({
@@ -900,11 +1019,13 @@ export default function ReportPanel({
   const [selectedFlags, setSelectedFlags] = useState<Set<string>>(new Set());
   const [selectedSubType, setSelectedSubType] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
+  const [locale, setLocale] = useState<VoiceLocale>("en-IN");
   const [createdIncident, setCreatedIncident] = useState<AccidentReport | null>(null);
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [dupMatch, setDupMatch] = useState<DuplicateMatch | null>(null);
   const [pendingIncident, setPendingIncident] = useState<AccidentReport | null>(null);
 
+  const voice = useVoiceInput();
   const appendReport = useEventLog((s) => s.appendReport);
   const appendAssessment = useEventLog((s) => s.appendAssessment);
   const appendDuplicateFlagged = useEventLog((s) => s.appendDuplicateFlagged);
@@ -924,9 +1045,11 @@ export default function ReportPanel({
     setDupMatch(null);
     setPendingIncident(null);
     clearRoutes();
+    voice.clearTranscript();
   }
 
   function switchMode(m: ReportMode) {
+    if (voice.listening) voice.stop();
     setMode(m);
     resetForm();
   }
@@ -1064,7 +1187,7 @@ export default function ReportPanel({
       locationLabel:
         pinnedLabel ||
         `${pinnedLocation.lat.toFixed(5)}, ${pinnedLocation.lng.toFixed(5)}`,
-      reportMode: "TEXT",
+      reportMode: mode === "VOICE" ? "VOICE" : "TEXT",
       vehiclesInvolved: victims ? Number(victims) : null,
       estimatedCasualties: null,
       description: description.trim(),
@@ -1175,7 +1298,7 @@ export default function ReportPanel({
         {/* Mode tabs — hidden while processing */}
         {panelStatus === "IDLE" || panelStatus === "ERROR" ? (
           <div className="flex border-b border-gray-100 mx-1 flex-shrink-0">
-            {(["SOS", "TEXT"] as ReportMode[]).map((m) => (
+            {(["SOS", "TEXT", "VOICE"] as ReportMode[]).map((m) => (
               <button
                 key={m}
                 onClick={() => switchMode(m)}
@@ -1187,7 +1310,7 @@ export default function ReportPanel({
                     : "border-transparent text-gray-400 hover:text-gray-600"
                 }`}
               >
-                {m === "SOS" ? "🚨 SOS" : "📝 Text"}
+                {m === "SOS" ? "🚨 SOS" : m === "TEXT" ? "📝 Text" : "🎙 Voice"}
               </button>
             ))}
           </div>
@@ -1246,6 +1369,10 @@ export default function ReportPanel({
             />
           ) : (
             <FormView
+              mode={mode as "TEXT" | "VOICE"}
+              voice={voice}
+              locale={locale}
+              onLocaleChange={setLocale}
               pinnedLocation={pinnedLocation}
               pinnedLabel={pinnedLabel}
               onRequestPin={onRequestPin}
