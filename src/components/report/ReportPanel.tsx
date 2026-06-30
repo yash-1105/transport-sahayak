@@ -7,6 +7,7 @@ import { reverseGeocode } from "@/lib/geocode";
 import { checkDuplicate, type DuplicateMatch } from "@/lib/dedup";
 import MatchingPanel from "@/components/report/MatchingPanel";
 import { useRoutingStore } from "@/store/routingStore";
+import { useLocaleStore } from "@/store/localeStore";
 import hospitalsRaw from "../../../data/hospitals.json";
 import policeRaw from "../../../data/police-stations.json";
 import type {
@@ -733,9 +734,37 @@ function VoiceSection({
   onLocaleChange: (l: VoiceLocale) => void;
   onTranscriptReady: (text: string) => void;
 }) {
+  const [polishing, setPolishing] = useState(false);
+  const [polishedText, setPolishedText] = useState<string | null>(null);
+
+  // The displayed transcript: polished version if available, else raw from hook
+  const displayTranscript = polishedText ?? voice.transcript;
+
   useEffect(() => {
-    onTranscriptReady(voice.transcript);
-  }, [voice.transcript, onTranscriptReady]);
+    onTranscriptReady(displayTranscript);
+  }, [displayTranscript, onTranscriptReady]);
+
+  // Reset polished text when transcript is cleared (new recording)
+  useEffect(() => {
+    if (!voice.transcript) setPolishedText(null);
+  }, [voice.transcript]);
+
+  async function handlePolish() {
+    if (!voice.transcript || polishing) return;
+    setPolishing(true);
+    try {
+      const res = await fetch("/api/voice-clean", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: voice.transcript, locale }),
+      });
+      if (res.ok) {
+        const { cleaned } = await res.json();
+        if (cleaned) setPolishedText(cleaned);
+      }
+    } catch { /* keep original on error */ }
+    setPolishing(false);
+  }
 
   if (!voice.supported) {
     return (
@@ -788,25 +817,46 @@ function VoiceSection({
         </p>
       </div>
 
-      {(voice.transcript || voice.interimTranscript || voice.listening) && (
+      {(displayTranscript || voice.interimTranscript || voice.listening) && (
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-xs min-h-[56px]">
           <p className="text-[10px] font-black tracking-widest text-gray-400 uppercase mb-1">
             Live Transcript
           </p>
-          <span className="text-gray-800">{voice.transcript}</span>
+          <span className="text-gray-800">{displayTranscript}</span>
           {voice.interimTranscript && (
             <span className="text-gray-400 italic"> {voice.interimTranscript}</span>
           )}
-          {voice.listening && !voice.transcript && !voice.interimTranscript && (
+          {voice.listening && !displayTranscript && !voice.interimTranscript && (
             <span className="text-gray-400 italic">Listening…</span>
           )}
         </div>
       )}
 
       {voice.transcript && (
-        <button onClick={voice.clearTranscript} className="text-xs text-gray-400 underline self-start">
-          Clear transcript
-        </button>
+        <div className="flex items-center gap-3 self-start">
+          <button onClick={() => { voice.clearTranscript(); setPolishedText(null); }} className="text-xs text-gray-400 underline">
+            Clear
+          </button>
+          {!polishedText && !voice.listening && (
+            <button
+              onClick={handlePolish}
+              disabled={polishing}
+              className="flex items-center gap-1 text-xs text-[#0f2044] font-medium border border-[#0f2044]/30 rounded px-2 py-0.5 hover:bg-[#0f2044]/5 disabled:opacity-50 transition-colors"
+            >
+              {polishing ? (
+                <span className="inline-block w-3 h-3 border-[1.5px] border-[#0f2044]/40 border-t-[#0f2044] rounded-full animate-spin" />
+              ) : (
+                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z" />
+                </svg>
+              )}
+              {polishing ? "Polishing…" : "Polish"}
+            </button>
+          )}
+          {polishedText && (
+            <span className="text-xs text-green-700 font-medium">✓ Polished</span>
+          )}
+        </div>
       )}
 
       {voice.error && (
@@ -1141,7 +1191,8 @@ export default function ReportPanel({
   const [selectedFlags, setSelectedFlags] = useState<Set<string>>(new Set());
   const [selectedSubType, setSelectedSubType] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
-  const [locale, setLocale] = useState<VoiceLocale>("en-IN");
+  const appLocale = useLocaleStore((s) => s.locale);
+  const [locale, setLocale] = useState<VoiceLocale>(appLocale === "HI" ? "hi-IN" : "en-IN");
   const [createdIncident, setCreatedIncident] = useState<AccidentReport | null>(null);
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [dupMatch, setDupMatch] = useState<DuplicateMatch | null>(null);

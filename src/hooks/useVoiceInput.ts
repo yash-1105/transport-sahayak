@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
 
-export type VoiceLocale = "en-IN" | "hi-IN" | "as-IN";
+export type VoiceLocale = "en-IN" | "hi-IN";
 
 export interface UseVoiceInput {
   supported: boolean;
@@ -23,6 +23,20 @@ function getSpeechRecognition(): (new () => AnyRec) | null {
   const w = window as any;
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
+
+const DOMAIN_WORDS: Record<VoiceLocale, string[]> = {
+  "en-IN": [
+    "accident", "crash", "collision", "vehicle", "truck", "bus", "motorcycle",
+    "car", "injury", "injured", "trapped", "bleeding", "unconscious",
+    "ambulance", "police", "hospital", "road", "highway", "overturned",
+    "casualties", "fire", "fuel", "pothole", "SOS", "emergency",
+  ],
+  "hi-IN": [
+    "दुर्घटना", "वाहन", "घायल", "फँसा", "खून", "अस्पताल", "पुलिस",
+    "एम्बुलेंस", "ट्रक", "बस", "मोटरसाइकिल", "सड़क", "राजमार्ग",
+    "आग", "ईंधन", "टक्कर", "बेहोश", "आपातकाल",
+  ],
+};
 
 const ERROR_MSGS: Record<string, string> = {
   "not-allowed": "Microphone access denied. Check browser permissions and try again.",
@@ -51,7 +65,20 @@ export function useVoiceInput(): UseVoiceInput {
       rec.lang = locale;
       rec.continuous = true;
       rec.interimResults = true;
-      rec.maxAlternatives = 1;
+      rec.maxAlternatives = 3;
+
+      // Bias recognition toward accident-domain vocabulary (Chrome/Edge only; silently ignored elsewhere)
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const GL = (window as any).SpeechGrammarList ?? (window as any).webkitSpeechGrammarList;
+        if (GL) {
+          const words = DOMAIN_WORDS[locale] ?? DOMAIN_WORDS["en-IN"];
+          const grammar = `#JSGF V1.0; grammar terms; public <term> = ${words.join(" | ")};`;
+          const list = new GL();
+          list.addFromString(grammar, 1);
+          rec.grammars = list;
+        }
+      } catch { /* unsupported browser — no-op */ }
 
       rec.onstart = () => setListening(true);
 
@@ -71,9 +98,16 @@ export function useVoiceInput(): UseVoiceInput {
         let fin = "";
         let interim = "";
         for (let i = e.resultIndex; i < e.results.length; i++) {
-          const text: string = e.results[i][0].transcript;
-          if (e.results[i].isFinal) fin += text;
-          else interim += text;
+          const result = e.results[i];
+          // Pick the alternative with highest confidence among up to maxAlternatives
+          let bestText: string = result[0].transcript;
+          let bestConf: number = result[0].confidence ?? 0;
+          for (let j = 1; j < result.length; j++) {
+            const conf: number = result[j].confidence ?? 0;
+            if (conf > bestConf) { bestConf = conf; bestText = result[j].transcript; }
+          }
+          if (result.isFinal) fin += bestText;
+          else interim += bestText;
         }
         if (fin) setTranscript((prev) => (prev ? prev + " " + fin.trim() : fin.trim()));
         setInterimTranscript(interim);
