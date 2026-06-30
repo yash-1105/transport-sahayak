@@ -130,6 +130,43 @@ export function getSubtypes(category: string): string[] {
     .sort();
 }
 
+// ── Taxonomy helpers for the AI fallback classifier ───────────────────────────
+// The keyword matcher above is English-indexed and has no stemming, so it scores
+// 0 on most Hindi/Hinglish input (and on vague English like "vehicle accident").
+// When it fails, /api/guess hands the raw description to an LLM which must pick a
+// subType from this exact taxonomy — these helpers build and validate that list.
+
+// consolidated category → its subtypes, largest categories first
+export function getTaxonomy(): { category: string; subtypes: string[] }[] {
+  const grouped = new Map<string, string[]>();
+  for (const [subType, cat] of CATEGORY_MAP) {
+    if (!grouped.has(cat)) grouped.set(cat, []);
+    grouped.get(cat)!.push(subType);
+  }
+  return [...grouped.entries()]
+    .map(([category, subtypes]) => ({ category, subtypes: subtypes.sort() }))
+    .sort((a, b) => b.subtypes.length - a.subtypes.length);
+}
+
+// lowercased subType → canonical subType, for validating LLM output
+const SUBTYPE_CANON = new Map<string, string>();
+for (const subType of CATEGORY_MAP.keys()) SUBTYPE_CANON.set(subType.toLowerCase(), subType);
+
+// Resolve an LLM-returned subType back to a real taxonomy entry (exact, then a
+// forgiving contains-match). Returns null if it can't be tied to the taxonomy.
+export function resolveSubtype(name: string): { subType: string; category: string } | null {
+  const key = (name ?? "").trim().toLowerCase();
+  if (!key) return null;
+  let canon = SUBTYPE_CANON.get(key);
+  if (!canon) {
+    for (const [low, real] of SUBTYPE_CANON) {
+      if (low.includes(key) || key.includes(low)) { canon = real; break; }
+    }
+  }
+  if (!canon) return null;
+  return { subType: canon, category: CATEGORY_MAP.get(canon) ?? "Other" };
+}
+
 export interface GuessResult {
   subType: string | null;
   category: string | null;
