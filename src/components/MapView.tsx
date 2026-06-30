@@ -68,8 +68,7 @@ const ACCIDENT_LAYERS: {
   strokeColor: string;
   source: "synthetic" | "live";
 }[] = [
-  { key: "BLACKSPOT",         labelKey: "layerBlackspots",         color: "#dc2626", strokeColor: "#b91c1c", source: "synthetic" },
-  { key: "POTHOLE",           labelKey: "layerPotholes",           color: "#78350f", strokeColor: "#5c2a0b", source: "synthetic" },
+  { key: "POTHOLE",           labelKey: "layerPotholes",           color: "#78350f", strokeColor: "#5c2a0b", source: "live" },
   { key: "REPORTED_ACCIDENT", labelKey: "layerReportedAccidents",  color: "#ea580c", strokeColor: "#c2410c", source: "live" },
 ];
 
