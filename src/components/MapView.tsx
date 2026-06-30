@@ -17,6 +17,7 @@ import IncidentRecord from "@/components/IncidentRecord";
 import { useT } from "@/hooks/useI18n";
 import { usePlaces, LAYER_TO_PLACE_TYPE } from "@/hooks/usePlaces";
 import { usePotholes } from "@/hooks/usePotholes";
+import { useAccidents } from "@/hooks/useAccidents";
 import { CORRIDOR_WAYPOINTS, CORRIDOR_CENTER, CORRIDOR_WAYPOINT_RADIUS_M } from "@/lib/corridorWaypoints";
 import type { StringKey } from "@/i18n/strings";
 import type { GooglePlace } from "@/lib/types";
@@ -30,6 +31,7 @@ import type {
   AccidentReport,
   Blackspot,
   DbPothole,
+  DbAccident,
   ServiceLayerType,
   AccidentLayerType,
   GeoPoint,
@@ -64,9 +66,11 @@ const ACCIDENT_LAYERS: {
   labelKey: StringKey;
   color: string;
   strokeColor: string;
+  source: "synthetic" | "live";
 }[] = [
-  { key: "BLACKSPOT", labelKey: "layerBlackspots", color: "#dc2626", strokeColor: "#b91c1c" },
-  { key: "POTHOLE",   labelKey: "layerPotholes",   color: "#78350f", strokeColor: "#5c2a0b" },
+  { key: "BLACKSPOT",         labelKey: "layerBlackspots",         color: "#dc2626", strokeColor: "#b91c1c", source: "synthetic" },
+  { key: "POTHOLE",           labelKey: "layerPotholes",           color: "#78350f", strokeColor: "#5c2a0b", source: "synthetic" },
+  { key: "REPORTED_ACCIDENT", labelKey: "layerReportedAccidents",  color: "#ea580c", strokeColor: "#c2410c", source: "live" },
 ];
 
 const LAYER_COLOR: Record<string, { color: string; strokeColor: string }> = {
@@ -128,6 +132,18 @@ function GasIcon() {
       <path d="M8.5 5.5L11 4v3.5a1 1 0 002 0V4" stroke="white"
         strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
       <path d="M3.5 6.5h4" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
+    </svg>
+  );
+}
+function ReportedAccidentIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      {/* Two cars colliding */}
+      <rect x="1" y="6" width="5" height="3" rx="0.8" fill="white" opacity="0.9"/>
+      <rect x="8" y="6" width="5" height="3" rx="0.8" fill="white" opacity="0.9"/>
+      <path d="M6 7.5h2" stroke="white" strokeWidth="1.6" strokeLinecap="round"/>
+      <circle cx="3" cy="9.5" r="0.8" fill="rgba(255,255,255,0.6)"/>
+      <circle cx="11" cy="9.5" r="0.8" fill="rgba(255,255,255,0.6)"/>
     </svg>
   );
 }
@@ -226,8 +242,9 @@ const LAYER_MARKER: Record<string, { shape: MarkerShape; Icon: () => React.JSX.E
   POLICE:            { shape: "square",   Icon: PoliceIcon },
   PHARMACY:          { shape: "square",   Icon: PharmacyIcon },
   GAS_STATION:       { shape: "square",   Icon: GasIcon },
-  BLACKSPOT:         { shape: "triangle", Icon: BlackspotIcon },
-  POTHOLE:           { shape: "diamond",  Icon: PotholeIcon },
+  BLACKSPOT:           { shape: "triangle", Icon: BlackspotIcon },
+  POTHOLE:             { shape: "diamond",  Icon: PotholeIcon },
+  REPORTED_ACCIDENT:   { shape: "circle",   Icon: ReportedAccidentIcon },
 };
 
 function LayerMarker({ layerKey, color, strokeColor }: { layerKey: string; color: string; strokeColor: string }) {
@@ -383,6 +400,26 @@ function PotholePopup({ p }: { p: DbPothole }) {
   );
 }
 
+function ReportedAccidentPopup({ a }: { a: DbAccident }) {
+  const sevColor = a.severity === "CRITICAL" || a.severity === "HIGH" ? "text-red-700"
+    : a.severity === "MEDIUM" ? "text-amber-700" : "text-gray-700";
+  return (
+    <div className="text-xs leading-relaxed min-w-[200px]">
+      <p className="font-semibold text-sm text-gray-900">Reported Accident</p>
+      <p className="text-gray-500 mb-1">{a.location_label}</p>
+      <table className="w-full text-gray-700">
+        <tbody>
+          <tr><td className="pr-2 text-gray-500">Mode</td><td>{a.report_mode}</td></tr>
+          {a.severity && <tr><td className="pr-2 text-gray-500">Severity</td><td className={`font-medium ${sevColor}`}>{a.severity}</td></tr>}
+          {a.description && <tr><td className="pr-2 text-gray-500">Notes</td><td className="break-words max-w-[160px]">{a.description}</td></tr>}
+          {a.flags?.length > 0 && <tr><td className="pr-2 text-gray-500">Flags</td><td>{a.flags.join(", ")}</td></tr>}
+          <tr><td className="pr-2 text-gray-500">Date</td><td>{a.reported_date}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── InfoWindow state type ─────────────────────────────────────────────────────
 
 interface MarkerInfo {
@@ -445,6 +482,7 @@ export default function MapView() {
   const ambulances    = useMemo(() => ambulanceData.ambulanceStations as AmbulanceStation[], []);
   const blackspots    = useMemo(() => blackspotsData.blackspots as Blackspot[], []);
   const { potholes, loading: potholesLoading, error: potholesError, refetch: refetchPotholes } = usePotholes();
+  const { accidents: reportedAccidents, refetch: refetchAccidents } = useAccidents();
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -570,6 +608,19 @@ export default function MapView() {
                     onClick={() => setOpenInfo({ position: { lat: p.lat, lng: p.lng }, content: <PotholePopup p={p} /> })}
                   >
                     <LayerMarker layerKey="POTHOLE" color={LAYER_COLOR.POTHOLE.color} strokeColor={LAYER_COLOR.POTHOLE.strokeColor} />
+                  </AdvancedMarker>
+                ))}
+
+              {/* DB-backed reported accidents — loaded from Supabase via useAccidents hook */}
+              {activeAccidents.has("REPORTED_ACCIDENT") &&
+                reportedAccidents.map((a) => (
+                  <AdvancedMarker
+                    key={a.id}
+                    position={{ lat: a.lat, lng: a.lng }}
+                    title={a.location_label}
+                    onClick={() => setOpenInfo({ position: { lat: a.lat, lng: a.lng }, content: <ReportedAccidentPopup a={a} /> })}
+                  >
+                    <LayerMarker layerKey="REPORTED_ACCIDENT" color={LAYER_COLOR.REPORTED_ACCIDENT.color} strokeColor={LAYER_COLOR.REPORTED_ACCIDENT.strokeColor} />
                   </AdvancedMarker>
                 ))}
             </>
@@ -710,7 +761,9 @@ export default function MapView() {
                   >
                     <ChipShape layerKey={layer.key} color={active ? layer.color : "#d1d5db"} />
                     {t(layer.labelKey)}
-                    <span className="text-[9px] text-amber-600 font-normal ml-0.5">sample</span>
+                    {layer.source === "synthetic" && (
+                      <span className="text-[9px] text-amber-600 font-normal ml-0.5">sample</span>
+                    )}
                   </button>
                 );
               })}
@@ -815,6 +868,26 @@ export default function MapView() {
           setTab("ACCIDENTS");
           closeReport();
           refetchPotholes();
+        }}
+        onAccidentSubmitted={async (r) => {
+          try {
+            await fetch("/api/accidents", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                id: r.id,
+                lat: r.location.lat,
+                lng: r.location.lng,
+                location_label: r.locationLabel,
+                description: r.description || null,
+                severity: r.severity || null,
+                report_mode: r.reportMode,
+                flags: r.flags ?? [],
+                reported_date: r.timestamp.slice(0, 10),
+              }),
+            });
+          } catch { /* non-fatal */ }
+          refetchAccidents();
         }}
       />
 

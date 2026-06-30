@@ -39,7 +39,7 @@ export interface GooglePlace {
   placeType: GooglePlaceType;
 }
 
-export type AccidentLayerType = "BLACKSPOT" | "POTHOLE";
+export type AccidentLayerType = "BLACKSPOT" | "POTHOLE" | "REPORTED_ACCIDENT";
 
 export type LayerType = ServiceLayerType | AccidentLayerType;
 
@@ -249,6 +249,20 @@ export interface UserReportedPothole {
   severity: "HIGH" | "MEDIUM" | "LOW";
   reportedDate: string;
   description?: string;
+}
+
+// Row shape for user-reported accidents in Supabase
+export interface DbAccident {
+  id: string;
+  lat: number;
+  lng: number;
+  location_label: string;
+  description: string | null;
+  severity: string | null;
+  report_mode: string;
+  flags: string[];
+  reported_date: string;
+  created_at: string;
 }
 
 // Row shape returned from Supabase (snake_case matches DB column names)

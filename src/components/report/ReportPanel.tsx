@@ -1118,6 +1118,7 @@ export interface ReportPanelProps {
   onRequestPin: () => void;
   onClose: () => void;
   onPotholeSubmitted: (p: UserReportedPothole) => void;
+  onAccidentSubmitted?: (r: AccidentReport) => void;
 }
 
 type ReportMode = "SOS" | "TEXT" | "VOICE" | "POTHOLE";
@@ -1130,6 +1131,7 @@ export default function ReportPanel({
   onRequestPin,
   onClose,
   onPotholeSubmitted,
+  onAccidentSubmitted,
 }: ReportPanelProps) {
   const [mode, setMode] = useState<ReportMode>("SOS");
   const [panelStatus, setPanelStatus] = useState<PanelStatus>("IDLE");
@@ -1250,6 +1252,7 @@ export default function ReportPanel({
   function proceedWithIncident(incident: AccidentReport) {
     appendReport(incident);
     setCreatedIncident(incident);
+    onAccidentSubmitted?.(incident);
     runAssessment(incident);
   }
 

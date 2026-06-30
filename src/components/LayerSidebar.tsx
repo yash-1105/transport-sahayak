@@ -34,8 +34,9 @@ const ACCIDENT_LAYER_CONFIG: {
   color: string;
   shape: LayerShape;
 }[] = [
-  { key: "BLACKSPOT", label: "Accident Blackspots", color: "#dc2626", shape: "triangle" },
-  { key: "POTHOLE",   label: "Road Defects",        color: "#78350f", shape: "diamond" },
+  { key: "BLACKSPOT",         label: "Accident Blackspots", color: "#dc2626", shape: "triangle" },
+  { key: "POTHOLE",           label: "Road Defects",        color: "#78350f", shape: "diamond" },
+  { key: "REPORTED_ACCIDENT", label: "Reported Accidents",  color: "#ea580c", shape: "circle"   },
 ];
 
 // ── Mini shape indicator ──────────────────────────────────────────────────────

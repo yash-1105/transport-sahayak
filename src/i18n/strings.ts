@@ -43,6 +43,7 @@ export const strings = {
   layerFuel:        { EN: "Fuel Stations",       HI: "ईंधन केंद्र",           AS: "ইন্ধন কেন্দ্ৰ" },
   layerBlackspots:  { EN: "Accident Hotspots",   HI: "दुर्घटना क्षेत्र",    AS: "দুৰ্ঘটনা অঞ্চল" },
   layerPotholes:    { EN: "Road Defects / Potholes", HI: "सड़क दोष / गड्ढे", AS: "পথৰ ত্ৰুটি / গাঁত" },
+  layerReportedAccidents: { EN: "Reported Accidents", HI: "रिपोर्ट की गई दुर्घटनाएं", AS: "প্ৰতিবেদিত দুৰ্ঘটনা" },
 
   // ── Report panel ─────────────────────────────────────────────────────────────
   reportTitle:      { EN: "Report Incident",           HI: "घटना रिपोर्ट करें",       AS: "ঘটনা প্ৰতিবেদন দিয়ক" },
