@@ -13,7 +13,7 @@ interface IndexRecord {
 
 const INDEX = INDEX_RAW as IndexRecord[];
 
-// ── Stop words (mirrors Python classifier) ────────────────────────────────────
+// ── Stop words ────────────────────────────────────────────────────────────────
 
 const STOP = new Set([
   "the", "a", "an", "of", "on", "to", "in", "by", "or", "and", "with", "at", "for",
@@ -21,11 +21,45 @@ const STOP = new Set([
   "highway", "vs", "from", "into", "off", "no", "high", "speed",
 ]);
 
+const HINDI_STOP = new Set([
+  "की", "का", "के", "में", "से", "पर", "एक", "और", "है", "हैं",
+  "था", "थी", "हुआ", "हुई", "को", "ने", "यह", "वह", "कि", "जो", "भी", "तो",
+]);
+
+// ── Hindi → English normalization ─────────────────────────────────────────────
+// Translates key Hindi accident terms to English equivalents before tokenising,
+// so the existing English-indexed scoring still works for Hindi input.
+
+const HINDI_TO_EN: [string, string][] = [
+  ["टक्कर", "collision"],    ["दुर्घटना", "crash"],    ["हादसा", "accident"],
+  ["पलटना", "overturn"],     ["पलट", "overturn"],      ["उलट", "rollover"],
+  ["टकराना", "collision"],   ["टकरा", "collision"],
+  ["आग", "fire"],             ["जलना", "fire"],         ["विस्फोट", "explosion"],
+  ["ईंधन रिसाव", "fuel leak"],
+  ["घायल", "injury"],        ["चोट", "injury"],        ["बेहोश", "unconscious"],
+  ["फँसा", "trapped"],       ["फंसा", "trapped"],      ["खून", "blood"],
+  ["मृत", "dead"],            ["हताहत", "casualty"],   ["जख्मी", "injury"],
+  ["गाड़ी", "vehicle"],      ["वाहन", "vehicle"],      ["ट्रक", "truck"],
+  ["बस", "bus"],              ["बाइक", "motorcycle"],   ["मोटरसाइकिल", "motorcycle"],
+  ["टेंपो", "tempo"],        ["ऑटो", "auto rickshaw"],
+  ["खराब", "breakdown"],     ["पंचर", "puncture"],     ["टायर", "tyre"],
+  ["ब्रेक", "brake"],        ["इंजन", "engine"],       ["टायर फटा", "tyre burst"],
+  ["गड्ढा", "pothole"],      ["बाढ़", "flood"],        ["भूस्खलन", "landslide"],
+  ["पेड़ गिरा", "fallen tree"], ["पत्थर गिरा", "rockfall"],
+  ["सड़क", "road"],          ["राजमार्ग", "highway"],
+];
+
+function normalizeHindi(text: string): string {
+  let out = text;
+  for (const [hi, en] of HINDI_TO_EN) out = out.replaceAll(hi, " " + en + " ");
+  return out;
+}
+
 function tokens(text: string): string[] {
   return (text ?? "")
     .toLowerCase()
-    .match(/[a-z0-9]+/g)
-    ?.filter((t) => t.length > 2 && !STOP.has(t)) ?? [];
+    .match(/[ऀ-ॿ]+|[a-z0-9]+/g)
+    ?.filter((t) => t.length > 1 && !STOP.has(t) && !HINDI_STOP.has(t)) ?? [];
 }
 
 // ── Build keyword index once ──────────────────────────────────────────────────
@@ -105,7 +139,7 @@ export interface GuessResult {
 }
 
 export function guess(description: string): GuessResult {
-  const dt = new Set(tokens(description));
+  const dt = new Set(tokens(normalizeHindi(description)));
   if (dt.size === 0) {
     return { subType: null, category: null, confidence: 0, lowConfidence: true, candidates: [] };
   }

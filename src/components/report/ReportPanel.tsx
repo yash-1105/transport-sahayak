@@ -55,20 +55,25 @@ function classifyIncident(
   if (desc.trim().length < 8) return null;
   const t = desc.toLowerCase();
 
-  const FIRE    = ["fire", "burning", "flames", "caught fire", "fuel leak", "ignit", "explod"];
+  const FIRE    = ["fire", "burning", "flames", "caught fire", "fuel leak", "ignit", "explod",
+                   "आग", "जल रही", "जलना", "विस्फोट", "ईंधन रिसाव", "जल गई", "आग लगी"];
   const INJURY  = ["injur", "bleed", "blood", "unconscious", "unresponsive", "fracture",
                    "hurt", "casualt", "critical", "serious", "victim", "fatal", "dead",
-                   "wounded", "person down", "people hurt", "someone hurt"];
+                   "wounded", "person down", "people hurt", "someone hurt",
+                   "घायल", "चोट", "खून", "बेहोश", "फँसा", "हताहत", "जख्मी", "मृत", "पीड़ित", "गंभीर", "फंसा"];
   const CRASH   = ["crash", "collision", "accident", "overturned", "rollover", "head-on",
                    "rear-end", "hit", "struck", "smash", "vehicle crash", "car crash",
-                   "bike accident", "truck", "lorry", "bus hit", "tempo", "auto rickshaw"];
+                   "bike accident", "truck", "lorry", "bus hit", "tempo", "auto rickshaw",
+                   "टक्कर", "दुर्घटना", "हादसा", "पलट", "उलट", "टकरा", "वाहन दुर्घटना", "गाड़ी टकर", "पलटी"];
   const MECH    = ["breakdown", "broken down", "flat tyre", "flat tire", "tyre burst",
                    "tire burst", "puncture", "engine fail", "engine stop", "stalled",
                    "car stopped", "vehicle stopped", "won't start", "wont start",
-                   "mechanical", "brake fail", "oil leak", "overheating", "tow"];
+                   "mechanical", "brake fail", "oil leak", "overheating", "tow",
+                   "खराब", "पंचर", "टायर फटा", "इंजन बंद", "ब्रेक फेल", "गाड़ी बंद", "गाड़ी खराब"];
   const HAZARD  = ["pothole", "debris", "fallen tree", "tree fallen", "rock fall",
                    "obstacle on road", "road blocked", "flooded road", "oil spill",
-                   "road damage", "landslide", "mud on road"];
+                   "road damage", "landslide", "mud on road",
+                   "गड्ढा", "सड़क बंद", "बाढ़", "भूस्खलन", "पत्थर गिरा", "पेड़ गिरा", "कीचड़"];
 
   const has = (words: string[]) => words.some((w) => t.includes(w));
   const flagInjury = flags.has("Heavy bleeding") || flags.has("Trapped");
@@ -779,20 +784,29 @@ function VoiceSection({
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1">
-          Recognition Language
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          Voice Language
         </label>
-        <select
-          value={locale}
-          onChange={(e) => {
-            if (voice.listening) voice.stop();
-            onLocaleChange(e.target.value as VoiceLocale);
-          }}
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#0f2044]/30"
-        >
-          <option value="en-IN">English — India (en-IN)</option>
-          <option value="hi-IN">हिंदी — Hindi (hi-IN)</option>
-        </select>
+        <div className="flex gap-2">
+          {(["en-IN", "hi-IN"] as VoiceLocale[]).map((l) => (
+            <button
+              key={l}
+              onClick={() => { if (voice.listening) voice.stop(); onLocaleChange(l); }}
+              className={`flex-1 py-2 rounded-lg border text-sm font-semibold transition-colors ${
+                locale === l
+                  ? "bg-[#0f2044] text-white border-[#0f2044]"
+                  : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
+              }`}
+            >
+              {l === "en-IN" ? "English" : "हिंदी"}
+            </button>
+          ))}
+        </div>
+        {locale === "hi-IN" && (
+          <p className="text-[11px] text-indigo-700 bg-indigo-50 rounded px-2 py-1 mt-1.5">
+            हिंदी में बोलें — text will appear in देवनागरी script
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col items-center gap-2">
