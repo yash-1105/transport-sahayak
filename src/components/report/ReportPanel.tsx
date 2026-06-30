@@ -16,6 +16,7 @@ import type {
   GeoPoint,
   Hospital,
   PoliceStation,
+  UserReportedPothole,
 } from "@/lib/types";
 
 const HOSPITALS = hospitalsRaw.hospitals as unknown as Hospital[];
@@ -991,6 +992,123 @@ function FormView({
   );
 }
 
+// ── Pothole form ──────────────────────────────────────────────────────────────
+
+interface PotholeFormViewProps {
+  pinnedLocation: GeoPoint | null;
+  pinnedLabel: string;
+  onRequestPin: () => void;
+  description: string;
+  onDescription: (v: string) => void;
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  onSeverity: (v: "HIGH" | "MEDIUM" | "LOW") => void;
+  onSubmit: () => void;
+  canSubmit: boolean;
+}
+
+function PotholeFormView({
+  pinnedLocation, pinnedLabel, onRequestPin,
+  description, onDescription,
+  severity, onSeverity,
+  onSubmit, canSubmit,
+}: PotholeFormViewProps) {
+  return (
+    <div className="p-4 flex flex-col gap-4">
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+        <p className="text-xs font-semibold text-amber-800 mb-1">Reporting a road defect</p>
+        <p className="text-xs text-amber-700">
+          Pin the location, describe the defect, and select severity. The pothole will appear on the Accidents tab.
+        </p>
+      </div>
+
+      {/* Location */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+          Location <span className="text-red-600">*</span>
+        </label>
+        {pinnedLocation ? (
+          <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg p-2.5">
+            <svg className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
+            </svg>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-blue-900 break-words">{pinnedLabel}</p>
+              <p className="text-[10px] text-blue-400 mt-0.5">
+                {pinnedLocation.lat.toFixed(5)}, {pinnedLocation.lng.toFixed(5)}
+              </p>
+            </div>
+            <button
+              onClick={onRequestPin}
+              className="text-[11px] text-blue-600 underline flex-shrink-0 hover:text-blue-800"
+            >
+              Change
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={onRequestPin}
+            className="w-full border-2 border-dashed border-gray-300 rounded-lg py-3 px-3 text-sm text-gray-400 hover:border-amber-500 hover:text-amber-600 transition-colors flex items-center justify-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
+            </svg>
+            Tap here, then tap map to set location
+          </button>
+        )}
+      </div>
+
+      {/* Description */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1.5">Description</label>
+        <textarea
+          rows={3}
+          value={description}
+          onChange={(e) => onDescription(e.target.value)}
+          placeholder="Describe the defect — size, depth, road name, near landmark…"
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 resize-none"
+        />
+      </div>
+
+      {/* Severity */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-2">Severity</label>
+        <div className="flex gap-2">
+          {(["LOW", "MEDIUM", "HIGH"] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => onSeverity(s)}
+              className={`flex-1 py-2 rounded-lg border text-xs font-bold transition-all ${
+                severity === s
+                  ? s === "HIGH"
+                    ? "bg-red-600 border-red-700 text-white"
+                    : s === "MEDIUM"
+                    ? "bg-amber-500 border-amber-600 text-white"
+                    : "bg-gray-500 border-gray-600 text-white"
+                  : "bg-white border-gray-200 text-gray-500 hover:border-gray-400"
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Submit */}
+      <button
+        onClick={onSubmit}
+        disabled={!canSubmit}
+        className={`w-full py-3 rounded-lg text-sm font-bold transition-colors ${
+          canSubmit
+            ? "bg-amber-600 text-white hover:bg-amber-700"
+            : "bg-gray-100 text-gray-400 cursor-not-allowed"
+        }`}
+      >
+        {canSubmit ? "Report Pothole" : "Set location to submit"}
+      </button>
+    </div>
+  );
+}
+
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 export interface ReportPanelProps {
@@ -999,10 +1117,11 @@ export interface ReportPanelProps {
   pinnedLabel: string;
   onRequestPin: () => void;
   onClose: () => void;
+  onPotholeSubmitted: (p: UserReportedPothole) => void;
 }
 
-type ReportMode = "SOS" | "TEXT" | "VOICE";
-type PanelStatus = "IDLE" | "BUSY" | "ASSESSING" | "MATCHING" | "COMPLETE" | "ERROR";
+type ReportMode = "SOS" | "TEXT" | "VOICE" | "POTHOLE";
+type PanelStatus = "IDLE" | "BUSY" | "ASSESSING" | "MATCHING" | "COMPLETE" | "ERROR" | "POTHOLE_DONE";
 
 export default function ReportPanel({
   open,
@@ -1010,6 +1129,7 @@ export default function ReportPanel({
   pinnedLabel,
   onRequestPin,
   onClose,
+  onPotholeSubmitted,
 }: ReportPanelProps) {
   const [mode, setMode] = useState<ReportMode>("SOS");
   const [panelStatus, setPanelStatus] = useState<PanelStatus>("IDLE");
@@ -1024,6 +1144,9 @@ export default function ReportPanel({
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [dupMatch, setDupMatch] = useState<DuplicateMatch | null>(null);
   const [pendingIncident, setPendingIncident] = useState<AccidentReport | null>(null);
+
+  const [potholeDescription, setPotholeDescription] = useState("");
+  const [potholeSeverity, setPotholeSeverity] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
 
   const voice = useVoiceInput();
   const appendReport = useEventLog((s) => s.appendReport);
@@ -1044,8 +1167,26 @@ export default function ReportPanel({
     setAssessmentResult(null);
     setDupMatch(null);
     setPendingIncident(null);
+    setPotholeDescription("");
+    setPotholeSeverity("MEDIUM");
     clearRoutes();
     voice.clearTranscript();
+  }
+
+  function handlePotholeSubmit() {
+    if (!pinnedLocation) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const rand = Math.random().toString(16).slice(2, 6).toUpperCase();
+    const pothole: UserReportedPothole = {
+      id: `rpot-${rand}`,
+      lat: pinnedLocation.lat,
+      lng: pinnedLocation.lng,
+      road: pinnedLabel || `${pinnedLocation.lat.toFixed(5)}, ${pinnedLocation.lng.toFixed(5)}`,
+      severity: potholeSeverity,
+      reportedDate: today,
+    };
+    onPotholeSubmitted(pothole);
+    setPanelStatus("POTHOLE_DONE");
   }
 
   function switchMode(m: ReportMode) {
@@ -1298,7 +1439,7 @@ export default function ReportPanel({
         {/* Mode tabs — hidden while processing */}
         {panelStatus === "IDLE" || panelStatus === "ERROR" ? (
           <div className="flex border-b border-gray-100 mx-1 flex-shrink-0">
-            {(["SOS", "TEXT", "VOICE"] as ReportMode[]).map((m) => (
+            {(["SOS", "TEXT", "VOICE", "POTHOLE"] as ReportMode[]).map((m) => (
               <button
                 key={m}
                 onClick={() => switchMode(m)}
@@ -1306,11 +1447,13 @@ export default function ReportPanel({
                   mode === m
                     ? m === "SOS"
                       ? "border-red-600 text-red-700 bg-red-50/50"
+                      : m === "POTHOLE"
+                      ? "border-amber-600 text-amber-700 bg-amber-50/50"
                       : "border-[#0f2044] text-[#0f2044]"
                     : "border-transparent text-gray-400 hover:text-gray-600"
                 }`}
               >
-                {m === "SOS" ? "🚨 SOS" : m === "TEXT" ? "📝 Text" : "🎙 Voice"}
+                {m === "SOS" ? "🚨 SOS" : m === "TEXT" ? "📝 Text" : m === "VOICE" ? "🎙 Voice" : "🕳 Pothole"}
               </button>
             ))}
           </div>
@@ -1357,6 +1500,24 @@ export default function ReportPanel({
                 Close
               </button>
             </div>
+          ) : panelStatus === "POTHOLE_DONE" ? (
+            <div className="p-6 flex flex-col items-center gap-4 text-center">
+              <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center">
+                <svg className="w-6 h-6 text-amber-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-bold text-gray-900">Pothole reported</p>
+                <p className="text-xs text-gray-500 mt-1">Switch to the Accidents tab to see it on the map.</p>
+              </div>
+              <button
+                onClick={onClose}
+                className="w-full bg-[#0f2044] text-white py-3 rounded-lg text-sm font-bold hover:bg-[#1a3567] transition-colors"
+              >
+                Done
+              </button>
+            </div>
           ) : mode === "SOS" ? (
             <SOSView
               status={
@@ -1366,6 +1527,18 @@ export default function ReportPanel({
               }
               error={sosError}
               onSend={handleSOS}
+            />
+          ) : mode === "POTHOLE" ? (
+            <PotholeFormView
+              pinnedLocation={pinnedLocation}
+              pinnedLabel={pinnedLabel}
+              onRequestPin={onRequestPin}
+              description={potholeDescription}
+              onDescription={setPotholeDescription}
+              severity={potholeSeverity}
+              onSeverity={setPotholeSeverity}
+              onSubmit={handlePotholeSubmit}
+              canSubmit={!!pinnedLocation}
             />
           ) : (
             <FormView

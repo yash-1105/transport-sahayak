@@ -30,12 +30,14 @@ import type {
   AccidentReport,
   Blackspot,
   Pothole,
+  UserReportedPothole,
   ServiceLayerType,
   AccidentLayerType,
   GeoPoint,
 } from "@/lib/types";
 import { reverseGeocode } from "@/lib/geocode";
 import ReportPanel from "@/components/report/ReportPanel";
+import LayerSidebar from "@/components/LayerSidebar";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -411,6 +413,8 @@ export default function MapView() {
   const [pinnedLocation, setPinnedLocation] = useState<GeoPoint | null>(null);
   const [pinnedLabel, setPinnedLabel] = useState("");
   const [openInfo, setOpenInfo] = useState<MarkerInfo | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [userPotholes, setUserPotholes] = useState<UserReportedPothole[]>([]);
 
   const mapRoutes = useRoutingStore((s) => s.routes);
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -570,6 +574,35 @@ export default function MapView() {
                     <LayerMarker layerKey="POTHOLE" color={LAYER_COLOR.POTHOLE.color} strokeColor={LAYER_COLOR.POTHOLE.strokeColor} />
                   </AdvancedMarker>
                 ))}
+
+              {/* User-reported potholes — always shown in ACCIDENTS tab regardless of filter toggle */}
+              {userPotholes.map((p) => (
+                <AdvancedMarker
+                  key={p.id}
+                  position={{ lat: p.lat, lng: p.lng }}
+                  onClick={() => setOpenInfo({
+                    position: { lat: p.lat, lng: p.lng },
+                    content: (
+                      <div className="text-xs leading-relaxed min-w-[200px]">
+                        <p className="font-semibold text-sm text-gray-900">Road Defect — Reported</p>
+                        <p className="text-gray-500 mb-1">{p.road}</p>
+                        <table className="w-full text-gray-700">
+                          <tbody>
+                            <tr>
+                              <td className="pr-2 text-gray-500">Severity</td>
+                              <td className={`font-medium ${p.severity === "HIGH" ? "text-red-700" : p.severity === "MEDIUM" ? "text-amber-700" : "text-gray-700"}`}>{p.severity}</td>
+                            </tr>
+                            <tr><td className="pr-2 text-gray-500">Reported</td><td>{p.reportedDate}</td></tr>
+                          </tbody>
+                        </table>
+                        <p className="text-amber-700 text-[10px] mt-2">Reported — pending inspection</p>
+                      </div>
+                    ),
+                  })}
+                >
+                  <LayerMarker layerKey="POTHOLE" color={LAYER_COLOR.POTHOLE.color} strokeColor={LAYER_COLOR.POTHOLE.strokeColor} />
+                </AdvancedMarker>
+              ))}
             </>
           )}
 
@@ -623,7 +656,16 @@ export default function MapView() {
       {/* ── Controls overlay ─────────────────────────────────────────────────── */}
       <div className="absolute top-0 left-0 right-0 z-[1000] pointer-events-none">
         {/* Header */}
-        <div className="pointer-events-auto bg-[#0f2044] text-white px-4 py-2.5 flex items-center justify-between gap-3 shadow-md">
+        <div className="pointer-events-auto bg-[#0f2044] text-white px-4 py-2.5 flex items-center gap-3 shadow-md">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open layer controls"
+            className="w-8 h-8 flex items-center justify-center rounded hover:bg-white/10 flex-shrink-0"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold tracking-wide truncate">{t("appName")}</p>
             <p className="text-[10px] text-blue-200 leading-tight truncate hidden sm:block">{t("appTagline")}</p>
@@ -656,7 +698,7 @@ export default function MapView() {
 
         {/* Filter chips */}
         <div className="pointer-events-auto bg-white/95 backdrop-blur-sm border-b border-gray-200 shadow-sm">
-          <div className="chips-row flex gap-2 overflow-x-auto px-3 py-2">
+          <div className="chips-row hidden sm:flex gap-2 overflow-x-auto px-3 py-2">
             {tab === "SERVICES" &&
               SERVICE_LAYERS.map((layer) => {
                 const active = activeServices.has(layer.key);
@@ -757,7 +799,7 @@ export default function MapView() {
         <div className="absolute bottom-10 right-4 z-[1000]">
           <button
             onClick={openReport}
-            className="bg-[#0f2044] hover:bg-[#1a3567] active:bg-[#0a1a36] text-white text-sm font-semibold px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2 transition-colors"
+            className="bg-red-600 hover:bg-red-700 active:bg-red-800 text-white text-sm font-semibold px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2 transition-colors"
           >
             <svg className="w-4 h-4" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -785,6 +827,26 @@ export default function MapView() {
         pinnedLabel={pinnedLabel}
         onRequestPin={requestPin}
         onClose={closeReport}
+        onPotholeSubmitted={(p) => {
+          setUserPotholes((prev) => [...prev, p]);
+          setTab("ACCIDENTS");
+          closeReport();
+        }}
+      />
+
+      {/* ── Layer sidebar ─────────────────────────────────────────────────────── */}
+      <LayerSidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        tab={tab}
+        onTabChange={setTab}
+        activeServices={activeServices}
+        activeAccidents={activeAccidents}
+        onToggleService={toggleService}
+        onToggleAccident={toggleAccident}
+        places={places}
+        placesLoading={placesLoading}
+        placesError={placesError}
       />
 
 

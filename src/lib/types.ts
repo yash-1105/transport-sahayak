@@ -241,6 +241,15 @@ export interface RouteEstimatedPayload {
   disclaimer: "Est. drive time from facility, current traffic — vehicle leaving now. We do not track ambulances.";
 }
 
+export interface UserReportedPothole {
+  id: string;
+  lat: number;
+  lng: number;
+  road: string;
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  reportedDate: string;
+}
+
 export interface DuplicateFlaggedPayload {
   // null when the user chose SKIPPED and no incident was created
   newIncidentId: string | null;
