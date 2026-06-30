@@ -248,6 +248,20 @@ export interface UserReportedPothole {
   road: string;
   severity: "HIGH" | "MEDIUM" | "LOW";
   reportedDate: string;
+  description?: string;
+}
+
+// Row shape returned from Supabase (snake_case matches DB column names)
+export interface DbPothole {
+  id: string;
+  lat: number;
+  lng: number;
+  road: string;
+  severity: "HIGH" | "MEDIUM" | "LOW";
+  description: string | null;
+  reported_date: string;
+  status: string;
+  created_at: string;
 }
 
 export interface DuplicateFlaggedPayload {

@@ -16,6 +16,7 @@ import InstallPWA from "@/components/InstallPWA";
 import IncidentRecord from "@/components/IncidentRecord";
 import { useT } from "@/hooks/useI18n";
 import { usePlaces, LAYER_TO_PLACE_TYPE } from "@/hooks/usePlaces";
+import { usePotholes } from "@/hooks/usePotholes";
 import { CORRIDOR_WAYPOINTS, CORRIDOR_CENTER, CORRIDOR_WAYPOINT_RADIUS_M } from "@/lib/corridorWaypoints";
 import type { StringKey } from "@/i18n/strings";
 import type { GooglePlace } from "@/lib/types";
@@ -23,14 +24,12 @@ import type { GooglePlace } from "@/lib/types";
 // Synthetic-only layers still loaded from seed files
 import ambulanceData from "../../data/ambulance-stations.json";
 import blackspotsData from "../../data/blackspots.json";
-import potholesData from "../../data/potholes.json";
 
 import type {
   AmbulanceStation,
   AccidentReport,
   Blackspot,
-  Pothole,
-  UserReportedPothole,
+  DbPothole,
   ServiceLayerType,
   AccidentLayerType,
   GeoPoint,
@@ -366,21 +365,20 @@ function BlackspotPopup({ b }: { b: Blackspot }) {
   );
 }
 
-function PotholePopup({ p }: { p: Pothole }) {
+function PotholePopup({ p }: { p: DbPothole }) {
   const col = p.severity === "HIGH" ? "text-red-700" : p.severity === "MEDIUM" ? "text-amber-700" : "text-gray-700";
   return (
     <div className="text-xs leading-relaxed min-w-[200px]">
-      <p className="font-semibold text-sm text-gray-900">Road Defect</p>
+      <p className="font-semibold text-sm text-gray-900">Road Defect — Reported</p>
       <p className="text-gray-500 mb-1">{p.road}</p>
       <table className="w-full text-gray-700">
         <tbody>
           <tr><td className="pr-2 text-gray-500">Severity</td><td className={`font-medium ${col}`}>{p.severity}</td></tr>
-          <tr><td className="pr-2 text-gray-500">Size</td><td>{p.diameterCm} cm wide, {p.depthCm} cm deep</td></tr>
-          <tr><td className="pr-2 text-gray-500">Reported</td><td>{p.reportedDate}</td></tr>
+          {p.description && <tr><td className="pr-2 text-gray-500">Notes</td><td>{p.description}</td></tr>}
+          <tr><td className="pr-2 text-gray-500">Reported</td><td>{p.reported_date}</td></tr>
           <tr><td className="pr-2 text-gray-500">Status</td><td>{p.status}</td></tr>
         </tbody>
       </table>
-      <p className="text-amber-700 text-[10px] mt-2">⚠ Sample data</p>
     </div>
   );
 }
@@ -414,7 +412,6 @@ export default function MapView() {
   const [pinnedLabel, setPinnedLabel] = useState("");
   const [openInfo, setOpenInfo] = useState<MarkerInfo | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [userPotholes, setUserPotholes] = useState<UserReportedPothole[]>([]);
 
   const mapRoutes = useRoutingStore((s) => s.routes);
   const [timelineOpen, setTimelineOpen] = useState(false);
@@ -447,7 +444,7 @@ export default function MapView() {
   // ── Synthetic seed data (labelled as sample) ──────────────────────────────
   const ambulances    = useMemo(() => ambulanceData.ambulanceStations as AmbulanceStation[], []);
   const blackspots    = useMemo(() => blackspotsData.blackspots as Blackspot[], []);
-  const potholes      = useMemo(() => potholesData.potholes as Pothole[], []);
+  const { potholes, loading: potholesLoading, error: potholesError, refetch: refetchPotholes } = usePotholes();
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -564,7 +561,8 @@ export default function MapView() {
                   </AdvancedMarker>
                 ))}
 
-              {activeAccidents.has("POTHOLE") &&
+              {/* DB-backed potholes — loaded from Supabase via usePotholes hook */}
+              {activeAccidents.has("POTHOLE") && !potholesLoading &&
                 potholes.map((p) => (
                   <AdvancedMarker
                     key={p.id}
@@ -574,35 +572,6 @@ export default function MapView() {
                     <LayerMarker layerKey="POTHOLE" color={LAYER_COLOR.POTHOLE.color} strokeColor={LAYER_COLOR.POTHOLE.strokeColor} />
                   </AdvancedMarker>
                 ))}
-
-              {/* User-reported potholes — always shown in ACCIDENTS tab regardless of filter toggle */}
-              {userPotholes.map((p) => (
-                <AdvancedMarker
-                  key={p.id}
-                  position={{ lat: p.lat, lng: p.lng }}
-                  onClick={() => setOpenInfo({
-                    position: { lat: p.lat, lng: p.lng },
-                    content: (
-                      <div className="text-xs leading-relaxed min-w-[200px]">
-                        <p className="font-semibold text-sm text-gray-900">Road Defect — Reported</p>
-                        <p className="text-gray-500 mb-1">{p.road}</p>
-                        <table className="w-full text-gray-700">
-                          <tbody>
-                            <tr>
-                              <td className="pr-2 text-gray-500">Severity</td>
-                              <td className={`font-medium ${p.severity === "HIGH" ? "text-red-700" : p.severity === "MEDIUM" ? "text-amber-700" : "text-gray-700"}`}>{p.severity}</td>
-                            </tr>
-                            <tr><td className="pr-2 text-gray-500">Reported</td><td>{p.reportedDate}</td></tr>
-                          </tbody>
-                        </table>
-                        <p className="text-amber-700 text-[10px] mt-2">Reported — pending inspection</p>
-                      </div>
-                    ),
-                  })}
-                >
-                  <LayerMarker layerKey="POTHOLE" color={LAYER_COLOR.POTHOLE.color} strokeColor={LAYER_COLOR.POTHOLE.strokeColor} />
-                </AdvancedMarker>
-              ))}
             </>
           )}
 
@@ -827,10 +796,25 @@ export default function MapView() {
         pinnedLabel={pinnedLabel}
         onRequestPin={requestPin}
         onClose={closeReport}
-        onPotholeSubmitted={(p) => {
-          setUserPotholes((prev) => [...prev, p]);
+        onPotholeSubmitted={async (p) => {
+          try {
+            await fetch("/api/potholes", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                id: p.id,
+                lat: p.lat,
+                lng: p.lng,
+                road: p.road,
+                severity: p.severity,
+                description: p.description ?? null,
+                reported_date: p.reportedDate,
+              }),
+            });
+          } catch { /* non-fatal — marker will appear on next refetch */ }
           setTab("ACCIDENTS");
           closeReport();
+          refetchPotholes();
         }}
       />
 

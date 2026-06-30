@@ -1184,6 +1184,7 @@ export default function ReportPanel({
       road: pinnedLabel || `${pinnedLocation.lat.toFixed(5)}, ${pinnedLocation.lng.toFixed(5)}`,
       severity: potholeSeverity,
       reportedDate: today,
+      description: potholeDescription.trim() || undefined,
     };
     onPotholeSubmitted(pothole);
     setPanelStatus("POTHOLE_DONE");
