@@ -5,9 +5,10 @@ import { distanceToCorridorKm } from "@/lib/corridorGeometry";
 const NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby";
 
 // Cost control: only request the fields we render.
-// displayName + location = Basic SKU; formattedAddress + currentOpeningHours = Advanced SKU.
+// displayName + location = Basic SKU; formattedAddress + currentOpeningHours = Advanced SKU;
+// nationalPhoneNumber = Enterprise SKU (real listed number, only when Google has it).
 const FIELD_MASK =
-  "places.id,places.displayName,places.location,places.formattedAddress,places.currentOpeningHours";
+  "places.id,places.displayName,places.location,places.formattedAddress,places.currentOpeningHours,places.nationalPhoneNumber";
 
 const ALLOWED_TYPES = new Set([
   "hospital",
@@ -26,6 +27,7 @@ type RawPlace = {
   location?: { latitude: number; longitude: number };
   formattedAddress?: string;
   currentOpeningHours?: { openNow?: boolean };
+  nationalPhoneNumber?: string;
 };
 
 // Specialty-clinic name fragments that indicate a non-emergency hospital.
@@ -127,6 +129,7 @@ export async function GET(req: NextRequest) {
         lng,
         address: p.formattedAddress ?? "",
         isOpen: p.currentOpeningHours?.openNow ?? null,
+        phone: p.nationalPhoneNumber ?? null,
         placeType: type,
         distanceToCorridorKm: Math.round(distKm * 10) / 10,
       };

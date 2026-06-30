@@ -326,12 +326,27 @@ function IncidentPin() {
 
 // ── Popup content ─────────────────────────────────────────────────────────────
 
+// Singularise a layer label for a single-marker popup.
+// Plain trailing-"s" stripping mangles "Pharmacies" → "Pharmacie"; handle "-ies" → "-y"
+// first. Non-Latin labels (HI/AS) have no trailing "s" and pass through unchanged.
+function singularLabel(label: string): string {
+  if (/ies$/i.test(label)) return label.replace(/ies$/i, "y");
+  return label.replace(/s$/, "");
+}
+
 function GooglePlacePopup({ p, label }: { p: GooglePlace; label: string }) {
   return (
     <div className="text-xs leading-relaxed min-w-[200px]">
       <p className="font-semibold text-sm text-gray-900">{p.name}</p>
       <p className="text-gray-500 mb-1">{label}</p>
       {p.address && <p className="text-gray-700 mb-1 break-words max-w-[220px]">{p.address}</p>}
+      {p.phone && (
+        <p className="mb-1">
+          <a href={`tel:${p.phone}`} className="font-medium text-blue-700 hover:underline">
+            {p.phone}
+          </a>
+        </p>
+      )}
       {p.isOpen !== null && (
         <p className={`font-medium ${p.isOpen ? "text-green-700" : "text-red-600"}`}>
           {p.isOpen ? "Open now" : "Closed now"}
@@ -560,7 +575,7 @@ export default function MapView() {
                     key={p.id}
                     position={{ lat: p.lat, lng: p.lng }}
                     title={p.name}
-                    onClick={() => openPlaceInfo(p, t(layer.labelKey).replace(/s$/, ""))}
+                    onClick={() => openPlaceInfo(p, singularLabel(t(layer.labelKey)))}
                   >
                     <LayerMarker layerKey={layer.key} color={layer.color} strokeColor={layer.strokeColor} />
                   </AdvancedMarker>

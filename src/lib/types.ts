@@ -36,6 +36,7 @@ export interface GooglePlace {
   lng: number;
   address: string;
   isOpen: boolean | null; // null = opening-hours data unavailable
+  phone: string | null;   // null = no listed number from Google; never fabricated
   placeType: GooglePlaceType;
 }
 
