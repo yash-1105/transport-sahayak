@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import type {
   AccidentReport,
   AssessmentResult,
@@ -16,6 +16,7 @@ import type {
   NearestFireStation,
   NearestTowingStation,
   NearestAmbulanceStation,
+  RouteEstimatedPayload,
   GooglePlace,
 } from "@/lib/types";
 import {
@@ -273,20 +274,25 @@ function AmbulanceEtaCard({
   distanceKm,
   etaMinutes,
   source,
+  computedAt,
 }: {
   station: AmbulanceStation;
   distanceKm: number;
   etaMinutes: number;
   source: "road" | "straight_line";
+  computedAt: string; // ISO timestamp — when this estimate was first logged, from the event log
 }) {
   const t = useT();
 
-  // Countdown is a client-side clock ticking down from the calculated estimate
-  // captured when this card first mounted — NOT a live position feed. We have
-  // no ambulance GPS, so this never claims to track the vehicle; see the
-  // "not live tracking" disclaimer below and the project hard rule on fake
-  // real-time data.
-  const [startedAt] = useState<number>(() => Date.now());
+  // Countdown is a client-side clock ticking down from `computedAt` — the
+  // moment this estimate was first computed and logged (persisted in the
+  // append-only event log), NOT this component's mount time. That keeps the
+  // countdown consistent across closing/reopening the report panel, since
+  // MatchingPanel remounts every time the report sheet is reopened. This is
+  // still not a live position feed — we have no ambulance GPS, so it never
+  // claims to track the vehicle; see the "not live tracking" disclaimer below
+  // and the project hard rule on fake real-time data.
+  const startedAt = useMemo(() => new Date(computedAt).getTime(), [computedAt]);
   const [now, setNow] = useState<number>(() => Date.now());
 
   useEffect(() => {
@@ -616,6 +622,22 @@ export default function MatchingPanel({
   const setRoutes = useRoutingStore((s) => s.setRoutes);
   const appendHospitalMatched = useEventLog((s) => s.appendHospitalMatched);
   const appendRouteEstimated = useEventLog((s) => s.appendRouteEstimated);
+  const eventLogEntries = useEventLog((s) => s.entries);
+
+  // The countdown card needs a stable reference point for "when was this
+  // estimate first computed" that survives MatchingPanel remounting (e.g. the
+  // user closes and reopens the report sheet). The event log is append-only
+  // and outlives this component, so use the *earliest* logged AMBULANCE
+  // ROUTE_ESTIMATED entry for this incident rather than local component state.
+  const ambulanceEtaComputedAt = useMemo(() => {
+    for (const e of eventLogEntries) {
+      if (e.type === "ROUTE_ESTIMATED") {
+        const p = e.payload as RouteEstimatedPayload;
+        if (p.incidentId === incident.id && p.entityType === "AMBULANCE") return e.timestamp;
+      }
+    }
+    return null;
+  }, [eventLogEntries, incident.id]);
 
   useEffect(() => {
     let alive = true;
@@ -798,7 +820,11 @@ export default function MatchingPanel({
         appendRouteEstimated(incident.id, nearestAmbulance.station.id, nearestAmbulance.station.name, "AMBULANCE", roadKm, roadMin);
       } else {
         const distanceKm = nearestAmbulance.straightLineKm;
-        setAmbulanceEta({ distanceKm, etaMinutes: haversineEtaMinutes(distanceKm), source: "straight_line" });
+        const fallbackEtaMin = haversineEtaMinutes(distanceKm);
+        setAmbulanceEta({ distanceKm, etaMinutes: fallbackEtaMin, source: "straight_line" });
+        // Log this path too — the countdown card needs a persisted timestamp
+        // regardless of which estimate source was used (see computedAt below).
+        appendRouteEstimated(incident.id, nearestAmbulance.station.id, nearestAmbulance.station.name, "AMBULANCE", distanceKm, fallbackEtaMin);
       }
 
       if (nearestFire && fireResult.status === "fulfilled" && fireResult.value?.route) {
@@ -902,13 +928,14 @@ export default function MatchingPanel({
           on assessment.agencies — that list can be empty, e.g. the offline heuristic-fallback
           stub in ReportPanel.tsx, even though an ambulance response is still relevant).
           Shown first, above hospital/police results, since it's the most time-critical card. */}
-      {phase === "done" && ambulanceEta && (
+      {phase === "done" && ambulanceEta && ambulanceEtaComputedAt && (
         <div>
           <AmbulanceEtaCard
             station={nearestAmbulance.station}
             distanceKm={ambulanceEta.distanceKm}
             etaMinutes={ambulanceEta.etaMinutes}
             source={ambulanceEta.source}
+            computedAt={ambulanceEtaComputedAt}
           />
         </div>
       )}
