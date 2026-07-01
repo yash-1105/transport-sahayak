@@ -3,14 +3,13 @@
 // Returns HTTP 503 if the engine is unreachable — never fabricates a result.
 
 import { NextRequest, NextResponse } from "next/server";
-
-const ENGINE_URL = process.env.SEVERITY_ENGINE_URL ?? "http://localhost:8000";
+import { getSeverityEngineUrl } from "@/lib/severityEngineUrl";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
   // body = { incident:{subType?,description?,language?}, signals:{...}, location:{km?,latlng?} }
   try {
-    const res = await fetch(`${ENGINE_URL}/assess`, {
+    const res = await fetch(`${getSeverityEngineUrl()}/assess`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

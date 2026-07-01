@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
-
-const ENGINE_URL = process.env.SEVERITY_ENGINE_URL ?? "http://localhost:8000";
+import { getSeverityEngineUrl } from "@/lib/severityEngineUrl";
 
 export async function GET() {
   try {
-    const res = await fetch(`${ENGINE_URL}/subtypes`, { cache: "no-store" });
+    const res = await fetch(`${getSeverityEngineUrl()}/subtypes`, { cache: "no-store" });
     if (!res.ok) throw new Error(`engine ${res.status}`);
     return NextResponse.json(await res.json());
   } catch (e) {
