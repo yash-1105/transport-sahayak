@@ -2,9 +2,19 @@
 
 A deterministic accident severity & dispatch engine for the **Delhi–Dehradun Expressway**.
 Rule-first: it classifies the incident, scores severity, and resolves which agencies to
-dispatch from a fixed 470-row rule book. **Gemini is consulted only when free-text input is
-genuinely ambiguous**, and only to pick a record — severity and agencies are always computed
-by rules. Runs **locally alongside your existing POC**; nothing new to deploy.
+dispatch from a fixed 470-row rule book — severity and agencies are **always** computed by
+rules, never by an LLM. Gemini is consulted for two narrow, read-only jobs:
+1. **Classification escalation** — only when free-text input is genuinely ambiguous, to pick
+   a record from the rule book.
+2. **Hazard-signal extraction** — on every request with free text, reads the description for
+   fire/hazmat/road-blocked/entrapment/casualty signals a confidently-matched record's own
+   static baseline can't know about (e.g. a routine "Car vs. Car Collision" that also mentions
+   a fire). An operator's explicit signal (quick-flag) always wins; this only ever adds,
+   never removes. See `severity_engine/engine.py`'s `_merge_signals()`.
+
+Both degrade gracefully — no key, SDK failure, timeout, or bad output all fail closed to
+rules-only, never fabricate. Runs **locally alongside your existing POC** for dev; see
+"Deploying to production" below for the real deployment.
 
 ## Run it (for the demo)
 
@@ -34,14 +44,19 @@ curl -s localhost:8000/assess -H 'content-type: application/json' -d '{
 }'
 ```
 
-## Optional Gemini fallback
+## Optional Gemini extraction
 
 ```bash
-export GEMINI_API_KEY=your_key      # without this, vague input degrades to best rule guess
+export GEMINI_API_KEY=your_key      # without this: rules-only classification, and hazard
+                                     # signals only come from explicit quick-flags, not free text
 export GEMINI_MODEL=gemini-2.0-flash
 ```
 
-The engine works fully without the key — it just won't auto-reclassify ambiguous free text.
+The engine works fully without the key — it just won't auto-reclassify ambiguous free text or
+auto-detect hazard signals (fire/hazmat/road-blocked/etc.) mentioned in the description; those
+still work if the reporter used the explicit quick-flags in the UI. Free-tier Gemini API keys
+sometimes have a 0-request quota until billing is linked — that also fails closed the same way,
+not silently broken (check `llmUsed` in the response to tell them apart from "no key set").
 
 ## Wiring into your existing POC (local dev)
 
@@ -66,8 +81,10 @@ already set up for Railway:
    public URL (Railway services aren't public by default). Copy it, e.g.
    `https://transport-sahayak-severity.up.railway.app`.
 3. Verify it: `curl https://<your-railway-domain>/health` → `{"ok":true,"records":471}`.
-4. (Optional) Add `GEMINI_API_KEY` as a Railway environment variable to enable the
-   ambiguous-free-text fallback — the engine works fully without it.
+4. (Optional but recommended) Add `GEMINI_API_KEY` as a Railway environment variable to enable
+   both ambiguous-free-text classification and hazard-signal extraction — the engine works
+   fully without it, but reports won't get FIRE/hazmat dispatch from free-text alone (only from
+   explicit quick-flags) if it's unset.
 5. In your **Vercel** project → Settings → Environment Variables, set
    `SEVERITY_ENGINE_URL` = the Railway URL from step 2 (no trailing slash), for Production
    (and Preview if you want PR previews to hit the same engine). Redeploy.
@@ -89,9 +106,13 @@ severity_engine/
   classifier.py                free-text/dropdown -> record (global keyword scoring)
   severity.py                  base + modifiers + hard overrides -> LOW/MED/HIGH/CRITICAL
   dispatch.py                  agency resolution + corridor state-aware labels
-  gemini_client.py             OPTIONAL classification-only fallback (graceful if no key)
-  engine.py                    orchestrator (rule-first; LLM only on escalation)
+  gemini_client.py             OPTIONAL: classify_with_gemini (record escalation) +
+                                extract_hazard_signals (free-text hazard extraction) — both
+                                graceful if no key/failure
+  engine.py                    orchestrator (rule-first; LLM only reads, never decides)
   data/accident_index.json     470-row rule book (your Excel, structured)
+  data/category_groups.json    raw category (50) -> curated top-level UI category (11) —
+                                single source of truth, also read by src/lib/incidentClassifier.ts
   data/corridor_profile.json   km segments, wildlife/tunnel zones, state jurisdictions
 poc_integration/               drop-in snippets for the existing Next.js POC
 ```

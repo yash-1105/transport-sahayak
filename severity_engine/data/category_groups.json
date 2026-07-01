@@ -1,0 +1,65 @@
+{
+  "_meta": {
+    "note": "Maps each raw accident_index.json category to a curated, balanced top-level UI category. Every raw category must appear here — no catch-all 'Other' bucket. Shared by severity_engine/classifier.py (Python) and src/lib/incidentClassifier.ts (TypeScript) so both stay in sync."
+  },
+  "Vehicle to Vehicle": "Vehicle Collisions",
+  "Vehicle to Person": "Vehicle Collisions",
+  "Vehicle to Animal": "Vehicle Collisions",
+  "Vehicle to Infrastructure": "Vehicle Collisions",
+
+  "Weather / Environmental": "Weather & Terrain Hazards",
+  "Landslide / Cliff Fall": "Weather & Terrain Hazards",
+  "Flood / Water Emergency": "Weather & Terrain Hazards",
+  "Earthquake / Seismic": "Weather & Terrain Hazards",
+  "Geotechnical Failure": "Weather & Terrain Hazards",
+  "Visibility Hazard": "Weather & Terrain Hazards",
+  "Nature / Environment – Misc": "Weather & Terrain Hazards",
+
+  "Structural / Catastrophic": "Infrastructure & Structures",
+  "Utility / Infrastructure Failure": "Infrastructure & Structures",
+  "Smart Infrastructure Failure": "Infrastructure & Structures",
+  "Energy Infrastructure": "Infrastructure & Structures",
+  "Tunnel Incidents": "Infrastructure & Structures",
+  "Construction Zone": "Infrastructure & Structures",
+
+  "Pre-Crash Warning Triggers": "Road Conditions & Warnings",
+  "Skidding / Traction Loss": "Road Conditions & Warnings",
+  "Secondary Incidents": "Road Conditions & Warnings",
+  "Human Behaviour & Driver Error": "Road Conditions & Warnings",
+
+  "Fire Situations": "Fire & Hazmat",
+  "Hazardous Material": "Fire & Hazmat",
+  "Fire / Mechanical": "Fire & Hazmat",
+
+  "Breakdown & Non-Crash Hazard": "Breakdown & Cargo",
+  "Cargo Incident": "Breakdown & Cargo",
+  "Cargo / Special Vehicle": "Breakdown & Cargo",
+  "Emergency Vehicle Related": "Breakdown & Cargo",
+
+  "Toll Plaza": "Special Zones / Facilities",
+  "Rest Area / Service Zone": "Special Zones / Facilities",
+  "Rail Interface": "Special Zones / Facilities",
+  "Aviation Interface": "Special Zones / Facilities",
+  "Port / Logistics Corridor": "Special Zones / Facilities",
+  "Waterway Interface": "Special Zones / Facilities",
+
+  "Wildlife / Animal – Special": "Wildlife & Rare Situations",
+  "Special / Rare Situations": "Wildlife & Rare Situations",
+  "Unauthorised Person on Expressway": "Wildlife & Rare Situations",
+  "Special Event / Mass Gathering": "Wildlife & Rare Situations",
+  "Extreme Rare Events": "Wildlife & Rare Situations",
+
+  "Brawl / Human Conflict": "Crime & Security",
+  "Security / Crime": "Crime & Security",
+  "Organised Crime & Threat": "Crime & Security",
+  "Crowd & Public Disorder": "Crime & Security",
+  "Military / Strategic Corridor": "Crime & Security",
+
+  "Driver / Passenger Medical": "Medical & Casualty",
+  "Mass Casualty Special": "Medical & Casualty",
+  "Public Health Emergency": "Medical & Casualty",
+
+  "Cyber / Technology Failure": "Tech & Traffic Management",
+  "Traffic Management Failure": "Tech & Traffic Management",
+  "Environment / Pollution": "Tech & Traffic Management"
+}

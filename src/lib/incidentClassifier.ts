@@ -2,6 +2,7 @@
 // no Python engine needed. Used by /api/categories, /api/categories/subtypes, /api/guess.
 
 import INDEX_RAW from "../../severity_engine/data/accident_index.json";
+import CATEGORY_GROUPS_RAW from "../../severity_engine/data/category_groups.json";
 
 interface IndexRecord {
   category: string;
@@ -12,6 +13,7 @@ interface IndexRecord {
 }
 
 const INDEX = INDEX_RAW as IndexRecord[];
+const CATEGORY_GROUPS = CATEGORY_GROUPS_RAW as unknown as Record<string, string>;
 
 // ── Stop words ────────────────────────────────────────────────────────────────
 
@@ -76,39 +78,17 @@ const KW: KWEntry[] = INDEX.map((rec) => ({
   ct: new Set(tokens(rec.cause)),
 }));
 
-// ── Category consolidation (mirrors Python CATEGORY_KEYWORDS) ─────────────────
-// The JSON has 50 raw categories. These rules collapse them into 14 meaningful
-// ones used in the UI. Order matters — first match wins.
-
-const CATEGORY_KEYWORDS: [string, string[]][] = [
-  ["Fire / Explosion",          ["fire", "bleve", "explosion", "flame", "ignit", "blast", "burning", "arson", "conflagration"]],
-  ["Hazardous Material",        ["hazmat", "chemical", "acid", "radioactive", "toxic", "corrosive", "ammonia", "pesticide", "chlorine", "cryogenic", "biohazard", "lpg tank", "cng tank", "tanker spill", "gas leak", "carbon monoxide"]],
-  ["Tunnel Incident",           ["tunnel"]],
-  ["Medical Emergency",         ["cardiac", "stroke", "childbirth", "anaphylaxis", "overdose", "medical emergency", "seizure", "heart attack", "driver medical"]],
-  ["Flood / Water",             ["flood", "waterlogged", "submerged", "water ingress", "drowning", "swept"]],
-  ["Landslide / Rockfall",      ["landslide", "rockfall", "boulder", "mudslide", "cliff fall", "scree"]],
-  ["Animal on Road",            ["animal", "cattle", "elephant", "leopard", "nilgai", "buffalo", "camel", "deer", "boar", "monkey", "dog on", "stray"]],
-  ["Mechanical / Breakdown",    ["breakdown", "tyre burst", "tyre blowout", "brake fail", "engine fail", "stall", "puncture", "tow truck", "mechanical"]],
-  ["Skid / Traction Loss",      ["skid", "aquaplaning", "black ice", "oil slick", "hydroplane"]],
-  ["Crime / Security",          ["robbery", "theft", "carjack", "road rage assault", "terrorist", "brawl", "shooting", "murder", "hijack"]],
-  ["Weather / Visibility",      ["fog", "dust storm", "hailstorm", "wildfire", "sun glare", "low visibility", "rain", "cyclone"]],
-  ["Infrastructure / Structural", ["pothole", "crash barrier", "guardrail", "atms", "vms", "bridge collapse", "flyover collapse", "road surface"]],
-  ["Pedestrian / Person on Road", ["pedestrian", "cyclist", "wrong-way", "suicide", "walker", "jogger"]],
-  ["Vehicle Collision",         ["collision", "crash", "rear-end", "head-on", "side-swipe", "t-bone", "overturn", "rollover", "pile-up", "pileup"]],
-];
-
-function assignCategory(subType: string): string {
-  const s = subType.toLowerCase();
-  for (const [cat, keywords] of CATEGORY_KEYWORDS) {
-    if (keywords.some((kw) => s.includes(kw))) return cat;
-  }
-  return "Other";
-}
+// ── Category consolidation ─────────────────────────────────────────────────────
+// The JSON's raw `category` field already has 50 reasonably balanced values —
+// far more reliable than keyword-matching each subType string. severity_engine/
+// data/category_groups.json (single source of truth, also read by the Python
+// classifier) maps every one of those 50 raw categories onto 11 curated,
+// balanced top-level UI categories — every record is assigned, no "Other".
 
 // ── Category map: subType → consolidated display category ─────────────────────
 
 const CATEGORY_MAP = new Map<string, string>(
-  INDEX.map((r) => [r.subType, assignCategory(r.subType)])
+  INDEX.map((r) => [r.subType, CATEGORY_GROUPS[r.category] ?? r.category])
 );
 
 // ── Public API ────────────────────────────────────────────────────────────────

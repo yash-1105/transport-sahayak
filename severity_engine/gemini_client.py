@@ -1,10 +1,9 @@
 """
-gemini_client.py — OPTIONAL, classification-only fallback.
-
-Used by the engine ONLY when rules can't confidently classify free text. It does ONE cheap
-job: pick the best {category, subType} from a shortlist. It NEVER computes severity or picks
-agencies. Degrades gracefully: if no GEMINI_API_KEY or the SDK is absent, returns None and the
-engine falls back to the best rules candidate.
+gemini_client.py — OPTIONAL classification + hazard-signal extraction. Both functions read
+free text only; NEITHER ever computes severity or picks agencies — that stays 100% rule-based
+in severity.py/dispatch.py. Both degrade gracefully: if no GEMINI_API_KEY, the SDK is absent,
+or the call fails/times out, they return None and the caller proceeds with whatever it already
+had (client-provided signals, best rules candidate) — never fabricates, never blocks.
 """
 import json
 import os
@@ -50,5 +49,51 @@ def classify_with_gemini(description: str, candidates: list, all_categories: lis
         text = (resp.text or "").strip()
         text = text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
+    except Exception:
+        return None
+
+
+def extract_hazard_signals(description: str):
+    """
+    Reads a free-text incident description and extracts hazard/casualty signals
+    ONLY (fire, hazmat, road-blocked, entrapment, vulnerable victim, rough
+    casualty/vehicle counts) — no taxonomy lookup, that's classify_with_gemini's
+    job. Runs on every request with free text, independent of how confidently
+    the rule-based classifier matched a record: a clearly-matched "Car vs. Car
+    Collision" can still mention a fire the classifier's static agency list has
+    no way to know about. Returns a dict or None (never fabricates: the caller
+    only ever ORs these into whatever the client already sent, and every value
+    here is explicitly instructed to be conservative).
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    try:
+        import google.generativeai as genai
+    except Exception:
+        return None
+
+    instruction = (
+        "Read this road-incident description and extract ONLY facts explicitly stated in the "
+        "text — never guess, infer beyond what's written, or assume worst case. "
+        "Reply with ONLY this JSON shape, no other text, no markdown fences:\n"
+        '{"fire": bool, "hazmat": bool, "roadBlocked": bool, "entrapment": bool, '
+        '"vulnerableVictim": bool, "estimatedCasualties": int_or_null, '
+        '"estimatedVehiclesInvolved": int_or_null}\n'
+        f"Description: {description[:600]}"
+    )
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(MODEL)
+        resp = model.generate_content(
+            instruction,
+            generation_config={"max_output_tokens": 150, "temperature": 0},
+            request_options={"timeout": 5},
+        )
+        text = (resp.text or "").strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
     except Exception:
         return None

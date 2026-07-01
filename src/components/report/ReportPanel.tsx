@@ -46,7 +46,7 @@ const GEO_ERRORS: Record<number, string> = {
   3: "Location request timed out. Move to better GPS coverage and try again.",
 };
 
-const QUICK_FLAGS = ["Conscious", "Breathing", "Trapped", "Heavy bleeding"] as const;
+const QUICK_FLAGS = ["Conscious", "Breathing", "Trapped", "Heavy bleeding", "Fire", "Hazardous material"] as const;
 
 // ── Real-time incident classification ────────────────────────────────────────
 
@@ -1285,6 +1285,11 @@ export default function ReportPanel({
         vehiclesInvolved: incident.vehiclesInvolved ?? 1,
         entrapment: incident.flags.includes("Trapped"),
         vulnerableVictim: incident.flags.includes("Heavy bleeding"),
+        // Explicit tap always wins — the engine also tries to auto-detect these
+        // from the free-text description server-side, but a one-tap flag is
+        // faster and unambiguous, and never gets overridden by that inference.
+        fire: incident.flags.includes("Fire"),
+        hazmat: incident.flags.includes("Hazardous material"),
       },
       ...(incident.location
         ? { location: { latlng: [incident.location.lat, incident.location.lng] } }

@@ -11,6 +11,9 @@ from typing import Optional
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 with open(os.path.join(_DATA_DIR, "accident_index.json"), encoding="utf-8") as _f:
     INDEX = json.load(_f)
+with open(os.path.join(_DATA_DIR, "category_groups.json"), encoding="utf-8") as _f:
+    _CATEGORY_GROUPS = json.load(_f)
+    _CATEGORY_GROUPS.pop("_meta", None)
 
 # ---- build a keyword index once at import ----
 _STOP = {
@@ -106,65 +109,17 @@ def classify(incident: dict) -> ClassificationResult:
                                 source="needs_llm", candidates=candidates)
 
 
-# ── Two-tier category system ──────────────────────────────────────────────────
-# Ordered: first matching category wins. Put specific before general.
+# ── Category consolidation ─────────────────────────────────────────────────────
+# The source spreadsheet's raw `category` field already has 50 reasonably
+# balanced values (1-47 records each) — far better than deriving categories by
+# keyword-matching each subType string. category_groups.json (single source of
+# truth, also read by the TS port in src/lib/incidentClassifier.ts) maps every
+# one of those 50 raw categories onto 11 curated, balanced top-level UI
+# categories — every record is assigned, no leftover "Other" catch-all.
 
-CATEGORY_KEYWORDS: dict[str, set[str]] = {
-    "Fire / Explosion": {
-        "fire", "bleve", "explosion", "flame", "ignit", "blast", "burning", "arson", "conflagration",
-    },
-    "Hazardous Material": {
-        "hazmat", "chemical", "acid", "radioactive", "toxic", "corrosive", "ammonia",
-        "pesticide", "chlorine", "cryogenic", "biohazard", "lpg tank", "cng tank",
-        "tanker spill", "gas leak", "carbon monoxide",
-    },
-    "Tunnel Incident": {"tunnel"},
-    "Medical Emergency": {
-        "cardiac", "stroke", "childbirth", "anaphylaxis", "overdose",
-        "medical emergency", "seizure", "heart attack", "driver medical",
-    },
-    "Flood / Water": {"flood", "waterlogged", "submerged", "water ingress", "drowning", "swept"},
-    "Landslide / Rockfall": {"landslide", "rockfall", "boulder", "mudslide", "cliff fall", "scree"},
-    "Animal on Road": {
-        "animal", "cattle", "elephant", "leopard", "nilgai", "buffalo", "camel",
-        "deer", "boar", "monkey", "dog on", "stray",
-    },
-    "Mechanical / Breakdown": {
-        "breakdown", "tyre burst", "tyre blowout", "brake fail", "engine fail",
-        "stall", "puncture", "tow truck", "mechanical",
-    },
-    "Skid / Traction Loss": {"skid", "aquaplaning", "black ice", "oil slick", "hydroplane"},
-    "Crime / Security": {
-        "robbery", "theft", "carjack", "road rage assault", "terrorist",
-        "brawl", "shooting", "murder", "hijack",
-    },
-    "Weather / Visibility": {
-        "fog", "dust storm", "hailstorm", "wildfire", "sun glare",
-        "low visibility", "rain", "cyclone",
-    },
-    "Infrastructure / Structural": {
-        "pothole", "crash barrier", "guardrail", "atms", "vms",
-        "bridge collapse", "flyover collapse", "road surface",
-    },
-    "Pedestrian / Person on Road": {
-        "pedestrian", "cyclist", "wrong-way", "suicide", "walker", "jogger",
-    },
-    "Vehicle Collision": {
-        "collision", "crash", "rear-end", "head-on", "side-swipe", "t-bone",
-        "overturn", "rollover", "pile-up", "pileup",
-    },
+_CATEGORY_MAP: dict[str, str] = {
+    rec["subType"]: _CATEGORY_GROUPS.get(rec["category"], rec["category"]) for rec in INDEX
 }
-
-
-def _assign_category(sub_type: str) -> str:
-    s = sub_type.lower()
-    for cat, keywords in CATEGORY_KEYWORDS.items():
-        if any(kw in s for kw in keywords):
-            return cat
-    return "Other"
-
-
-_CATEGORY_MAP: dict[str, str] = {rec["subType"]: _assign_category(rec["subType"]) for rec in INDEX}
 
 
 def get_categories() -> list[dict]:
