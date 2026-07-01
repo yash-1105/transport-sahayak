@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useCallback, type ReactNode } from "react";
+import React, { useState, useMemo, useCallback, useEffect, type ReactNode } from "react";
 import {
   APIProvider,
   Map,
@@ -350,6 +350,49 @@ function IncidentPin() {
   );
 }
 
+// ── Simulated ambulance marker (cosmetic demo animation, not a live position
+// feed — see CLAUDE.md hard rule 1) ───────────────────────────────────────────
+
+// Walks the already-computed route polyline at a constant pace over the
+// estimate's duration. Purely a visual aid; never presented as GPS tracking —
+// the marker itself is tagged "SIMULATED" and its popup repeats the disclaimer.
+function interpolateAlongPath(coords: [number, number][], fraction: number): { lat: number; lng: number } {
+  if (coords.length === 0) return { lat: 0, lng: 0 };
+  const clamped = Math.min(1, Math.max(0, fraction));
+  if (coords.length === 1 || clamped <= 0) return { lat: coords[0][0], lng: coords[0][1] };
+  if (clamped >= 1) {
+    const last = coords[coords.length - 1];
+    return { lat: last[0], lng: last[1] };
+  }
+  const scaled = clamped * (coords.length - 1);
+  const i = Math.floor(scaled);
+  const t = scaled - i;
+  const a = coords[i];
+  const b = coords[Math.min(i + 1, coords.length - 1)];
+  return { lat: a[0] + (b[0] - a[0]) * t, lng: a[1] + (b[1] - a[1]) * t };
+}
+
+function SimulatedAmbulanceMarker() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer" }}>
+      <div style={{
+        width: 30, height: 30, borderRadius: "50%",
+        background: "#16a34a", border: "2px solid #15803d",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
+      }}>
+        <AmbulanceIcon />
+      </div>
+      <span style={{
+        marginTop: 2, background: "#111827", color: "white", fontSize: 9, fontWeight: 700,
+        padding: "1px 5px", borderRadius: 4, letterSpacing: 0.4, whiteSpace: "nowrap",
+      }}>
+        SIMULATED
+      </span>
+    </div>
+  );
+}
+
 // ── Popup content ─────────────────────────────────────────────────────────────
 
 // Singularise a layer label for a single-marker popup.
@@ -527,6 +570,13 @@ export default function MapView() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const mapRoutes = useRoutingStore((s) => s.routes);
+  const simulatedAmbulance = useRoutingStore((s) => s.simulatedAmbulance);
+  const [simTick, setSimTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (!simulatedAmbulance) return;
+    const id = setInterval(() => setSimTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [simulatedAmbulance]);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [recordIncidentId, setRecordIncidentId] = useState<string | null>(null);
   const entries = useEventLog((s) => s.entries);
@@ -767,6 +817,38 @@ export default function MapView() {
               />
             );
           })}
+
+          {/* ── Simulated ambulance marker — cosmetic demo animation along the
+              highlighted route; not a real position feed (see CLAUDE.md). ── */}
+          {simulatedAmbulance && (() => {
+            const startedAtMs = new Date(simulatedAmbulance.startedAt).getTime();
+            const elapsedMin = (simTick - startedAtMs) / 60000;
+            const fraction = simulatedAmbulance.durationMin > 0 ? elapsedMin / simulatedAmbulance.durationMin : 1;
+            const pos = interpolateAlongPath(simulatedAmbulance.coords, fraction);
+            return (
+              <AdvancedMarker
+                position={pos}
+                title="Simulated ambulance — demonstration only, not live tracking"
+                zIndex={999}
+                onClick={() =>
+                  setOpenInfo({
+                    position: pos,
+                    content: (
+                      <div className="text-xs max-w-[220px]">
+                        <p className="font-semibold text-gray-900">Simulated ambulance</p>
+                        <p className="text-gray-500 mt-0.5 leading-relaxed">
+                          Demonstration animation along the calculated route — not a live GPS
+                          position. We do not track ambulances.
+                        </p>
+                      </div>
+                    ),
+                  })
+                }
+              >
+                <SimulatedAmbulanceMarker />
+              </AdvancedMarker>
+            );
+          })()}
 
           {/* ── InfoWindow ────────────────────────────────────────────────── */}
           {openInfo && (

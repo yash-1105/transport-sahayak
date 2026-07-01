@@ -10,14 +10,29 @@ export interface MapRoute {
   label: string;
 }
 
+// A cosmetic, clearly-labelled simulated ambulance marker that animates along
+// an already-highlighted route. Not a real position feed — see CLAUDE.md hard
+// rule 1. Anchored to the same computedAt timestamp as the ETA countdown so
+// both stay in sync and both survive panel remounts.
+export interface SimulatedAmbulance {
+  id: string;
+  coords: [number, number][]; // same polyline as the drawn ambulance route
+  startedAt: string; // ISO timestamp — when the estimate was first computed
+  durationMin: number; // total simulated travel time
+}
+
 interface RoutingState {
   routes: MapRoute[];
+  simulatedAmbulance: SimulatedAmbulance | null;
   setRoutes: (routes: MapRoute[]) => void;
+  setSimulatedAmbulance: (sim: SimulatedAmbulance | null) => void;
   clearRoutes: () => void;
 }
 
 export const useRoutingStore = create<RoutingState>((set) => ({
   routes: [],
+  simulatedAmbulance: null,
   setRoutes: (routes) => set({ routes }),
-  clearRoutes: () => set({ routes: [] }),
+  setSimulatedAmbulance: (sim) => set({ simulatedAmbulance: sim }),
+  clearRoutes: () => set({ routes: [], simulatedAmbulance: null }),
 }));

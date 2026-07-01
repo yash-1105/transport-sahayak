@@ -608,7 +608,12 @@ export default function MatchingPanel({
   const [nearestAmbulance] = useState<NearestAmbulanceStation>(() =>
     findNearestAmbulanceStation(ambulanceStations, incident)
   );
-  const [ambulanceEta, setAmbulanceEta] = useState<{ distanceKm: number; etaMinutes: number; source: "road" | "straight_line" } | null>(null);
+  const [ambulanceEta, setAmbulanceEta] = useState<{
+    distanceKm: number;
+    etaMinutes: number;
+    source: "road" | "straight_line";
+    routeCoords: [number, number][] | null;
+  } | null>(null);
   const [nearestFire, setNearestFire] = useState<NearestFireStation | null>(() =>
     wantsFire && fireStations.length ? findNearestFireStation(fireStations, incident) : null
   );
@@ -620,6 +625,7 @@ export default function MatchingPanel({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const setRoutes = useRoutingStore((s) => s.setRoutes);
+  const setSimulatedAmbulance = useRoutingStore((s) => s.setSimulatedAmbulance);
   const appendHospitalMatched = useEventLog((s) => s.appendHospitalMatched);
   const appendRouteEstimated = useEventLog((s) => s.appendRouteEstimated);
   const eventLogEntries = useEventLog((s) => s.entries);
@@ -638,6 +644,21 @@ export default function MatchingPanel({
     }
     return null;
   }, [eventLogEntries, incident.id]);
+
+  // Push the simulated ambulance marker to the map whenever a road-based route
+  // is available, anchored to the same persisted computedAt as the countdown
+  // card above — so both stay in sync and both survive panel remounts. Purely
+  // cosmetic: it walks the actual highlighted route, not a real position feed.
+  useEffect(() => {
+    if (ambulanceEta?.source === "road" && ambulanceEta.routeCoords && ambulanceEtaComputedAt) {
+      setSimulatedAmbulance({
+        id: `sim-ambulance-${nearestAmbulance.station.id}`,
+        coords: ambulanceEta.routeCoords,
+        startedAt: ambulanceEtaComputedAt,
+        durationMin: ambulanceEta.etaMinutes,
+      });
+    }
+  }, [ambulanceEta, ambulanceEtaComputedAt, nearestAmbulance.station.id, setSimulatedAmbulance]);
 
   useEffect(() => {
     let alive = true;
@@ -807,7 +828,7 @@ export default function MatchingPanel({
         const roadKm = r.distanceMeters / 1000;
         const roadMin = r.durationSec / 60;
 
-        setAmbulanceEta({ distanceKm: roadKm, etaMinutes: roadMin, source: "road" });
+        setAmbulanceEta({ distanceKm: roadKm, etaMinutes: roadMin, source: "road", routeCoords: r.coords });
 
         mapRoutes.push({
           id: `ambulance-${nearestAmbulance.station.id}`,
@@ -821,7 +842,7 @@ export default function MatchingPanel({
       } else {
         const distanceKm = nearestAmbulance.straightLineKm;
         const fallbackEtaMin = haversineEtaMinutes(distanceKm);
-        setAmbulanceEta({ distanceKm, etaMinutes: fallbackEtaMin, source: "straight_line" });
+        setAmbulanceEta({ distanceKm, etaMinutes: fallbackEtaMin, source: "straight_line", routeCoords: null });
         // Log this path too — the countdown card needs a persisted timestamp
         // regardless of which estimate source was used (see computedAt below).
         appendRouteEstimated(incident.id, nearestAmbulance.station.id, nearestAmbulance.station.name, "AMBULANCE", distanceKm, fallbackEtaMin);
