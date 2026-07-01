@@ -7,3 +7,15 @@ export function getSeverityEngineUrl(): string {
   const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
   return withScheme.replace(/\/+$/, "");
 }
+
+// Unwraps fetch()'s generic "TypeError: fetch failed" to surface the actual
+// underlying cause (DNS failure, connection refused, TLS error, etc.) — the
+// bare message alone isn't enough to diagnose a misconfigured engine URL.
+export function describeFetchError(e: unknown): string {
+  if (e instanceof Error) {
+    const cause = (e as { cause?: unknown }).cause;
+    const causeStr = cause instanceof Error ? cause.message : cause ? String(cause) : null;
+    return causeStr ? `${e.message} (cause: ${causeStr})` : e.message;
+  }
+  return String(e);
+}
