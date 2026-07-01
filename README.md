@@ -43,14 +43,40 @@ export GEMINI_MODEL=gemini-2.0-flash
 
 The engine works fully without the key — it just won't auto-reclassify ambiguous free text.
 
-## Wiring into your existing POC (no new deployment)
+## Wiring into your existing POC (local dev)
 
 1. Run this engine locally on port 8000 (above).
-2. Replace `src/app/api/assess/route.ts` with `poc_integration/assess_route.ts` (calls the
-   engine; removes the old Anthropic path).
-3. Add `SEVERITY_ENGINE_URL=http://localhost:8000` to the POC's `.env.local`.
-4. Add the ambulance-stations layer (`poc_integration/ambulance_stations.ts`) and remove
-   Suraksha Mitra (`poc_integration/REMOVE_SURAKSHA_MITRA.md`).
+2. Add `SEVERITY_ENGINE_URL=http://localhost:8000` to the Next.js app's `.env.local`.
+
+Local dev only — `http://localhost:8000` is your own machine, not reachable from a Vercel
+deployment. See below for production.
+
+## Deploying to production (Railway)
+
+The Next.js app on Vercel calls this engine over HTTP via `SEVERITY_ENGINE_URL` — it needs
+its own always-on host, since Vercel can't reach `localhost` on your machine. This repo is
+already set up for Railway:
+
+1. **Deploy this repo to Railway** — [railway.app](https://railway.app) → New Project →
+   Deploy from GitHub repo → select this repo. Railway auto-detects the `Procfile`
+   (`web: uvicorn app:app --host 0.0.0.0 --port $PORT`) and `requirements.txt`.
+   `nixpacks.toml` at the repo root forces a Python-only build so Railway ignores the
+   sibling Next.js `package.json` in the same repo.
+2. In the Railway service → **Settings → Networking**, click **Generate Domain** to get a
+   public URL (Railway services aren't public by default). Copy it, e.g.
+   `https://transport-sahayak-severity.up.railway.app`.
+3. Verify it: `curl https://<your-railway-domain>/health` → `{"ok":true,"records":471}`.
+4. (Optional) Add `GEMINI_API_KEY` as a Railway environment variable to enable the
+   ambiguous-free-text fallback — the engine works fully without it.
+5. In your **Vercel** project → Settings → Environment Variables, set
+   `SEVERITY_ENGINE_URL` = the Railway URL from step 2 (no trailing slash), for Production
+   (and Preview if you want PR previews to hit the same engine). Redeploy.
+6. `/api/assess` in the Next.js app will now reach the real engine instead of falling back
+   to the "severity engine unreachable — treat as HIGH" stub.
+
+Note: Railway redeploys this service whenever anything in the repo changes, including
+Next.js–only commits — harmless (same build, no code difference for this service) but worth
+knowing if you see redeploys you didn't expect.
 
 ## Files
 

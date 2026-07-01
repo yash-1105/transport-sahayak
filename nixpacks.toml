@@ -1,0 +1,4 @@
+# Forces Railway/Nixpacks to build this repo as a Python service only.
+# The repo root also contains a Next.js app (package.json) for the separate
+# Vercel deployment — without this, Nixpacks may try to detect/build both.
+providers = ["python"]
