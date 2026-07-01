@@ -1020,6 +1020,40 @@ export default function MatchingPanel({
         </div>
       )}
 
+      {/* Fire — only shown when the engine actually recommended FIRE for this
+          incident. Kept directly below the ambulance card, above hospital
+          results, since it's equally time-critical when present. */}
+      {phase === "done" && wantsFire && nearestFire && fireEta && fireEtaComputedAt && (
+        <div>
+          <EtaCountdownCard
+            kind="FIRE"
+            stationName={nearestFire.station.name}
+            subtitle={`${nearestFire.station.district} · ${nearestFire.station.vehicleTypes.join(", ")}`}
+            distanceKm={fireEta.distanceKm}
+            etaMinutes={fireEta.etaMinutes}
+            source={fireEta.source}
+            computedAt={fireEtaComputedAt}
+          />
+        </div>
+      )}
+
+      {/* Towing — only shown when the engine actually recommended TOWING for
+          this incident. Kept directly below fire/ambulance for the same
+          reason — the most time-critical, highest-severity-agency cards lead. */}
+      {phase === "done" && wantsTowing && nearestTowing && towingEta && towingEtaComputedAt && (
+        <div>
+          <EtaCountdownCard
+            kind="TOWING"
+            stationName={nearestTowing.station.name}
+            subtitle={`${nearestTowing.station.district} · ${nearestTowing.station.vehicleTypes.join(", ")}`}
+            distanceKm={towingEta.distanceKm}
+            etaMinutes={towingEta.etaMinutes}
+            source={towingEta.source}
+            computedAt={towingEtaComputedAt}
+          />
+        </div>
+      )}
+
       {/* Hospital results */}
       {ranked.length > 0 && (
         <div>
@@ -1065,36 +1099,6 @@ export default function MatchingPanel({
             Nearest Police Station
           </p>
           <PoliceCard ps={nearestPSWithRoute} />
-        </div>
-      )}
-
-      {/* Fire — only shown when the engine actually recommended FIRE for this incident */}
-      {phase === "done" && wantsFire && nearestFire && fireEta && fireEtaComputedAt && (
-        <div>
-          <EtaCountdownCard
-            kind="FIRE"
-            stationName={nearestFire.station.name}
-            subtitle={`${nearestFire.station.district} · ${nearestFire.station.vehicleTypes.join(", ")}`}
-            distanceKm={fireEta.distanceKm}
-            etaMinutes={fireEta.etaMinutes}
-            source={fireEta.source}
-            computedAt={fireEtaComputedAt}
-          />
-        </div>
-      )}
-
-      {/* Towing — only shown when the engine actually recommended TOWING for this incident */}
-      {phase === "done" && wantsTowing && nearestTowing && towingEta && towingEtaComputedAt && (
-        <div>
-          <EtaCountdownCard
-            kind="TOWING"
-            stationName={nearestTowing.station.name}
-            subtitle={`${nearestTowing.station.district} · ${nearestTowing.station.vehicleTypes.join(", ")}`}
-            distanceKm={towingEta.distanceKm}
-            etaMinutes={towingEta.etaMinutes}
-            source={towingEta.source}
-            computedAt={towingEtaComputedAt}
-          />
         </div>
       )}
 

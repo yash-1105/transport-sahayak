@@ -356,6 +356,24 @@ function IncidentPin() {
 // Walks the already-computed route polyline at a constant pace over the
 // estimate's duration. Purely a visual aid; never presented as GPS tracking —
 // the marker itself is tagged "SIMULATED" and its popup repeats the disclaimer.
+// Haversine distance in km — mirrors src/lib/matching.ts's haversineKm without
+// importing it here (this is a client-only rendering helper).
+function haversineKmLocal(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(h));
+}
+
+// Walks the polyline at constant real-world speed — cumulative-distance based,
+// not a naive per-point-index fraction. Google's route points are unevenly
+// spaced (dense on curves, sparse on straight stretches), so an index-based
+// fraction would speed up/slow down for no reason; this keeps the marker's
+// pace uniform and strictly on the road the whole way, matching the actual
+// highlighted route rather than jumping between arbitrary vertices.
 function interpolateAlongPath(coords: [number, number][], fraction: number): { lat: number; lng: number } {
   if (coords.length === 0) return { lat: 0, lng: 0 };
   const clamped = Math.min(1, Math.max(0, fraction));
@@ -364,12 +382,33 @@ function interpolateAlongPath(coords: [number, number][], fraction: number): { l
     const last = coords[coords.length - 1];
     return { lat: last[0], lng: last[1] };
   }
-  const scaled = clamped * (coords.length - 1);
-  const i = Math.floor(scaled);
-  const t = scaled - i;
-  const a = coords[i];
-  const b = coords[Math.min(i + 1, coords.length - 1)];
-  return { lat: a[0] + (b[0] - a[0]) * t, lng: a[1] + (b[1] - a[1]) * t };
+
+  const segLens: number[] = [];
+  let total = 0;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const d = haversineKmLocal(
+      { lat: coords[i][0], lng: coords[i][1] },
+      { lat: coords[i + 1][0], lng: coords[i + 1][1] }
+    );
+    segLens.push(d);
+    total += d;
+  }
+  if (total === 0) return { lat: coords[0][0], lng: coords[0][1] };
+
+  const targetDist = clamped * total;
+  let covered = 0;
+  for (let i = 0; i < segLens.length; i++) {
+    if (covered + segLens[i] >= targetDist || i === segLens.length - 1) {
+      const segFraction = segLens[i] > 0 ? (targetDist - covered) / segLens[i] : 0;
+      const a = coords[i];
+      const b = coords[i + 1];
+      const t = Math.min(1, Math.max(0, segFraction));
+      return { lat: a[0] + (b[0] - a[0]) * t, lng: a[1] + (b[1] - a[1]) * t };
+    }
+    covered += segLens[i];
+  }
+  const last = coords[coords.length - 1];
+  return { lat: last[0], lng: last[1] };
 }
 
 const SIM_VEHICLE_STYLE: Record<SimulatedVehicleKind, { color: string; stroke: string; Icon: () => React.JSX.Element; label: string }> = {

@@ -8,12 +8,15 @@
       "id": "amb-stn-001",
       "sample": true,
       "name": "108 Post — Delhi EPE Junction",
-      "lat": 28.632,
-      "lng": 77.328,
+      "lat": 28.631872,
+      "lng": 77.327548,
       "district": "East Delhi",
       "contactNumber": "108",
       "ambulanceCount": 4,
-      "types": ["ALS", "BLS"],
+      "types": [
+        "ALS",
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Eastern Peripheral Expressway northern entry"
     },
@@ -21,12 +24,14 @@
       "id": "amb-stn-002",
       "sample": true,
       "name": "108 Post — Loni Border",
-      "lat": 28.698,
-      "lng": 77.305,
+      "lat": 28.698009,
+      "lng": 77.305154,
       "district": "East Delhi",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Loni / Delhi–UP border stretch"
     },
@@ -34,12 +39,14 @@
       "id": "amb-stn-003",
       "sample": true,
       "name": "108 Post — Baghpat",
-      "lat": 28.944,
-      "lng": 77.218,
+      "lat": 28.943543,
+      "lng": 77.217793,
       "district": "Baghpat",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Baghpat expressway interchange"
     },
@@ -47,12 +54,14 @@
       "id": "amb-stn-004",
       "sample": true,
       "name": "108 Post — Baraut",
-      "lat": 29.099,
-      "lng": 77.254,
+      "lat": 29.099063,
+      "lng": 77.254003,
       "district": "Baghpat",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Baraut stretch and surrounding villages"
     },
@@ -60,12 +69,14 @@
       "id": "amb-stn-005",
       "sample": true,
       "name": "108 Post — Khatauli / Muzaffarnagar",
-      "lat": 29.355,
-      "lng": 77.296,
+      "lat": 29.35537,
+      "lng": 77.294067,
       "district": "Muzaffarnagar",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Muzaffarnagar western bypass and Khatauli approach"
     },
@@ -73,12 +84,15 @@
       "id": "amb-stn-006",
       "sample": true,
       "name": "108 Post — Shamli",
-      "lat": 29.450,
-      "lng": 77.310,
+      "lat": 29.450036,
+      "lng": 77.30936,
       "district": "Shamli",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["ALS", "BLS"],
+      "types": [
+        "ALS",
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Shamli bypass and state highway junction"
     },
@@ -86,12 +100,14 @@
       "id": "amb-stn-007",
       "sample": true,
       "name": "108 Post — Deoband / Nakur",
-      "lat": 29.650,
-      "lng": 77.430,
+      "lat": 29.65038,
+      "lng": 77.431669,
       "district": "Saharanpur",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Deoband and Nakur approach roads"
     },
@@ -99,12 +115,15 @@
       "id": "amb-stn-008",
       "sample": true,
       "name": "108 Post — Saharanpur",
-      "lat": 29.967,
-      "lng": 77.546,
+      "lat": 29.967035,
+      "lng": 77.546044,
       "district": "Saharanpur",
       "contactNumber": "108",
       "ambulanceCount": 3,
-      "types": ["ALS", "BLS"],
+      "types": [
+        "ALS",
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Primary dispatch for Saharanpur district"
     },
@@ -112,12 +131,14 @@
       "id": "amb-stn-009",
       "sample": true,
       "name": "108 Post — Gangoh / Behat",
-      "lat": 30.065,
-      "lng": 77.700,
+      "lat": 30.065879,
+      "lng": 77.697457,
       "district": "Saharanpur",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Gangoh and Behat stretch toward the Shivalik foothills"
     },
@@ -125,12 +146,14 @@
       "id": "amb-stn-010",
       "sample": true,
       "name": "108 Post — Ganeshpur",
-      "lat": 30.150,
-      "lng": 77.870,
+      "lat": 30.147284,
+      "lng": 77.867365,
       "district": "Haridwar",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Ganeshpur and Roorkee approach"
     },
@@ -138,12 +161,14 @@
       "id": "amb-stn-011",
       "sample": true,
       "name": "108 Post — Mohand Ghat",
-      "lat": 30.236,
-      "lng": 77.978,
+      "lat": 30.242463,
+      "lng": 77.970814,
       "district": "Dehradun",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers the Mohand Ghat hill-approach section"
     },
@@ -151,12 +176,15 @@
       "id": "amb-stn-012",
       "sample": true,
       "name": "108 Post — Haridwar",
-      "lat": 29.945,
-      "lng": 78.164,
+      "lat": 29.945189,
+      "lng": 78.163782,
       "district": "Haridwar",
       "contactNumber": "108",
       "ambulanceCount": 3,
-      "types": ["ALS", "BLS"],
+      "types": [
+        "ALS",
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers Haridwar city and Rishikesh approach"
     },
@@ -164,12 +192,14 @@
       "id": "amb-stn-013",
       "sample": true,
       "name": "108 Post — Rishikesh Approach",
-      "lat": 30.080,
-      "lng": 78.220,
+      "lat": 30.077596,
+      "lng": 78.222807,
       "district": "Dehradun",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers the Haridwar–Rishikesh–Dehradun link road"
     },
@@ -177,12 +207,14 @@
       "id": "amb-stn-014",
       "sample": true,
       "name": "108 Post — Dehradun Valley Entry",
-      "lat": 30.280,
-      "lng": 78.010,
+      "lat": 30.279649,
+      "lng": 78.010684,
       "district": "Dehradun",
       "contactNumber": "108",
       "ambulanceCount": 2,
-      "types": ["BLS"],
+      "types": [
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Covers the expressway's Dehradun valley entry point"
     },
@@ -190,12 +222,15 @@
       "id": "amb-stn-015",
       "sample": true,
       "name": "108 Post — Dehradun",
-      "lat": 30.316,
-      "lng": 78.032,
+      "lat": 30.315994,
+      "lng": 78.032139,
       "district": "Dehradun",
       "contactNumber": "108",
       "ambulanceCount": 4,
-      "types": ["ALS", "BLS"],
+      "types": [
+        "ALS",
+        "BLS"
+      ],
       "operatingHours": "24x7",
       "notes": "Primary dispatch for Dehradun district"
     }
