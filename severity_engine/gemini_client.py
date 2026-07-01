@@ -97,3 +97,30 @@ def extract_hazard_signals(description: str):
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def gemini_health_check():
+    """
+    Diagnostic only — makes one trivial call and returns (ok, detail) so a
+    misconfigured/quota-exhausted key surfaces its REAL error instead of the
+    silent None every other function here returns by design. Not used by the
+    assess() pipeline itself; wired to a debug endpoint in app.py.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return False, "GEMINI_API_KEY not set in this process's environment"
+    try:
+        import google.generativeai as genai
+    except Exception as e:
+        return False, f"SDK import failed: {e}"
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(MODEL)
+        resp = model.generate_content(
+            'Reply with only this exact JSON: {"ok": true}',
+            generation_config={"max_output_tokens": 20, "temperature": 0},
+            request_options={"timeout": 8},
+        )
+        return True, (resp.text or "").strip()
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"

@@ -68,6 +68,19 @@ def health():
     return {"ok": True, "records": len(INDEX)}
 
 
+@app.get("/debug/gemini")
+def debug_gemini():
+    """
+    Diagnostic only — surfaces the REAL error from a live Gemini call (bad key,
+    quota, billing not enabled, etc.) instead of the silent None the actual
+    assess() pipeline returns on failure by design. Safe to leave deployed:
+    makes one trivial, cheap call, never touches incident data.
+    """
+    from severity_engine.gemini_client import gemini_health_check
+    ok, detail = gemini_health_check()
+    return {"ok": ok, "detail": detail}
+
+
 @app.get("/subtypes")
 def subtypes():
     """Every sub-type with its curated category (deduped by subType string)."""
