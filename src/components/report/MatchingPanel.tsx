@@ -7,9 +7,15 @@ import type {
   AssessmentSeverity,
   Hospital,
   PoliceStation,
+  AmbulanceStation,
+  FireStation,
+  TowingStation,
   HospitalCandidate,
   RankedHospital,
   NearestPolice,
+  NearestFireStation,
+  NearestTowingStation,
+  NearestAmbulanceStation,
   GooglePlace,
 } from "@/lib/types";
 import {
@@ -19,10 +25,18 @@ import {
   rankCandidatesByDistance,
   type TrafficResult,
 } from "@/lib/candidates";
-import { findNearestPolice } from "@/lib/matching";
+import {
+  findNearestPolice,
+  findNearestFireStation,
+  findNearestTowingStation,
+  findNearestAmbulanceStation,
+  haversineEtaMinutes,
+  AVG_AMBULANCE_SPEED_KMPH,
+} from "@/lib/matching";
 import { generateHospitalAlert, generatePoliceAlert } from "@/lib/dispatch";
 import { useRoutingStore } from "@/store/routingStore";
 import { useEventLog } from "@/store/eventLog";
+import { useT } from "@/hooks/useI18n";
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -193,6 +207,89 @@ function PoliceCard({ ps }: { ps: NearestPolice }) {
       {ps.station.phone && (
         <p className="text-[11px] text-gray-400">Phone: {ps.station.phone}</p>
       )}
+    </div>
+  );
+}
+
+function FireCard({ fs }: { fs: NearestFireStation }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-1.5">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-bold text-gray-900">{fs.station.name}</p>
+          <p className="text-[11px] text-gray-400">{fs.station.district} · {fs.station.vehicleTypes.join(", ")}</p>
+        </div>
+        <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-800 font-semibold flex-shrink-0">
+          Nearest Fire Station
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <TrafficDistTag roadKm={fs.roadDistanceKm} roadMin={fs.roadDurationMin} straightKm={fs.straightLineKm} />
+      </div>
+      {fs.station.contactNumber && (
+        <p className="text-[11px] text-gray-400">Phone: {fs.station.contactNumber}</p>
+      )}
+    </div>
+  );
+}
+
+function TowingCard({ ts }: { ts: NearestTowingStation }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-1.5">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-sm font-bold text-gray-900">{ts.station.name}</p>
+          <p className="text-[11px] text-gray-400">{ts.station.district} · {ts.station.vehicleTypes.join(", ")}</p>
+        </div>
+        <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold flex-shrink-0">
+          Nearest Recovery Post
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <TrafficDistTag roadKm={ts.roadDistanceKm} roadMin={ts.roadDurationMin} straightKm={ts.straightLineKm} />
+      </div>
+      {ts.station.contactNumber && (
+        <p className="text-[11px] text-gray-400">Phone: {ts.station.contactNumber}</p>
+      )}
+    </div>
+  );
+}
+
+function AmbulanceEtaCard({
+  station,
+  distanceKm,
+  etaMinutes,
+  source,
+}: {
+  station: AmbulanceStation;
+  distanceKm: number;
+  etaMinutes: number;
+  source: "road" | "straight_line";
+}) {
+  const t = useT();
+  return (
+    <div className="rounded-xl border border-green-200 bg-green-50/40 p-3 flex flex-col gap-1.5">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-black tracking-widest text-green-800 uppercase">{t("matchAmbulanceEta")}</p>
+          <p className="text-sm font-bold text-gray-900 mt-0.5">{station.name}</p>
+          <p className="text-[11px] text-gray-400">{station.district} · {station.ambulanceCount} ambulances ({station.types.join(", ")})</p>
+        </div>
+      </div>
+      <p className="text-sm text-gray-800">
+        Estimated arrival <span className="font-semibold text-green-800">~{Math.round(etaMinutes)} min</span> from {station.name}
+        <span className="text-gray-500"> · {distanceKm.toFixed(1)} km</span>
+      </p>
+      <p className="text-[11px] text-gray-500">
+        {source === "road" ? t("ambulanceEtaRoadBased") : `${t("ambulanceEtaStraightLine")} (${AVG_AMBULANCE_SPEED_KMPH} km/h)`}
+      </p>
+      <p className="text-[10px] text-green-700 font-medium">{t("ambulanceEtaCalculated")}</p>
     </div>
   );
 }
@@ -413,6 +510,9 @@ function DispatchSection({
 export interface MatchingPanelProps {
   hospitals: Hospital[];
   policeStations: PoliceStation[];
+  ambulanceStations: AmbulanceStation[];
+  fireStations: FireStation[];
+  towingStations: TowingStation[];
   incident: AccidentReport;
   assessment: AssessmentResult;
   onReady?: () => void;
@@ -428,6 +528,9 @@ type Phase =
 export default function MatchingPanel({
   hospitals,
   policeStations,
+  ambulanceStations,
+  fireStations,
+  towingStations,
   incident,
   assessment,
   onReady,
@@ -435,12 +538,25 @@ export default function MatchingPanel({
   const sev = assessment.severityScore as AssessmentSeverity;
   const accentColor = SEV_COLOR[sev];
 
+  const wantsFire = assessment.agencies.some((a) => a.code === "FIRE");
+  const wantsTowing = assessment.agencies.some((a) => a.code === "TOWING");
+
   const [phase, setPhase] = useState<Phase>("fetching_places");
   const [phasesDone, setPhasesDone] = useState<Set<Phase>>(new Set());
   const [ranked, setRanked] = useState<RankedHospital[]>([]);
   const [nearestPS] = useState<NearestPolice>(() => findNearestPolice(policeStations, incident));
   const [nearestPSWithRoute, setNearestPSWithRoute] = useState<NearestPolice>(() =>
     findNearestPolice(policeStations, incident)
+  );
+  const [nearestAmbulance] = useState<NearestAmbulanceStation>(() =>
+    findNearestAmbulanceStation(ambulanceStations, incident)
+  );
+  const [ambulanceEta, setAmbulanceEta] = useState<{ distanceKm: number; etaMinutes: number; source: "road" | "straight_line" } | null>(null);
+  const [nearestFire, setNearestFire] = useState<NearestFireStation | null>(() =>
+    wantsFire && fireStations.length ? findNearestFireStation(fireStations, incident) : null
+  );
+  const [nearestTowing, setNearestTowing] = useState<NearestTowingStation | null>(() =>
+    wantsTowing && towingStations.length ? findNearestTowingStation(towingStations, incident) : null
   );
   const [routeSource, setRouteSource] = useState<"traffic" | "straight_line" | null>(null);
   const [candidateCount, setCandidateCount] = useState(0);
@@ -531,25 +647,28 @@ export default function MatchingPanel({
         return;
       }
 
-      const [hosResult, psResult] = await Promise.allSettled([
-        fetch("/api/routes/single", {
+      function fetchRoute(origin: { lat: number; lng: number }) {
+        return fetch("/api/routes/single", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            origin: { lat: h1.hospital.lat, lng: h1.hospital.lng },
+            origin,
             destination: { lat: incident.location.lat, lng: incident.location.lng },
           }),
           cache: "no-store",
-        }).then((r) => r.json()),
-        fetch("/api/routes/single", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            origin: { lat: nearestPS.station.lat, lng: nearestPS.station.lng },
-            destination: { lat: incident.location.lat, lng: incident.location.lng },
-          }),
-          cache: "no-store",
-        }).then((r) => r.json()),
+        }).then((r) => r.json());
+      }
+
+      const [hosResult, psResult, ambResult, fireResult, towingResult] = await Promise.allSettled([
+        fetchRoute({ lat: h1.hospital.lat, lng: h1.hospital.lng }),
+        fetchRoute({ lat: nearestPS.station.lat, lng: nearestPS.station.lng }),
+        fetchRoute({ lat: nearestAmbulance.station.lat, lng: nearestAmbulance.station.lng }),
+        nearestFire
+          ? fetchRoute({ lat: nearestFire.station.lat, lng: nearestFire.station.lng })
+          : Promise.resolve(null),
+        nearestTowing
+          ? fetchRoute({ lat: nearestTowing.station.lat, lng: nearestTowing.station.lng })
+          : Promise.resolve(null),
       ]);
 
       if (!alive) return;
@@ -605,6 +724,66 @@ export default function MatchingPanel({
         });
 
         appendRouteEstimated(incident.id, nearestPS.station.id, nearestPS.station.name, "POLICE", roadKm, roadMin);
+      }
+
+      // Ambulance ETA — always attempt Google road distance; fall back to a
+      // straight-line + fixed-speed estimate. Both paths are clearly labelled
+      // as calculated estimates, never presented as live tracking.
+      if (ambResult.status === "fulfilled" && ambResult.value?.route) {
+        const r = ambResult.value.route;
+        const roadKm = r.distanceMeters / 1000;
+        const roadMin = r.durationSec / 60;
+
+        setAmbulanceEta({ distanceKm: roadKm, etaMinutes: roadMin, source: "road" });
+
+        mapRoutes.push({
+          id: `ambulance-${nearestAmbulance.station.id}`,
+          color: "#16a34a",
+          dashArray: "6 4",
+          coords: r.coords,
+          label: nearestAmbulance.station.name,
+        });
+
+        appendRouteEstimated(incident.id, nearestAmbulance.station.id, nearestAmbulance.station.name, "AMBULANCE", roadKm, roadMin);
+      } else {
+        const distanceKm = nearestAmbulance.straightLineKm;
+        setAmbulanceEta({ distanceKm, etaMinutes: haversineEtaMinutes(distanceKm), source: "straight_line" });
+      }
+
+      if (nearestFire && fireResult.status === "fulfilled" && fireResult.value?.route) {
+        const r = fireResult.value.route;
+        const roadKm = r.distanceMeters / 1000;
+        const roadMin = r.durationSec / 60;
+
+        setNearestFire((prev) => (prev ? { ...prev, roadDistanceKm: roadKm, roadDurationMin: roadMin, routeCoords: r.coords } : prev));
+
+        mapRoutes.push({
+          id: `fire-${nearestFire.station.id}`,
+          color: "#dc2626",
+          dashArray: "6 4",
+          coords: r.coords,
+          label: nearestFire.station.name,
+        });
+
+        appendRouteEstimated(incident.id, nearestFire.station.id, nearestFire.station.name, "FIRE", roadKm, roadMin);
+      }
+
+      if (nearestTowing && towingResult.status === "fulfilled" && towingResult.value?.route) {
+        const r = towingResult.value.route;
+        const roadKm = r.distanceMeters / 1000;
+        const roadMin = r.durationSec / 60;
+
+        setNearestTowing((prev) => (prev ? { ...prev, roadDistanceKm: roadKm, roadDurationMin: roadMin, routeCoords: r.coords } : prev));
+
+        mapRoutes.push({
+          id: `towing-${nearestTowing.station.id}`,
+          color: "#57534e",
+          dashArray: "6 4",
+          coords: r.coords,
+          label: nearestTowing.station.name,
+        });
+
+        appendRouteEstimated(incident.id, nearestTowing.station.id, nearestTowing.station.name, "TOWING", roadKm, roadMin);
       }
 
       setRoutes(mapRoutes);
@@ -716,6 +895,38 @@ export default function MatchingPanel({
         </div>
       )}
 
+      {/* Ambulance ETA — honest, calculated estimate; shown whenever the engine recommends AMBULANCE */}
+      {phase === "done" && ambulanceEta && assessment.agencies.some((a) => a.code === "AMBULANCE") && (
+        <div>
+          <AmbulanceEtaCard
+            station={nearestAmbulance.station}
+            distanceKm={ambulanceEta.distanceKm}
+            etaMinutes={ambulanceEta.etaMinutes}
+            source={ambulanceEta.source}
+          />
+        </div>
+      )}
+
+      {/* Fire — only shown when the engine actually recommended FIRE for this incident */}
+      {wantsFire && nearestFire && (
+        <div>
+          <p className="text-[10px] font-black tracking-widest uppercase mb-2 px-1" style={{ color: accentColor }}>
+            Nearest Fire Station
+          </p>
+          <FireCard fs={nearestFire} />
+        </div>
+      )}
+
+      {/* Towing — only shown when the engine actually recommended TOWING for this incident */}
+      {wantsTowing && nearestTowing && (
+        <div>
+          <p className="text-[10px] font-black tracking-widest uppercase mb-2 px-1" style={{ color: accentColor }}>
+            Nearest Recovery Post
+          </p>
+          <TowingCard ts={nearestTowing} />
+        </div>
+      )}
+
       {/* Route legend */}
       {phase === "done" && (
         <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 flex flex-col gap-2">
@@ -725,6 +936,15 @@ export default function MatchingPanel({
               <RouteLegend color="#2563eb" label={`Hospital route — ${ranked[0].hospital.shortName}`} />
             )}
             <RouteLegend color="#1e3a8a" dash label={`Police route — ${nearestPS.station.name}`} />
+            {ambulanceEta && ambulanceEta.source === "road" && (
+              <RouteLegend color="#16a34a" dash label={`Ambulance route — ${nearestAmbulance.station.name}`} />
+            )}
+            {wantsFire && nearestFire && (
+              <RouteLegend color="#dc2626" dash label={`Fire route — ${nearestFire.station.name}`} />
+            )}
+            {wantsTowing && nearestTowing && (
+              <RouteLegend color="#57534e" dash label={`Recovery route — ${nearestTowing.station.name}`} />
+            )}
           </div>
           <p className="text-[11px] text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-1.5 leading-relaxed">
             Est. drive time from facility, current traffic — vehicle leaving now.

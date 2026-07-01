@@ -22,6 +22,8 @@ const SERVICE_LAYER_CONFIG: {
 }[] = [
   { key: "HOSPITAL",          label: "Hospitals",       color: "#2563eb", shape: "square",   source: "google" },
   { key: "AMBULANCE_STATION", label: "Ambulances",      color: "#16a34a", shape: "circle",   source: "synthetic" },
+  { key: "FIRE_STATION",      label: "Fire Stations",   color: "#dc2626", shape: "circle",   source: "synthetic" },
+  { key: "TOWING_STATION",    label: "Towing / Recovery", color: "#57534e", shape: "circle",  source: "synthetic" },
   { key: "MECHANIC",          label: "Mechanics",       color: "#6b7280", shape: "square",   source: "google" },
   { key: "POLICE",            label: "Police Stations", color: "#1e3a8a", shape: "square",   source: "google" },
   { key: "PHARMACY",          label: "Pharmacies",      color: "#7c3aed", shape: "square",   source: "google" },

@@ -14,6 +14,8 @@ export interface GeoPoint {
 export type ServiceLayerType =
   | "HOSPITAL"
   | "AMBULANCE_STATION"
+  | "FIRE_STATION"
+  | "TOWING_STATION"
   | "MECHANIC"
   | "POLICE"
   | "PHARMACY"
@@ -71,6 +73,32 @@ export interface AmbulanceStation {
   contactNumber: string;
   ambulanceCount: number;
   types: ("ALS" | "BLS")[];
+  operatingHours: string;
+  notes: string;
+}
+
+export interface FireStation {
+  id: string;
+  sample: true;
+  name: string;
+  lat: number;
+  lng: number;
+  district: string;
+  contactNumber: string;
+  vehicleTypes: string[];
+  operatingHours: string;
+  notes: string;
+}
+
+export interface TowingStation {
+  id: string;
+  sample: true;
+  name: string;
+  lat: number;
+  lng: number;
+  district: string;
+  contactNumber: string;
+  vehicleTypes: string[];
   operatingHours: string;
   notes: string;
 }
@@ -193,6 +221,40 @@ export interface NearestPolice {
   routeCoords: [number, number][] | null;
 }
 
+export interface NearestFireStation {
+  station: FireStation;
+  straightLineKm: number;
+  roadDistanceKm: number | null;
+  roadDurationMin: number | null;
+  routeCoords: [number, number][] | null;
+}
+
+export interface NearestTowingStation {
+  station: TowingStation;
+  straightLineKm: number;
+  roadDistanceKm: number | null;
+  roadDurationMin: number | null;
+  routeCoords: [number, number][] | null;
+}
+
+export interface NearestAmbulanceStation {
+  station: AmbulanceStation;
+  straightLineKm: number;
+  roadDistanceKm: number | null;
+  roadDurationMin: number | null;
+  routeCoords: [number, number][] | null;
+}
+
+// Honest, non-live ambulance arrival estimate — see AGENTS/CLAUDE hard rule:
+// never "live", "tracked", or "en route". "road" = Google Routes drive time;
+// "straight_line" = haversine distance / AVG_AMBULANCE_SPEED_KMPH fallback.
+export interface AmbulanceEtaEstimate {
+  station: AmbulanceStation;
+  distanceKm: number;
+  source: "road" | "straight_line";
+  etaMinutes: number;
+}
+
 // ── Event log ────────────────────────────────────────────────────────────────
 
 export interface AccidentReport {
@@ -236,7 +298,7 @@ export interface RouteEstimatedPayload {
   incidentId: string;
   entityId: string;
   entityName: string;
-  entityType: "HOSPITAL" | "POLICE";
+  entityType: "HOSPITAL" | "POLICE" | "FIRE" | "TOWING" | "AMBULANCE";
   roadDistanceKm: number;
   roadDurationMin: number;
   disclaimer: "Est. drive time from facility, current traffic — vehicle leaving now. We do not track ambulances.";

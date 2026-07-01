@@ -1,0 +1,188 @@
+{
+  "_meta": {
+    "label": "Sample data — replace with official dataset.",
+    "source": "Illustrative towing / recovery posts along the Delhi–Dehradun Expressway. Static roster — no live GPS tracking."
+  },
+  "towingStations": [
+    {
+      "id": "tow-stn-001",
+      "sample": true,
+      "name": "Recovery Post — Delhi EPE Junction",
+      "lat": 28.618,
+      "lng": 77.336,
+      "district": "East Delhi",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed"],
+      "operatingHours": "24x7",
+      "notes": "Covers Eastern Peripheral Expressway northern entry"
+    },
+    {
+      "id": "tow-stn-002",
+      "sample": true,
+      "name": "Recovery Post — Loni",
+      "lat": 28.686,
+      "lng": 77.312,
+      "district": "East Delhi",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed"],
+      "operatingHours": "24x7",
+      "notes": "Covers Loni / Delhi–UP border stretch"
+    },
+    {
+      "id": "tow-stn-003",
+      "sample": true,
+      "name": "Recovery Post — Baghpat",
+      "lat": 28.930,
+      "lng": 77.205,
+      "district": "Baghpat",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed"],
+      "operatingHours": "24x7",
+      "notes": "Covers Baghpat expressway interchange"
+    },
+    {
+      "id": "tow-stn-004",
+      "sample": true,
+      "name": "Recovery Post — Baraut",
+      "lat": 29.112,
+      "lng": 77.265,
+      "district": "Baghpat",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed"],
+      "operatingHours": "24x7",
+      "notes": "Covers Baraut stretch and surrounding villages"
+    },
+    {
+      "id": "tow-stn-005",
+      "sample": true,
+      "name": "Recovery Post — Khatauli / Muzaffarnagar",
+      "lat": 29.348,
+      "lng": 77.288,
+      "district": "Muzaffarnagar",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed", "Crane"],
+      "operatingHours": "24x7",
+      "notes": "Covers Muzaffarnagar western bypass and Khatauli approach"
+    },
+    {
+      "id": "tow-stn-006",
+      "sample": true,
+      "name": "Recovery Post — Shamli",
+      "lat": 29.438,
+      "lng": 77.322,
+      "district": "Shamli",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed", "Crane"],
+      "operatingHours": "24x7",
+      "notes": "Covers Shamli bypass and state highway junction — heavy-vehicle crane on site"
+    },
+    {
+      "id": "tow-stn-007",
+      "sample": true,
+      "name": "Recovery Post — Deoband / Nakur",
+      "lat": 29.638,
+      "lng": 77.418,
+      "district": "Saharanpur",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed"],
+      "operatingHours": "24x7",
+      "notes": "Covers Deoband and Nakur approach roads"
+    },
+    {
+      "id": "tow-stn-008",
+      "sample": true,
+      "name": "Recovery Post — Saharanpur",
+      "lat": 29.953,
+      "lng": 77.533,
+      "district": "Saharanpur",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed", "Crane"],
+      "operatingHours": "24x7",
+      "notes": "Primary recovery dispatch for Saharanpur district"
+    },
+    {
+      "id": "tow-stn-009",
+      "sample": true,
+      "name": "Recovery Post — Gangoh / Behat",
+      "lat": 30.052,
+      "lng": 77.688,
+      "district": "Saharanpur",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed"],
+      "operatingHours": "24x7",
+      "notes": "Covers Gangoh and Behat stretch toward the Shivalik foothills"
+    },
+    {
+      "id": "tow-stn-010",
+      "sample": true,
+      "name": "Recovery Post — Ganeshpur / Roorkee",
+      "lat": 30.138,
+      "lng": 77.882,
+      "district": "Haridwar",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed"],
+      "operatingHours": "24x7",
+      "notes": "Covers Ganeshpur and Roorkee approach"
+    },
+    {
+      "id": "tow-stn-011",
+      "sample": true,
+      "name": "Recovery Post — Mohand Ghat",
+      "lat": 30.222,
+      "lng": 77.966,
+      "district": "Dehradun",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed", "Crane"],
+      "operatingHours": "24x7",
+      "notes": "Covers the Mohand Ghat hill-approach section — heavy recovery crane on site"
+    },
+    {
+      "id": "tow-stn-012",
+      "sample": true,
+      "name": "Recovery Post — Haridwar",
+      "lat": 29.932,
+      "lng": 78.178,
+      "district": "Haridwar",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed", "Crane"],
+      "operatingHours": "24x7",
+      "notes": "Covers Haridwar city and Rishikesh approach"
+    },
+    {
+      "id": "tow-stn-013",
+      "sample": true,
+      "name": "Recovery Post — Rishikesh Approach",
+      "lat": 30.068,
+      "lng": 78.208,
+      "district": "Dehradun",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed"],
+      "operatingHours": "24x7",
+      "notes": "Covers the Haridwar–Rishikesh–Dehradun link road"
+    },
+    {
+      "id": "tow-stn-014",
+      "sample": true,
+      "name": "Recovery Post — Dehradun Valley Entry",
+      "lat": 30.268,
+      "lng": 77.998,
+      "district": "Dehradun",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed"],
+      "operatingHours": "24x7",
+      "notes": "Covers the expressway's Dehradun valley entry point"
+    },
+    {
+      "id": "tow-stn-015",
+      "sample": true,
+      "name": "Recovery Post — Dehradun",
+      "lat": 30.328,
+      "lng": 78.020,
+      "district": "Dehradun",
+      "contactNumber": "1033",
+      "vehicleTypes": ["Flatbed", "Crane"],
+      "operatingHours": "24x7",
+      "notes": "Primary recovery dispatch for Dehradun district"
+    }
+  ]
+}

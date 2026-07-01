@@ -22,7 +22,7 @@ interface EventLogState {
     incidentId: string,
     entityId: string,
     entityName: string,
-    entityType: "HOSPITAL" | "POLICE",
+    entityType: "HOSPITAL" | "POLICE" | "FIRE" | "TOWING" | "AMBULANCE",
     roadDistanceKm: number,
     roadDurationMin: number
   ) => void;

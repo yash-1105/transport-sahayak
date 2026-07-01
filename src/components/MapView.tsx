@@ -24,10 +24,14 @@ import type { GooglePlace } from "@/lib/types";
 
 // Synthetic-only layers still loaded from seed files
 import ambulanceData from "../../data/ambulance-stations.json";
+import fireStationData from "../../data/fire-stations.json";
+import towingStationData from "../../data/towing-stations.json";
 import blackspotsData from "../../data/blackspots.json";
 
 import type {
   AmbulanceStation,
+  FireStation,
+  TowingStation,
   AccidentReport,
   Blackspot,
   DbPothole,
@@ -55,6 +59,8 @@ const SERVICE_LAYERS: {
 }[] = [
   { key: "HOSPITAL",          labelKey: "layerHospitals", color: "#2563eb", strokeColor: "#1d4ed8", source: "google" },
   { key: "AMBULANCE_STATION", labelKey: "layerAmbulance", color: "#16a34a", strokeColor: "#15803d", source: "synthetic" },
+  { key: "FIRE_STATION",      labelKey: "layerFire",      color: "#dc2626", strokeColor: "#b91c1c", source: "synthetic" },
+  { key: "TOWING_STATION",    labelKey: "layerTowing",    color: "#57534e", strokeColor: "#3f3c3a", source: "synthetic" },
   { key: "MECHANIC",          labelKey: "layerMechanics", color: "#6b7280", strokeColor: "#4b5563", source: "google" },
   { key: "POLICE",            labelKey: "layerPolice",    color: "#1e3a8a", strokeColor: "#1e3069", source: "google" },
   { key: "PHARMACY",          labelKey: "layerPharmacy",  color: "#7c3aed", strokeColor: "#6d28d9", source: "google" },
@@ -92,6 +98,24 @@ function AmbulanceIcon() {
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
       <circle cx="7" cy="7" r="4.5" stroke="white" strokeWidth="1.5" fill="none"/>
       <path d="M7 3.8v6.4M3.8 7h6.4" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+    </svg>
+  );
+}
+function FireIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M7 1.5c0 2-2 3-2 5a2.5 2.5 0 005 0c0-1.5-1-2.5-1-4 0 0-1 1.5-2 1.5z" fill="white"/>
+      <circle cx="7" cy="11.5" r="1.4" fill="white"/>
+    </svg>
+  );
+}
+function TowingIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M2.5 9.5V4a1 1 0 011-1h4a1 1 0 011 1v5.5" stroke="white" strokeWidth="1.4" strokeLinejoin="round"/>
+      <path d="M8.5 6.5h2l1.5 2v1h-3.5z" fill="rgba(255,255,255,0.2)" stroke="white" strokeWidth="1.3" strokeLinejoin="round"/>
+      <circle cx="4.5" cy="10.5" r="1.2" stroke="white" strokeWidth="1.2" fill="none"/>
+      <circle cx="10" cy="10.5" r="1.2" stroke="white" strokeWidth="1.2" fill="none"/>
     </svg>
   );
 }
@@ -237,6 +261,8 @@ type MarkerShape = "square" | "circle" | "triangle" | "diamond";
 const LAYER_MARKER: Record<string, { shape: MarkerShape; Icon: () => React.JSX.Element }> = {
   HOSPITAL:          { shape: "square",   Icon: HospitalIcon },
   AMBULANCE_STATION: { shape: "circle",   Icon: AmbulanceIcon },
+  FIRE_STATION:      { shape: "circle",   Icon: FireIcon },
+  TOWING_STATION:    { shape: "circle",   Icon: TowingIcon },
   MECHANIC:          { shape: "square",   Icon: MechanicIcon },
   POLICE:            { shape: "square",   Icon: PoliceIcon },
   PHARMACY:          { shape: "square",   Icon: PharmacyIcon },
@@ -378,6 +404,42 @@ function AmbulancePopup({ a }: { a: AmbulanceStation }) {
   );
 }
 
+function FireStationPopup({ f }: { f: FireStation }) {
+  return (
+    <div className="text-xs leading-relaxed min-w-[200px]">
+      <p className="font-semibold text-sm text-gray-900">{f.name}</p>
+      <p className="text-gray-500 mb-1">{f.district}</p>
+      <table className="w-full text-gray-700">
+        <tbody>
+          <tr><td className="pr-2 text-gray-500">Vehicles</td><td>{f.vehicleTypes.join(", ")}</td></tr>
+          <tr><td className="pr-2 text-gray-500">Hours</td><td>{f.operatingHours}</td></tr>
+          <tr><td className="pr-2 text-gray-500">Contact</td><td className="font-medium text-red-800">{f.contactNumber}</td></tr>
+          <tr><td className="pr-2 text-gray-500">Notes</td><td>{f.notes}</td></tr>
+        </tbody>
+      </table>
+      <p className="text-amber-700 text-[10px] mt-2">⚠ Sample data</p>
+    </div>
+  );
+}
+
+function TowingStationPopup({ w }: { w: TowingStation }) {
+  return (
+    <div className="text-xs leading-relaxed min-w-[200px]">
+      <p className="font-semibold text-sm text-gray-900">{w.name}</p>
+      <p className="text-gray-500 mb-1">{w.district}</p>
+      <table className="w-full text-gray-700">
+        <tbody>
+          <tr><td className="pr-2 text-gray-500">Vehicles</td><td>{w.vehicleTypes.join(", ")}</td></tr>
+          <tr><td className="pr-2 text-gray-500">Hours</td><td>{w.operatingHours}</td></tr>
+          <tr><td className="pr-2 text-gray-500">Contact</td><td className="font-medium text-gray-800">{w.contactNumber}</td></tr>
+          <tr><td className="pr-2 text-gray-500">Notes</td><td>{w.notes}</td></tr>
+        </tbody>
+      </table>
+      <p className="text-amber-700 text-[10px] mt-2">⚠ Sample data</p>
+    </div>
+  );
+}
+
 function BlackspotPopup({ b }: { b: Blackspot }) {
   return (
     <div className="text-xs leading-relaxed min-w-[220px]">
@@ -494,6 +556,8 @@ export default function MapView() {
 
   // ── Synthetic seed data (labelled as sample) ──────────────────────────────
   const ambulances    = useMemo(() => ambulanceData.ambulanceStations as AmbulanceStation[], []);
+  const fireStations  = useMemo(() => fireStationData.fireStations as FireStation[], []);
+  const towingStations = useMemo(() => towingStationData.towingStations as TowingStation[], []);
   const blackspots    = useMemo(() => blackspotsData.blackspots as Blackspot[], []);
   const { potholes, loading: potholesLoading, error: potholesError, refetch: refetchPotholes } = usePotholes();
   const { accidents: reportedAccidents, refetch: refetchAccidents } = useAccidents();
@@ -592,6 +656,32 @@ export default function MapView() {
                     onClick={() => setOpenInfo({ position: { lat: a.lat, lng: a.lng }, content: <AmbulancePopup a={a} /> })}
                   >
                     <LayerMarker layerKey="AMBULANCE_STATION" color={LAYER_COLOR.AMBULANCE_STATION.color} strokeColor={LAYER_COLOR.AMBULANCE_STATION.strokeColor} />
+                  </AdvancedMarker>
+                ))}
+
+              {/* Fire stations — synthetic */}
+              {activeServices.has("FIRE_STATION") &&
+                fireStations.map((f) => (
+                  <AdvancedMarker
+                    key={f.id}
+                    position={{ lat: f.lat, lng: f.lng }}
+                    title={f.name}
+                    onClick={() => setOpenInfo({ position: { lat: f.lat, lng: f.lng }, content: <FireStationPopup f={f} /> })}
+                  >
+                    <LayerMarker layerKey="FIRE_STATION" color={LAYER_COLOR.FIRE_STATION.color} strokeColor={LAYER_COLOR.FIRE_STATION.strokeColor} />
+                  </AdvancedMarker>
+                ))}
+
+              {/* Towing / recovery — synthetic */}
+              {activeServices.has("TOWING_STATION") &&
+                towingStations.map((w) => (
+                  <AdvancedMarker
+                    key={w.id}
+                    position={{ lat: w.lat, lng: w.lng }}
+                    title={w.name}
+                    onClick={() => setOpenInfo({ position: { lat: w.lat, lng: w.lng }, content: <TowingStationPopup w={w} /> })}
+                  >
+                    <LayerMarker layerKey="TOWING_STATION" color={LAYER_COLOR.TOWING_STATION.color} strokeColor={LAYER_COLOR.TOWING_STATION.strokeColor} />
                   </AdvancedMarker>
                 ))}
 

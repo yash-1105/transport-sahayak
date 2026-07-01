@@ -5,12 +5,28 @@ import type {
   Hospital,
   HospitalCandidate,
   PoliceStation,
+  FireStation,
+  TowingStation,
+  AmbulanceStation,
   AccidentReport,
   AssessmentResult,
   AssessmentSeverity,
   RankedHospital,
   NearestPolice,
+  NearestFireStation,
+  NearestTowingStation,
+  NearestAmbulanceStation,
 } from "./types";
+
+// ── Ambulance ETA constants ───────────────────────────────────────────────────
+// Used only as a fallback when Google Routes is unavailable — never presented
+// as a live or tracked ETA (see project hard rule: no fake real-time data).
+export const AVG_AMBULANCE_SPEED_KMPH = 40;
+export const AMBULANCE_ETA_BUFFER_MIN = 3;
+
+export function haversineEtaMinutes(distanceKm: number): number {
+  return (distanceKm / AVG_AMBULANCE_SPEED_KMPH) * 60 + AMBULANCE_ETA_BUFFER_MIN;
+}
 
 // ── Distance ──────────────────────────────────────────────────────────────────
 
@@ -208,6 +224,60 @@ export function findNearestPolice(
       station: s,
       distKm: haversineKm(incident.location, { lat: s.lat, lng: s.lng }),
     }))
+    .sort((a, b) => a.distKm - b.distKm);
+
+  const nearest = withDist[0];
+  return {
+    station: nearest.station,
+    straightLineKm: nearest.distKm,
+    roadDistanceKm: null,
+    roadDurationMin: null,
+    routeCoords: null,
+  };
+}
+
+export function findNearestFireStation(
+  stations: FireStation[],
+  incident: AccidentReport
+): NearestFireStation {
+  const withDist = stations
+    .map((s) => ({ station: s, distKm: haversineKm(incident.location, { lat: s.lat, lng: s.lng }) }))
+    .sort((a, b) => a.distKm - b.distKm);
+
+  const nearest = withDist[0];
+  return {
+    station: nearest.station,
+    straightLineKm: nearest.distKm,
+    roadDistanceKm: null,
+    roadDurationMin: null,
+    routeCoords: null,
+  };
+}
+
+export function findNearestTowingStation(
+  stations: TowingStation[],
+  incident: AccidentReport
+): NearestTowingStation {
+  const withDist = stations
+    .map((s) => ({ station: s, distKm: haversineKm(incident.location, { lat: s.lat, lng: s.lng }) }))
+    .sort((a, b) => a.distKm - b.distKm);
+
+  const nearest = withDist[0];
+  return {
+    station: nearest.station,
+    straightLineKm: nearest.distKm,
+    roadDistanceKm: null,
+    roadDurationMin: null,
+    routeCoords: null,
+  };
+}
+
+export function findNearestAmbulanceStation(
+  stations: AmbulanceStation[],
+  incident: AccidentReport
+): NearestAmbulanceStation {
+  const withDist = stations
+    .map((s) => ({ station: s, distKm: haversineKm(incident.location, { lat: s.lat, lng: s.lng }) }))
     .sort((a, b) => a.distKm - b.distKm);
 
   const nearest = withDist[0];

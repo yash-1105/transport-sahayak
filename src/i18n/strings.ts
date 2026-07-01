@@ -37,6 +37,8 @@ export const strings = {
   // ── Layer filter chips ───────────────────────────────────────────────────────
   layerHospitals:   { EN: "Hospitals",           HI: "अस्पताल",              AS: "চিকিৎসালয়" },
   layerAmbulance:   { EN: "Ambulance Stations",  HI: "एम्बुलेंस केंद्र",    AS: "এম্বুলেন্স কেন্দ্ৰ" },
+  layerFire:        { EN: "Fire Stations",       HI: "अग्निशमन केंद्र",     AS: "অগ্নিনিৰ্বাপক কেন্দ্ৰ" },
+  layerTowing:      { EN: "Towing / Recovery",   HI: "टोइंग / रिकवरी",      AS: "টোৱিং / ৰিকভাৰী" },
   layerMechanics:   { EN: "Mechanics",           HI: "मैकेनिक",              AS: "মেকানিক" },
   layerPolice:      { EN: "Police Stations",     HI: "पुलिस थाने",           AS: "আৰক্ষী থানা" },
   layerPharmacy:    { EN: "Pharmacies",          HI: "फ़ार्मेसी",             AS: "ঔষধালয়" },
@@ -128,6 +130,24 @@ export const strings = {
                       AS: "ট্ৰাফিক-সচেতন ড্ৰাইভ সময় গণনা কৰা হৈছে (Routes API)…" },
   matchIncidentAt:  { EN: "Incident location",  HI: "घटना स्थान",    AS: "ঘটনাৰ স্থান" },
   matchNearestPS:   { EN: "Nearest PS",         HI: "निकटतम थाना",   AS: "নিকটতম থানা" },
+  matchNearestFire: { EN: "Nearest Fire Station", HI: "निकटतम अग्निशमन केंद्र", AS: "নিকটতম অগ্নিনিৰ্বাপক কেন্দ্ৰ" },
+  matchNearestTowing: { EN: "Nearest Recovery Post", HI: "निकटतम रिकवरी केंद्र", AS: "নিকটতম ৰিকভাৰী পোষ্ট" },
+  matchAmbulanceEta:  { EN: "Estimated Ambulance Arrival", HI: "अनुमानित एम्बुलेंस आगमन", AS: "আনুমানিক এম্বুলেন্স আগমন" },
+  ambulanceEtaCalculated: {
+    EN: "Calculated estimate — not live tracking. We do not track ambulances.",
+    HI: "गणना किया गया अनुमान — लाइव ट्रैकिंग नहीं। हम एम्बुलेंस ट्रैक नहीं करते।",
+    AS: "গণনা কৰা আনুমানিক — লাইভ ট্ৰেকিং নহয়। আমি এম্বুলেন্স ট্ৰেক নকৰো।",
+  },
+  ambulanceEtaRoadBased: {
+    EN: "based on current road distance",
+    HI: "वर्तमान सड़क दूरी पर आधारित",
+    AS: "বৰ্তমান পথৰ দূৰত্বৰ ওপৰত ভিত্তি কৰি",
+  },
+  ambulanceEtaStraightLine: {
+    EN: "straight-line estimate",
+    HI: "सीधी-रेखा अनुमान",
+    AS: "পোন-শাৰীৰ আনুমানিক",
+  },
 
   // ── Dispatch ─────────────────────────────────────────────────────────────────
   dispatchTitle:    { EN: "Dispatch Alert",          HI: "डिस्पैच अलर्ट",               AS: "প্ৰেৰণ সতৰ্কতা" },

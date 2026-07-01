@@ -10,6 +10,9 @@ import { useRoutingStore } from "@/store/routingStore";
 import { useLocaleStore } from "@/store/localeStore";
 import hospitalsRaw from "../../../data/hospitals.json";
 import policeRaw from "../../../data/police-stations.json";
+import ambulanceRaw from "../../../data/ambulance-stations.json";
+import fireStationsRaw from "../../../data/fire-stations.json";
+import towingStationsRaw from "../../../data/towing-stations.json";
 import type {
   AccidentReport,
   AssessmentResult,
@@ -17,11 +20,17 @@ import type {
   GeoPoint,
   Hospital,
   PoliceStation,
+  AmbulanceStation,
+  FireStation,
+  TowingStation,
   UserReportedPothole,
 } from "@/lib/types";
 
 const HOSPITALS = hospitalsRaw.hospitals as unknown as Hospital[];
 const POLICE_STATIONS = policeRaw.policeStations as unknown as PoliceStation[];
+const AMBULANCE_STATIONS = ambulanceRaw.ambulanceStations as unknown as AmbulanceStation[];
+const FIRE_STATIONS = fireStationsRaw.fireStations as unknown as FireStation[];
+const TOWING_STATIONS = towingStationsRaw.towingStations as unknown as TowingStation[];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1589,6 +1598,9 @@ export default function ReportPanel({
               <MatchingPanel
                 hospitals={HOSPITALS}
                 policeStations={POLICE_STATIONS}
+                ambulanceStations={AMBULANCE_STATIONS}
+                fireStations={FIRE_STATIONS}
+                towingStations={TOWING_STATIONS}
                 incident={createdIncident}
                 assessment={assessmentResult}
                 onReady={() => setPanelStatus("COMPLETE")}

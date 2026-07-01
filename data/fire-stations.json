@@ -1,0 +1,188 @@
+{
+  "_meta": {
+    "label": "Sample data — replace with official dataset.",
+    "source": "Illustrative fire & rescue posts along the Delhi–Dehradun Expressway. Static roster — no live GPS tracking."
+  },
+  "fireStations": [
+    {
+      "id": "fire-stn-001",
+      "sample": true,
+      "name": "Fire Post — Delhi EPE Junction",
+      "lat": 28.645,
+      "lng": 77.320,
+      "district": "East Delhi",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender", "Foam Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Eastern Peripheral Expressway northern entry"
+    },
+    {
+      "id": "fire-stn-002",
+      "sample": true,
+      "name": "Fire Post — Loni",
+      "lat": 28.710,
+      "lng": 77.298,
+      "district": "East Delhi",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Loni / Delhi–UP border stretch"
+    },
+    {
+      "id": "fire-stn-003",
+      "sample": true,
+      "name": "Fire Post — Baghpat",
+      "lat": 28.958,
+      "lng": 77.232,
+      "district": "Baghpat",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Baghpat expressway interchange"
+    },
+    {
+      "id": "fire-stn-004",
+      "sample": true,
+      "name": "Fire Post — Baraut",
+      "lat": 29.110,
+      "lng": 77.262,
+      "district": "Baghpat",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Baraut stretch and surrounding villages"
+    },
+    {
+      "id": "fire-stn-005",
+      "sample": true,
+      "name": "Fire Post — Muzaffarnagar Bypass",
+      "lat": 29.340,
+      "lng": 77.310,
+      "district": "Muzaffarnagar",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender", "Foam Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Khatauli and Muzaffarnagar western bypass — fuel-tanker traffic route"
+    },
+    {
+      "id": "fire-stn-006",
+      "sample": true,
+      "name": "Fire Post — Shamli",
+      "lat": 29.463,
+      "lng": 77.298,
+      "district": "Shamli",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Shamli bypass and state highway junction"
+    },
+    {
+      "id": "fire-stn-007",
+      "sample": true,
+      "name": "Fire Post — Deoband / Nakur",
+      "lat": 29.660,
+      "lng": 77.442,
+      "district": "Saharanpur",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Deoband and Nakur approach roads"
+    },
+    {
+      "id": "fire-stn-008",
+      "sample": true,
+      "name": "Fire Post — Saharanpur",
+      "lat": 29.980,
+      "lng": 77.560,
+      "district": "Saharanpur",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender", "Foam Tender", "Rescue Tender"],
+      "operatingHours": "24x7",
+      "notes": "Primary fire response for Saharanpur district"
+    },
+    {
+      "id": "fire-stn-009",
+      "sample": true,
+      "name": "Fire Post — Gangoh / Behat",
+      "lat": 30.078,
+      "lng": 77.712,
+      "district": "Saharanpur",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Gangoh and Behat stretch toward the Shivalik foothills"
+    },
+    {
+      "id": "fire-stn-010",
+      "sample": true,
+      "name": "Fire Post — Ganeshpur / Roorkee",
+      "lat": 30.163,
+      "lng": 77.858,
+      "district": "Haridwar",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Ganeshpur and Roorkee approach"
+    },
+    {
+      "id": "fire-stn-011",
+      "sample": true,
+      "name": "Fire Post — Mohand Ghat",
+      "lat": 30.248,
+      "lng": 77.990,
+      "district": "Dehradun",
+      "contactNumber": "101",
+      "vehicleTypes": ["Rescue Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers the Mohand Ghat hill-approach section"
+    },
+    {
+      "id": "fire-stn-012",
+      "sample": true,
+      "name": "Fire Post — Haridwar",
+      "lat": 29.958,
+      "lng": 78.150,
+      "district": "Haridwar",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender", "Foam Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers Haridwar city and Rishikesh approach"
+    },
+    {
+      "id": "fire-stn-013",
+      "sample": true,
+      "name": "Fire Post — Rishikesh Approach",
+      "lat": 30.092,
+      "lng": 78.232,
+      "district": "Dehradun",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers the Haridwar–Rishikesh–Dehradun link road"
+    },
+    {
+      "id": "fire-stn-014",
+      "sample": true,
+      "name": "Fire Post — Dehradun Valley Entry",
+      "lat": 30.292,
+      "lng": 78.022,
+      "district": "Dehradun",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender"],
+      "operatingHours": "24x7",
+      "notes": "Covers the expressway's Dehradun valley entry point"
+    },
+    {
+      "id": "fire-stn-015",
+      "sample": true,
+      "name": "Fire Post — Dehradun",
+      "lat": 30.305,
+      "lng": 78.045,
+      "district": "Dehradun",
+      "contactNumber": "101",
+      "vehicleTypes": ["Water Tender", "Foam Tender", "Rescue Tender"],
+      "operatingHours": "24x7",
+      "notes": "Primary fire response for Dehradun district"
+    }
+  ]
+}
