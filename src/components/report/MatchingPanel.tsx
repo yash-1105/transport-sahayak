@@ -261,6 +261,13 @@ function TowingCard({ ts }: { ts: NearestTowingStation }) {
   );
 }
 
+function fmtClock(min: number): string {
+  const totalSec = Math.max(0, Math.round(min * 60));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 function AmbulanceEtaCard({
   station,
   distanceKm,
@@ -273,15 +280,54 @@ function AmbulanceEtaCard({
   source: "road" | "straight_line";
 }) {
   const t = useT();
+
+  // Countdown is a client-side clock ticking down from the calculated estimate
+  // captured when this card first mounted — NOT a live position feed. We have
+  // no ambulance GPS, so this never claims to track the vehicle; see the
+  // "not live tracking" disclaimer below and the project hard rule on fake
+  // real-time data.
+  const [startedAt] = useState<number>(() => Date.now());
+  const [now, setNow] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const elapsedMin = (now - startedAt) / 60000;
+  const remainingMin = Math.max(0, etaMinutes - elapsedMin);
+  const overdue = elapsedMin >= etaMinutes;
+  const progressPct = etaMinutes > 0 ? Math.min(100, (elapsedMin / etaMinutes) * 100) : 100;
+  const barColor = overdue ? "#dc2626" : progressPct > 75 ? "#d97706" : "#16a34a";
+
   return (
-    <div className="rounded-xl border border-green-200 bg-green-50/40 p-3 flex flex-col gap-1.5">
+    <div className="rounded-xl border border-green-200 bg-green-50/40 p-3 flex flex-col gap-2">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="min-w-0">
           <p className="text-[10px] font-black tracking-widest text-green-800 uppercase">{t("matchAmbulanceEta")}</p>
           <p className="text-sm font-bold text-gray-900 mt-0.5">{station.name}</p>
           <p className="text-[11px] text-gray-400">{station.district} · {station.ambulanceCount} ambulances ({station.types.join(", ")})</p>
         </div>
+        <div className="text-right flex-shrink-0">
+          <p className="text-2xl font-black tabular-nums leading-none" style={{ color: barColor }}>
+            {overdue ? "0:00" : fmtClock(remainingMin)}
+          </p>
+          <p className="text-[9px] text-gray-400 uppercase tracking-wide mt-0.5">
+            {overdue ? "window elapsed" : "min : sec remaining"}
+          </p>
+        </div>
       </div>
+
+      {/* Countdown bar — fills as the calculated estimate window elapses.
+          It times a static estimate; it does not track the ambulance's
+          real-world position. */}
+      <div className="h-2.5 w-full rounded-full bg-gray-200 overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all duration-1000 ease-linear"
+          style={{ width: `${progressPct}%`, background: barColor }}
+        />
+      </div>
+
       <p className="text-sm text-gray-800">
         Estimated arrival <span className="font-semibold text-green-800">~{Math.round(etaMinutes)} min</span> from {station.name}
         <span className="text-gray-500"> · {distanceKm.toFixed(1)} km</span>
@@ -289,6 +335,11 @@ function AmbulanceEtaCard({
       <p className="text-[11px] text-gray-500">
         {source === "road" ? t("ambulanceEtaRoadBased") : `${t("ambulanceEtaStraightLine")} (${AVG_AMBULANCE_SPEED_KMPH} km/h)`}
       </p>
+      {overdue && (
+        <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          Estimated window elapsed — this does not confirm arrival or delay; we have no live position feed for this vehicle.
+        </p>
+      )}
       <p className="text-[10px] text-green-700 font-medium">{t("ambulanceEtaCalculated")}</p>
     </div>
   );
@@ -847,6 +898,21 @@ export default function MatchingPanel({
         </div>
       )}
 
+      {/* Ambulance ETA — honest, calculated estimate; always shown, same as Police (not gated
+          on assessment.agencies — that list can be empty, e.g. the offline heuristic-fallback
+          stub in ReportPanel.tsx, even though an ambulance response is still relevant).
+          Shown first, above hospital/police results, since it's the most time-critical card. */}
+      {phase === "done" && ambulanceEta && (
+        <div>
+          <AmbulanceEtaCard
+            station={nearestAmbulance.station}
+            distanceKm={ambulanceEta.distanceKm}
+            etaMinutes={ambulanceEta.etaMinutes}
+            source={ambulanceEta.source}
+          />
+        </div>
+      )}
+
       {/* Hospital results */}
       {ranked.length > 0 && (
         <div>
@@ -892,20 +958,6 @@ export default function MatchingPanel({
             Nearest Police Station
           </p>
           <PoliceCard ps={nearestPSWithRoute} />
-        </div>
-      )}
-
-      {/* Ambulance ETA — honest, calculated estimate; always shown, same as Police (not gated
-          on assessment.agencies — that list can be empty, e.g. the offline heuristic-fallback
-          stub in ReportPanel.tsx, even though an ambulance response is still relevant). */}
-      {phase === "done" && ambulanceEta && (
-        <div>
-          <AmbulanceEtaCard
-            station={nearestAmbulance.station}
-            distanceKm={ambulanceEta.distanceKm}
-            etaMinutes={ambulanceEta.etaMinutes}
-            source={ambulanceEta.source}
-          />
         </div>
       )}
 
