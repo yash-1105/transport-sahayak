@@ -18,14 +18,16 @@ import type {
   NearestAmbulanceStation,
 } from "./types";
 
-// ── Ambulance ETA constants ───────────────────────────────────────────────────
+// ── Emergency vehicle ETA constants ───────────────────────────────────────────
 // Used only as a fallback when Google Routes is unavailable — never presented
 // as a live or tracked ETA (see project hard rule: no fake real-time data).
 export const AVG_AMBULANCE_SPEED_KMPH = 40;
-export const AMBULANCE_ETA_BUFFER_MIN = 3;
+export const AVG_FIRE_TRUCK_SPEED_KMPH = 40;
+export const AVG_TOWING_SPEED_KMPH = 50; // no lights/siren priority, but no patient-care stops either
+export const EMERGENCY_ETA_BUFFER_MIN = 3; // fixed prep/dispatch buffer, same for all vehicle types
 
-export function haversineEtaMinutes(distanceKm: number): number {
-  return (distanceKm / AVG_AMBULANCE_SPEED_KMPH) * 60 + AMBULANCE_ETA_BUFFER_MIN;
+export function haversineEtaMinutes(distanceKm: number, speedKmph: number = AVG_AMBULANCE_SPEED_KMPH): number {
+  return (distanceKm / speedKmph) * 60 + EMERGENCY_ETA_BUFFER_MIN;
 }
 
 // ── Distance ──────────────────────────────────────────────────────────────────

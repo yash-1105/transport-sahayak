@@ -8,7 +8,7 @@ import {
   InfoWindow,
   Polyline,
 } from "@vis.gl/react-google-maps";
-import { useRoutingStore } from "@/store/routingStore";
+import { useRoutingStore, type SimulatedVehicleKind } from "@/store/routingStore";
 import { useEventLog } from "@/store/eventLog";
 import TimelinePanel from "@/components/TimelinePanel";
 import LanguageToggle from "@/components/LanguageToggle";
@@ -372,16 +372,23 @@ function interpolateAlongPath(coords: [number, number][], fraction: number): { l
   return { lat: a[0] + (b[0] - a[0]) * t, lng: a[1] + (b[1] - a[1]) * t };
 }
 
-function SimulatedAmbulanceMarker() {
+const SIM_VEHICLE_STYLE: Record<SimulatedVehicleKind, { color: string; stroke: string; Icon: () => React.JSX.Element; label: string }> = {
+  AMBULANCE: { color: "#16a34a", stroke: "#15803d", Icon: AmbulanceIcon, label: "Simulated ambulance" },
+  FIRE:      { color: "#dc2626", stroke: "#b91c1c", Icon: FireIcon,      label: "Simulated fire truck" },
+  TOWING:    { color: "#57534e", stroke: "#3f3c3a", Icon: TowingIcon,    label: "Simulated tow truck" },
+};
+
+function SimulatedVehicleMarker({ kind }: { kind: SimulatedVehicleKind }) {
+  const s = SIM_VEHICLE_STYLE[kind];
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer" }}>
       <div style={{
         width: 30, height: 30, borderRadius: "50%",
-        background: "#16a34a", border: "2px solid #15803d",
+        background: s.color, border: `2px solid ${s.stroke}`,
         display: "flex", alignItems: "center", justifyContent: "center",
         boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
       }}>
-        <AmbulanceIcon />
+        <s.Icon />
       </div>
       <span style={{
         marginTop: 2, background: "#111827", color: "white", fontSize: 9, fontWeight: 700,
@@ -570,13 +577,13 @@ export default function MapView() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const mapRoutes = useRoutingStore((s) => s.routes);
-  const simulatedAmbulance = useRoutingStore((s) => s.simulatedAmbulance);
+  const simulatedVehicles = useRoutingStore((s) => s.simulatedVehicles);
   const [simTick, setSimTick] = useState(() => Date.now());
   useEffect(() => {
-    if (!simulatedAmbulance) return;
+    if (simulatedVehicles.length === 0) return;
     const id = setInterval(() => setSimTick(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [simulatedAmbulance]);
+  }, [simulatedVehicles.length]);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [recordIncidentId, setRecordIncidentId] = useState<string | null>(null);
   const entries = useEventLog((s) => s.entries);
@@ -818,37 +825,41 @@ export default function MapView() {
             );
           })}
 
-          {/* ── Simulated ambulance marker — cosmetic demo animation along the
-              highlighted route; not a real position feed (see CLAUDE.md). ── */}
-          {simulatedAmbulance && (() => {
-            const startedAtMs = new Date(simulatedAmbulance.startedAt).getTime();
+          {/* ── Simulated vehicle markers — cosmetic demo animation along each
+              highlighted route; not a real position feed (see CLAUDE.md).
+              One per emergency service the engine actually recommended for
+              this incident (ambulance / fire / towing), each on its own clock. ── */}
+          {simulatedVehicles.map((v) => {
+            const startedAtMs = new Date(v.startedAt).getTime();
             const elapsedMin = (simTick - startedAtMs) / 60000;
-            const fraction = simulatedAmbulance.durationMin > 0 ? elapsedMin / simulatedAmbulance.durationMin : 1;
-            const pos = interpolateAlongPath(simulatedAmbulance.coords, fraction);
+            const fraction = v.durationMin > 0 ? elapsedMin / v.durationMin : 1;
+            const pos = interpolateAlongPath(v.coords, fraction);
+            const label = SIM_VEHICLE_STYLE[v.kind].label;
             return (
               <AdvancedMarker
+                key={v.id}
                 position={pos}
-                title="Simulated ambulance — demonstration only, not live tracking"
+                title={`${label} — demonstration only, not live tracking`}
                 zIndex={999}
                 onClick={() =>
                   setOpenInfo({
                     position: pos,
                     content: (
                       <div className="text-xs max-w-[220px]">
-                        <p className="font-semibold text-gray-900">Simulated ambulance</p>
+                        <p className="font-semibold text-gray-900">{label}</p>
                         <p className="text-gray-500 mt-0.5 leading-relaxed">
                           Demonstration animation along the calculated route — not a live GPS
-                          position. We do not track ambulances.
+                          position. We do not track vehicles.
                         </p>
                       </div>
                     ),
                   })
                 }
               >
-                <SimulatedAmbulanceMarker />
+                <SimulatedVehicleMarker kind={v.kind} />
               </AdvancedMarker>
             );
-          })()}
+          })}
 
           {/* ── InfoWindow ────────────────────────────────────────────────── */}
           {openInfo && (

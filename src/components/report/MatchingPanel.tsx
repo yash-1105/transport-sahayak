@@ -17,6 +17,7 @@ import type {
   NearestTowingStation,
   NearestAmbulanceStation,
   RouteEstimatedPayload,
+  EventLogEntry,
   GooglePlace,
 } from "@/lib/types";
 import {
@@ -33,11 +34,12 @@ import {
   findNearestAmbulanceStation,
   haversineEtaMinutes,
   AVG_AMBULANCE_SPEED_KMPH,
+  AVG_FIRE_TRUCK_SPEED_KMPH,
+  AVG_TOWING_SPEED_KMPH,
 } from "@/lib/matching";
 import { generateHospitalAlert, generatePoliceAlert } from "@/lib/dispatch";
-import { useRoutingStore } from "@/store/routingStore";
+import { useRoutingStore, type SimulatedVehicleKind } from "@/store/routingStore";
 import { useEventLog } from "@/store/eventLog";
-import { useT } from "@/hooks/useI18n";
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -212,56 +214,6 @@ function PoliceCard({ ps }: { ps: NearestPolice }) {
   );
 }
 
-function FireCard({ fs }: { fs: NearestFireStation }) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-1.5">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-bold text-gray-900">{fs.station.name}</p>
-          <p className="text-[11px] text-gray-400">{fs.station.district} · {fs.station.vehicleTypes.join(", ")}</p>
-        </div>
-        <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-800 font-semibold flex-shrink-0">
-          Nearest Fire Station
-        </span>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <TrafficDistTag roadKm={fs.roadDistanceKm} roadMin={fs.roadDurationMin} straightKm={fs.straightLineKm} />
-      </div>
-      {fs.station.contactNumber && (
-        <p className="text-[11px] text-gray-400">Phone: {fs.station.contactNumber}</p>
-      )}
-    </div>
-  );
-}
-
-function TowingCard({ ts }: { ts: NearestTowingStation }) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-1.5">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-bold text-gray-900">{ts.station.name}</p>
-          <p className="text-[11px] text-gray-400">{ts.station.district} · {ts.station.vehicleTypes.join(", ")}</p>
-        </div>
-        <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-200 text-gray-800 font-semibold flex-shrink-0">
-          Nearest Recovery Post
-        </span>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <TrafficDistTag roadKm={ts.roadDistanceKm} roadMin={ts.roadDurationMin} straightKm={ts.straightLineKm} />
-      </div>
-      {ts.station.contactNumber && (
-        <p className="text-[11px] text-gray-400">Phone: {ts.station.contactNumber}</p>
-      )}
-    </div>
-  );
-}
-
 function fmtClock(min: number): string {
   const totalSec = Math.max(0, Math.round(min * 60));
   const m = Math.floor(totalSec / 60);
@@ -269,27 +221,49 @@ function fmtClock(min: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function AmbulanceEtaCard({
-  station,
-  distanceKm,
-  etaMinutes,
-  source,
-  computedAt,
+// ── Generic emergency-vehicle ETA countdown card ──────────────────────────────
+// Shared by ambulance / fire / towing — same countdown + progress-bar logic,
+// styled per vehicle type. Only rendered when the severity engine actually
+// recommended that agency for this incident (see wantsAmbulance/wantsFire/
+// wantsTowing below) — a minor breakdown shows only towing, a severe incident
+// needing all three shows all three, each on its own independent clock.
+
+const VEHICLE_ETA_CONFIG: Record<SimulatedVehicleKind, {
+  label: string; border: string; bg: string; text: string; accent: string; speedKmph: number; roleLabel: string;
+}> = {
+  AMBULANCE: {
+    label: "Estimated Ambulance Arrival", border: "border-green-200", bg: "bg-green-50/40",
+    text: "text-green-800", accent: "#16a34a", speedKmph: AVG_AMBULANCE_SPEED_KMPH, roleLabel: "ambulance",
+  },
+  FIRE: {
+    label: "Estimated Fire Truck Arrival", border: "border-red-200", bg: "bg-red-50/40",
+    text: "text-red-800", accent: "#dc2626", speedKmph: AVG_FIRE_TRUCK_SPEED_KMPH, roleLabel: "fire truck",
+  },
+  TOWING: {
+    label: "Estimated Tow Truck Arrival", border: "border-gray-300", bg: "bg-gray-100/60",
+    text: "text-gray-700", accent: "#57534e", speedKmph: AVG_TOWING_SPEED_KMPH, roleLabel: "tow truck",
+  },
+};
+
+function EtaCountdownCard({
+  kind, stationName, subtitle, distanceKm, etaMinutes, source, computedAt,
 }: {
-  station: AmbulanceStation;
+  kind: SimulatedVehicleKind;
+  stationName: string;
+  subtitle: string;
   distanceKm: number;
   etaMinutes: number;
   source: "road" | "straight_line";
   computedAt: string; // ISO timestamp — when this estimate was first logged, from the event log
 }) {
-  const t = useT();
+  const cfg = VEHICLE_ETA_CONFIG[kind];
 
   // Countdown is a client-side clock ticking down from `computedAt` — the
   // moment this estimate was first computed and logged (persisted in the
   // append-only event log), NOT this component's mount time. That keeps the
   // countdown consistent across closing/reopening the report panel, since
   // MatchingPanel remounts every time the report sheet is reopened. This is
-  // still not a live position feed — we have no ambulance GPS, so it never
+  // still not a live position feed — we have no vehicle GPS, so it never
   // claims to track the vehicle; see the "not live tracking" disclaimer below
   // and the project hard rule on fake real-time data.
   const startedAt = useMemo(() => new Date(computedAt).getTime(), [computedAt]);
@@ -304,15 +278,15 @@ function AmbulanceEtaCard({
   const remainingMin = Math.max(0, etaMinutes - elapsedMin);
   const overdue = elapsedMin >= etaMinutes;
   const progressPct = etaMinutes > 0 ? Math.min(100, (elapsedMin / etaMinutes) * 100) : 100;
-  const barColor = overdue ? "#dc2626" : progressPct > 75 ? "#d97706" : "#16a34a";
+  const barColor = overdue ? "#dc2626" : progressPct > 75 ? "#d97706" : cfg.accent;
 
   return (
-    <div className="rounded-xl border border-green-200 bg-green-50/40 p-3 flex flex-col gap-2">
+    <div className={`rounded-xl border ${cfg.border} ${cfg.bg} p-3 flex flex-col gap-2`}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-[10px] font-black tracking-widest text-green-800 uppercase">{t("matchAmbulanceEta")}</p>
-          <p className="text-sm font-bold text-gray-900 mt-0.5">{station.name}</p>
-          <p className="text-[11px] text-gray-400">{station.district} · {station.ambulanceCount} ambulances ({station.types.join(", ")})</p>
+          <p className={`text-[10px] font-black tracking-widest uppercase ${cfg.text}`}>{cfg.label}</p>
+          <p className="text-sm font-bold text-gray-900 mt-0.5">{stationName}</p>
+          <p className="text-[11px] text-gray-400">{subtitle}</p>
         </div>
         <div className="text-right flex-shrink-0">
           <p className="text-2xl font-black tabular-nums leading-none" style={{ color: barColor }}>
@@ -325,7 +299,7 @@ function AmbulanceEtaCard({
       </div>
 
       {/* Countdown bar — fills as the calculated estimate window elapses.
-          It times a static estimate; it does not track the ambulance's
+          It times a static estimate; it does not track the vehicle's
           real-world position. */}
       <div className="h-2.5 w-full rounded-full bg-gray-200 overflow-hidden">
         <div
@@ -335,18 +309,20 @@ function AmbulanceEtaCard({
       </div>
 
       <p className="text-sm text-gray-800">
-        Estimated arrival <span className="font-semibold text-green-800">~{Math.round(etaMinutes)} min</span> from {station.name}
+        Estimated arrival <span className="font-semibold" style={{ color: cfg.accent }}>~{Math.round(etaMinutes)} min</span> from {stationName}
         <span className="text-gray-500"> · {distanceKm.toFixed(1)} km</span>
       </p>
       <p className="text-[11px] text-gray-500">
-        {source === "road" ? t("ambulanceEtaRoadBased") : `${t("ambulanceEtaStraightLine")} (${AVG_AMBULANCE_SPEED_KMPH} km/h)`}
+        {source === "road" ? "based on current road distance" : `straight-line estimate (${cfg.speedKmph} km/h)`}
       </p>
       {overdue && (
         <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           Estimated window elapsed — this does not confirm arrival or delay; we have no live position feed for this vehicle.
         </p>
       )}
-      <p className="text-[10px] text-green-700 font-medium">{t("ambulanceEtaCalculated")}</p>
+      <p className="text-[10px] font-medium" style={{ color: cfg.accent }}>
+        Calculated estimate — not live tracking. We do not track vehicles.
+      </p>
     </div>
   );
 }
@@ -595,8 +571,26 @@ export default function MatchingPanel({
   const sev = assessment.severityScore as AssessmentSeverity;
   const accentColor = SEV_COLOR[sev];
 
+  // Context-aware gating: only recommend/simulate the agencies the severity
+  // engine actually flagged for this incident type (per the accident-index
+  // rule book) — a minor breakdown gets towing only, a severe multi-hazard
+  // incident gets whichever of ambulance/fire/towing the rules call for.
+  // Ambulance has one safety-net exception: if the engine returned no opinion
+  // at all (assessment.agencies is empty — e.g. a transient engine outage,
+  // see ReportPanel's offline fallback stub), default to showing it, since
+  // "no data" shouldn't silently hide the most broadly-relevant service.
+  const wantsAmbulance = assessment.agencies.length === 0
+    ? true
+    : assessment.agencies.some((a) => a.code === "AMBULANCE");
   const wantsFire = assessment.agencies.some((a) => a.code === "FIRE");
   const wantsTowing = assessment.agencies.some((a) => a.code === "TOWING");
+
+  interface EmergencyEta {
+    distanceKm: number;
+    etaMinutes: number;
+    source: "road" | "straight_line";
+    routeCoords: [number, number][] | null;
+  }
 
   const [phase, setPhase] = useState<Phase>("fetching_places");
   const [phasesDone, setPhasesDone] = useState<Set<Phase>>(new Set());
@@ -605,60 +599,101 @@ export default function MatchingPanel({
   const [nearestPSWithRoute, setNearestPSWithRoute] = useState<NearestPolice>(() =>
     findNearestPolice(policeStations, incident)
   );
-  const [nearestAmbulance] = useState<NearestAmbulanceStation>(() =>
-    findNearestAmbulanceStation(ambulanceStations, incident)
+  const [nearestAmbulance] = useState<NearestAmbulanceStation | null>(() =>
+    wantsAmbulance && ambulanceStations.length ? findNearestAmbulanceStation(ambulanceStations, incident) : null
   );
-  const [ambulanceEta, setAmbulanceEta] = useState<{
-    distanceKm: number;
-    etaMinutes: number;
-    source: "road" | "straight_line";
-    routeCoords: [number, number][] | null;
-  } | null>(null);
+  const [ambulanceEta, setAmbulanceEta] = useState<EmergencyEta | null>(null);
   const [nearestFire, setNearestFire] = useState<NearestFireStation | null>(() =>
     wantsFire && fireStations.length ? findNearestFireStation(fireStations, incident) : null
   );
+  const [fireEta, setFireEta] = useState<EmergencyEta | null>(null);
   const [nearestTowing, setNearestTowing] = useState<NearestTowingStation | null>(() =>
     wantsTowing && towingStations.length ? findNearestTowingStation(towingStations, incident) : null
   );
+  const [towingEta, setTowingEta] = useState<EmergencyEta | null>(null);
   const [routeSource, setRouteSource] = useState<"traffic" | "straight_line" | null>(null);
   const [candidateCount, setCandidateCount] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const setRoutes = useRoutingStore((s) => s.setRoutes);
-  const setSimulatedAmbulance = useRoutingStore((s) => s.setSimulatedAmbulance);
+  const upsertSimulatedVehicle = useRoutingStore((s) => s.upsertSimulatedVehicle);
   const appendHospitalMatched = useEventLog((s) => s.appendHospitalMatched);
   const appendRouteEstimated = useEventLog((s) => s.appendRouteEstimated);
   const eventLogEntries = useEventLog((s) => s.entries);
 
-  // The countdown card needs a stable reference point for "when was this
+  // Each countdown card needs a stable reference point for "when was this
   // estimate first computed" that survives MatchingPanel remounting (e.g. the
   // user closes and reopens the report sheet). The event log is append-only
-  // and outlives this component, so use the *earliest* logged AMBULANCE
-  // ROUTE_ESTIMATED entry for this incident rather than local component state.
-  const ambulanceEtaComputedAt = useMemo(() => {
-    for (const e of eventLogEntries) {
+  // and outlives this component, so use the *earliest* logged ROUTE_ESTIMATED
+  // entry of the matching entityType for this incident, rather than local
+  // component state (which resets on every remount).
+  function findEarliestRouteEstimatedAt(
+    entries: EventLogEntry[],
+    incidentId: string,
+    entityType: RouteEstimatedPayload["entityType"]
+  ): string | null {
+    for (const e of entries) {
       if (e.type === "ROUTE_ESTIMATED") {
         const p = e.payload as RouteEstimatedPayload;
-        if (p.incidentId === incident.id && p.entityType === "AMBULANCE") return e.timestamp;
+        if (p.incidentId === incidentId && p.entityType === entityType) return e.timestamp;
       }
     }
     return null;
-  }, [eventLogEntries, incident.id]);
+  }
 
-  // Push the simulated ambulance marker to the map whenever a road-based route
-  // is available, anchored to the same persisted computedAt as the countdown
-  // card above — so both stay in sync and both survive panel remounts. Purely
-  // cosmetic: it walks the actual highlighted route, not a real position feed.
+  const ambulanceEtaComputedAt = useMemo(
+    () => findEarliestRouteEstimatedAt(eventLogEntries, incident.id, "AMBULANCE"),
+    [eventLogEntries, incident.id]
+  );
+  const fireEtaComputedAt = useMemo(
+    () => findEarliestRouteEstimatedAt(eventLogEntries, incident.id, "FIRE"),
+    [eventLogEntries, incident.id]
+  );
+  const towingEtaComputedAt = useMemo(
+    () => findEarliestRouteEstimatedAt(eventLogEntries, incident.id, "TOWING"),
+    [eventLogEntries, incident.id]
+  );
+
+  // Push each simulated vehicle marker to the map whenever a road-based route
+  // is available, anchored to the same persisted computedAt as its countdown
+  // card — so both stay in sync and both survive panel remounts. Purely
+  // cosmetic: each walks its own actual highlighted route, not a real
+  // position feed. One effect per vehicle type so each ticks independently.
   useEffect(() => {
-    if (ambulanceEta?.source === "road" && ambulanceEta.routeCoords && ambulanceEtaComputedAt) {
-      setSimulatedAmbulance({
+    if (ambulanceEta?.source === "road" && ambulanceEta.routeCoords && ambulanceEtaComputedAt && nearestAmbulance) {
+      upsertSimulatedVehicle({
         id: `sim-ambulance-${nearestAmbulance.station.id}`,
+        kind: "AMBULANCE",
         coords: ambulanceEta.routeCoords,
         startedAt: ambulanceEtaComputedAt,
         durationMin: ambulanceEta.etaMinutes,
       });
     }
-  }, [ambulanceEta, ambulanceEtaComputedAt, nearestAmbulance.station.id, setSimulatedAmbulance]);
+  }, [ambulanceEta, ambulanceEtaComputedAt, nearestAmbulance, upsertSimulatedVehicle]);
+
+  useEffect(() => {
+    if (fireEta?.source === "road" && fireEta.routeCoords && fireEtaComputedAt && nearestFire) {
+      upsertSimulatedVehicle({
+        id: `sim-fire-${nearestFire.station.id}`,
+        kind: "FIRE",
+        coords: fireEta.routeCoords,
+        startedAt: fireEtaComputedAt,
+        durationMin: fireEta.etaMinutes,
+      });
+    }
+  }, [fireEta, fireEtaComputedAt, nearestFire, upsertSimulatedVehicle]);
+
+  useEffect(() => {
+    if (towingEta?.source === "road" && towingEta.routeCoords && towingEtaComputedAt && nearestTowing) {
+      upsertSimulatedVehicle({
+        id: `sim-towing-${nearestTowing.station.id}`,
+        kind: "TOWING",
+        coords: towingEta.routeCoords,
+        startedAt: towingEtaComputedAt,
+        durationMin: towingEta.etaMinutes,
+      });
+    }
+  }, [towingEta, towingEtaComputedAt, nearestTowing, upsertSimulatedVehicle]);
 
   useEffect(() => {
     let alive = true;
@@ -756,7 +791,9 @@ export default function MatchingPanel({
       const [hosResult, psResult, ambResult, fireResult, towingResult] = await Promise.allSettled([
         fetchRoute({ lat: h1.hospital.lat, lng: h1.hospital.lng }),
         fetchRoute({ lat: nearestPS.station.lat, lng: nearestPS.station.lng }),
-        fetchRoute({ lat: nearestAmbulance.station.lat, lng: nearestAmbulance.station.lng }),
+        nearestAmbulance
+          ? fetchRoute({ lat: nearestAmbulance.station.lat, lng: nearestAmbulance.station.lng })
+          : Promise.resolve(null),
         nearestFire
           ? fetchRoute({ lat: nearestFire.station.lat, lng: nearestFire.station.lng })
           : Promise.resolve(null),
@@ -820,68 +857,88 @@ export default function MatchingPanel({
         appendRouteEstimated(incident.id, nearestPS.station.id, nearestPS.station.name, "POLICE", roadKm, roadMin);
       }
 
-      // Ambulance ETA — always attempt Google road distance; fall back to a
-      // straight-line + fixed-speed estimate. Both paths are clearly labelled
-      // as calculated estimates, never presented as live tracking.
-      if (ambResult.status === "fulfilled" && ambResult.value?.route) {
-        const r = ambResult.value.route;
-        const roadKm = r.distanceMeters / 1000;
-        const roadMin = r.durationSec / 60;
+      // Emergency-vehicle ETAs — always attempt Google road distance; fall
+      // back to a straight-line + fixed-speed estimate. Both paths are
+      // clearly labelled as calculated estimates, never presented as live
+      // tracking. Each is only computed when nearestX is non-null, i.e. the
+      // severity engine actually recommended that agency for this incident.
+      if (nearestAmbulance) {
+        if (ambResult.status === "fulfilled" && ambResult.value?.route) {
+          const r = ambResult.value.route;
+          const roadKm = r.distanceMeters / 1000;
+          const roadMin = r.durationSec / 60;
 
-        setAmbulanceEta({ distanceKm: roadKm, etaMinutes: roadMin, source: "road", routeCoords: r.coords });
+          setAmbulanceEta({ distanceKm: roadKm, etaMinutes: roadMin, source: "road", routeCoords: r.coords });
 
-        mapRoutes.push({
-          id: `ambulance-${nearestAmbulance.station.id}`,
-          color: "#16a34a",
-          dashArray: "6 4",
-          coords: r.coords,
-          label: nearestAmbulance.station.name,
-        });
+          mapRoutes.push({
+            id: `ambulance-${nearestAmbulance.station.id}`,
+            color: "#16a34a",
+            dashArray: "6 4",
+            coords: r.coords,
+            label: nearestAmbulance.station.name,
+          });
 
-        appendRouteEstimated(incident.id, nearestAmbulance.station.id, nearestAmbulance.station.name, "AMBULANCE", roadKm, roadMin);
-      } else {
-        const distanceKm = nearestAmbulance.straightLineKm;
-        const fallbackEtaMin = haversineEtaMinutes(distanceKm);
-        setAmbulanceEta({ distanceKm, etaMinutes: fallbackEtaMin, source: "straight_line", routeCoords: null });
-        // Log this path too — the countdown card needs a persisted timestamp
-        // regardless of which estimate source was used (see computedAt below).
-        appendRouteEstimated(incident.id, nearestAmbulance.station.id, nearestAmbulance.station.name, "AMBULANCE", distanceKm, fallbackEtaMin);
+          appendRouteEstimated(incident.id, nearestAmbulance.station.id, nearestAmbulance.station.name, "AMBULANCE", roadKm, roadMin);
+        } else {
+          const distanceKm = nearestAmbulance.straightLineKm;
+          const fallbackEtaMin = haversineEtaMinutes(distanceKm, AVG_AMBULANCE_SPEED_KMPH);
+          setAmbulanceEta({ distanceKm, etaMinutes: fallbackEtaMin, source: "straight_line", routeCoords: null });
+          // Log this path too — the countdown card needs a persisted timestamp
+          // regardless of which estimate source was used.
+          appendRouteEstimated(incident.id, nearestAmbulance.station.id, nearestAmbulance.station.name, "AMBULANCE", distanceKm, fallbackEtaMin);
+        }
       }
 
-      if (nearestFire && fireResult.status === "fulfilled" && fireResult.value?.route) {
-        const r = fireResult.value.route;
-        const roadKm = r.distanceMeters / 1000;
-        const roadMin = r.durationSec / 60;
+      if (nearestFire) {
+        if (fireResult.status === "fulfilled" && fireResult.value?.route) {
+          const r = fireResult.value.route;
+          const roadKm = r.distanceMeters / 1000;
+          const roadMin = r.durationSec / 60;
 
-        setNearestFire((prev) => (prev ? { ...prev, roadDistanceKm: roadKm, roadDurationMin: roadMin, routeCoords: r.coords } : prev));
+          setNearestFire((prev) => (prev ? { ...prev, roadDistanceKm: roadKm, roadDurationMin: roadMin, routeCoords: r.coords } : prev));
+          setFireEta({ distanceKm: roadKm, etaMinutes: roadMin, source: "road", routeCoords: r.coords });
 
-        mapRoutes.push({
-          id: `fire-${nearestFire.station.id}`,
-          color: "#dc2626",
-          dashArray: "6 4",
-          coords: r.coords,
-          label: nearestFire.station.name,
-        });
+          mapRoutes.push({
+            id: `fire-${nearestFire.station.id}`,
+            color: "#dc2626",
+            dashArray: "6 4",
+            coords: r.coords,
+            label: nearestFire.station.name,
+          });
 
-        appendRouteEstimated(incident.id, nearestFire.station.id, nearestFire.station.name, "FIRE", roadKm, roadMin);
+          appendRouteEstimated(incident.id, nearestFire.station.id, nearestFire.station.name, "FIRE", roadKm, roadMin);
+        } else {
+          const distanceKm = nearestFire.straightLineKm;
+          const fallbackEtaMin = haversineEtaMinutes(distanceKm, AVG_FIRE_TRUCK_SPEED_KMPH);
+          setFireEta({ distanceKm, etaMinutes: fallbackEtaMin, source: "straight_line", routeCoords: null });
+          appendRouteEstimated(incident.id, nearestFire.station.id, nearestFire.station.name, "FIRE", distanceKm, fallbackEtaMin);
+        }
       }
 
-      if (nearestTowing && towingResult.status === "fulfilled" && towingResult.value?.route) {
-        const r = towingResult.value.route;
-        const roadKm = r.distanceMeters / 1000;
-        const roadMin = r.durationSec / 60;
+      if (nearestTowing) {
+        if (towingResult.status === "fulfilled" && towingResult.value?.route) {
+          const r = towingResult.value.route;
+          const roadKm = r.distanceMeters / 1000;
+          const roadMin = r.durationSec / 60;
 
-        setNearestTowing((prev) => (prev ? { ...prev, roadDistanceKm: roadKm, roadDurationMin: roadMin, routeCoords: r.coords } : prev));
+          setNearestTowing((prev) => (prev ? { ...prev, roadDistanceKm: roadKm, roadDurationMin: roadMin, routeCoords: r.coords } : prev));
+          setTowingEta({ distanceKm: roadKm, etaMinutes: roadMin, source: "road", routeCoords: r.coords });
 
-        mapRoutes.push({
-          id: `towing-${nearestTowing.station.id}`,
-          color: "#57534e",
-          dashArray: "6 4",
-          coords: r.coords,
-          label: nearestTowing.station.name,
-        });
+          mapRoutes.push({
+            id: `towing-${nearestTowing.station.id}`,
+            color: "#57534e",
+            dashArray: "6 4",
+            coords: r.coords,
+            label: nearestTowing.station.name,
+          });
 
-        appendRouteEstimated(incident.id, nearestTowing.station.id, nearestTowing.station.name, "TOWING", roadKm, roadMin);
+          appendRouteEstimated(incident.id, nearestTowing.station.id, nearestTowing.station.name, "TOWING", roadKm, roadMin);
+        } else {
+          const distanceKm = nearestTowing.straightLineKm;
+          const fallbackEtaMin = haversineEtaMinutes(distanceKm, AVG_TOWING_SPEED_KMPH);
+          setTowingEta({ distanceKm, etaMinutes: fallbackEtaMin, source: "straight_line", routeCoords: null });
+          appendRouteEstimated(incident.id, nearestTowing.station.id, nearestTowing.station.name, "TOWING", distanceKm, fallbackEtaMin);
+        }
       }
 
       setRoutes(mapRoutes);
@@ -945,14 +1002,16 @@ export default function MatchingPanel({
         </div>
       )}
 
-      {/* Ambulance ETA — honest, calculated estimate; always shown, same as Police (not gated
-          on assessment.agencies — that list can be empty, e.g. the offline heuristic-fallback
-          stub in ReportPanel.tsx, even though an ambulance response is still relevant).
-          Shown first, above hospital/police results, since it's the most time-critical card. */}
-      {phase === "done" && ambulanceEta && ambulanceEtaComputedAt && (
+      {/* Ambulance ETA — only shown when the engine recommended AMBULANCE for
+          this incident (or gave no opinion at all, see wantsAmbulance above).
+          Shown first, above hospital/police results, since it's the most
+          time-critical card when present. */}
+      {phase === "done" && wantsAmbulance && nearestAmbulance && ambulanceEta && ambulanceEtaComputedAt && (
         <div>
-          <AmbulanceEtaCard
-            station={nearestAmbulance.station}
+          <EtaCountdownCard
+            kind="AMBULANCE"
+            stationName={nearestAmbulance.station.name}
+            subtitle={`${nearestAmbulance.station.district} · ${nearestAmbulance.station.ambulanceCount} ambulances (${nearestAmbulance.station.types.join(", ")})`}
             distanceKm={ambulanceEta.distanceKm}
             etaMinutes={ambulanceEta.etaMinutes}
             source={ambulanceEta.source}
@@ -1010,22 +1069,32 @@ export default function MatchingPanel({
       )}
 
       {/* Fire — only shown when the engine actually recommended FIRE for this incident */}
-      {wantsFire && nearestFire && (
+      {phase === "done" && wantsFire && nearestFire && fireEta && fireEtaComputedAt && (
         <div>
-          <p className="text-[10px] font-black tracking-widest uppercase mb-2 px-1" style={{ color: accentColor }}>
-            Nearest Fire Station
-          </p>
-          <FireCard fs={nearestFire} />
+          <EtaCountdownCard
+            kind="FIRE"
+            stationName={nearestFire.station.name}
+            subtitle={`${nearestFire.station.district} · ${nearestFire.station.vehicleTypes.join(", ")}`}
+            distanceKm={fireEta.distanceKm}
+            etaMinutes={fireEta.etaMinutes}
+            source={fireEta.source}
+            computedAt={fireEtaComputedAt}
+          />
         </div>
       )}
 
       {/* Towing — only shown when the engine actually recommended TOWING for this incident */}
-      {wantsTowing && nearestTowing && (
+      {phase === "done" && wantsTowing && nearestTowing && towingEta && towingEtaComputedAt && (
         <div>
-          <p className="text-[10px] font-black tracking-widest uppercase mb-2 px-1" style={{ color: accentColor }}>
-            Nearest Recovery Post
-          </p>
-          <TowingCard ts={nearestTowing} />
+          <EtaCountdownCard
+            kind="TOWING"
+            stationName={nearestTowing.station.name}
+            subtitle={`${nearestTowing.station.district} · ${nearestTowing.station.vehicleTypes.join(", ")}`}
+            distanceKm={towingEta.distanceKm}
+            etaMinutes={towingEta.etaMinutes}
+            source={towingEta.source}
+            computedAt={towingEtaComputedAt}
+          />
         </div>
       )}
 
@@ -1038,13 +1107,13 @@ export default function MatchingPanel({
               <RouteLegend color="#2563eb" label={`Hospital route — ${ranked[0].hospital.shortName}`} />
             )}
             <RouteLegend color="#1e3a8a" dash label={`Police route — ${nearestPS.station.name}`} />
-            {ambulanceEta && ambulanceEta.source === "road" && (
+            {wantsAmbulance && nearestAmbulance && ambulanceEta?.source === "road" && (
               <RouteLegend color="#16a34a" dash label={`Ambulance route — ${nearestAmbulance.station.name}`} />
             )}
-            {wantsFire && nearestFire && (
+            {wantsFire && nearestFire && fireEta?.source === "road" && (
               <RouteLegend color="#dc2626" dash label={`Fire route — ${nearestFire.station.name}`} />
             )}
-            {wantsTowing && nearestTowing && (
+            {wantsTowing && nearestTowing && towingEta?.source === "road" && (
               <RouteLegend color="#57534e" dash label={`Recovery route — ${nearestTowing.station.name}`} />
             )}
           </div>

@@ -10,29 +10,35 @@ export interface MapRoute {
   label: string;
 }
 
-// A cosmetic, clearly-labelled simulated ambulance marker that animates along
-// an already-highlighted route. Not a real position feed — see CLAUDE.md hard
-// rule 1. Anchored to the same computedAt timestamp as the ETA countdown so
-// both stay in sync and both survive panel remounts.
-export interface SimulatedAmbulance {
+export type SimulatedVehicleKind = "AMBULANCE" | "FIRE" | "TOWING";
+
+// A cosmetic, clearly-labelled simulated vehicle marker that animates along an
+// already-highlighted route. Not a real position feed — see CLAUDE.md hard
+// rule 1. Anchored to the same computedAt timestamp as its ETA countdown card
+// so both stay in sync and both survive panel remounts.
+export interface SimulatedVehicle {
   id: string;
-  coords: [number, number][]; // same polyline as the drawn ambulance route
+  kind: SimulatedVehicleKind;
+  coords: [number, number][]; // same polyline as the drawn route
   startedAt: string; // ISO timestamp — when the estimate was first computed
   durationMin: number; // total simulated travel time
 }
 
 interface RoutingState {
   routes: MapRoute[];
-  simulatedAmbulance: SimulatedAmbulance | null;
+  simulatedVehicles: SimulatedVehicle[];
   setRoutes: (routes: MapRoute[]) => void;
-  setSimulatedAmbulance: (sim: SimulatedAmbulance | null) => void;
+  upsertSimulatedVehicle: (v: SimulatedVehicle) => void;
   clearRoutes: () => void;
 }
 
 export const useRoutingStore = create<RoutingState>((set) => ({
   routes: [],
-  simulatedAmbulance: null,
+  simulatedVehicles: [],
   setRoutes: (routes) => set({ routes }),
-  setSimulatedAmbulance: (sim) => set({ simulatedAmbulance: sim }),
-  clearRoutes: () => set({ routes: [], simulatedAmbulance: null }),
+  upsertSimulatedVehicle: (v) =>
+    set((state) => ({
+      simulatedVehicles: [...state.simulatedVehicles.filter((existing) => existing.id !== v.id), v],
+    })),
+  clearRoutes: () => set({ routes: [], simulatedVehicles: [] }),
 }));
