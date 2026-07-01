@@ -895,8 +895,10 @@ export default function MatchingPanel({
         </div>
       )}
 
-      {/* Ambulance ETA — honest, calculated estimate; shown whenever the engine recommends AMBULANCE */}
-      {phase === "done" && ambulanceEta && assessment.agencies.some((a) => a.code === "AMBULANCE") && (
+      {/* Ambulance ETA — honest, calculated estimate; always shown, same as Police (not gated
+          on assessment.agencies — that list can be empty, e.g. the offline heuristic-fallback
+          stub in ReportPanel.tsx, even though an ambulance response is still relevant). */}
+      {phase === "done" && ambulanceEta && (
         <div>
           <AmbulanceEtaCard
             station={nearestAmbulance.station}
