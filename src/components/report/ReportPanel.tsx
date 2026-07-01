@@ -906,8 +906,10 @@ interface FormViewProps {
   onSubType: (v: string, cat: string) => void;
   description: string;
   onDescription: (v: string) => void;
-  victims: string;
-  onVictims: (v: string) => void;
+  vehiclesInvolved: string;
+  onVehiclesInvolved: (v: string) => void;
+  casualties: string;
+  onCasualties: (v: string) => void;
   selectedFlags: Set<string>;
   onToggleFlag: (f: string) => void;
   onSubmit: () => void;
@@ -918,7 +920,7 @@ function FormView({
   mode, voice, locale, onLocaleChange,
   pinnedLocation, pinnedLabel, onRequestPin,
   selectedSubType, selectedCategory, onSubType,
-  description, onDescription, victims, onVictims,
+  description, onDescription, vehiclesInvolved, onVehiclesInvolved, casualties, onCasualties,
   selectedFlags, onToggleFlag, onSubmit, canSubmit,
 }: FormViewProps) {
   const handleTranscript = useCallback(
@@ -997,20 +999,40 @@ function FormView({
         })()}
       </div>
 
-      {/* Persons involved */}
-      <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-          Estimated Persons Involved
-        </label>
-        <input
-          type="number"
-          min="0"
-          max="999"
-          value={victims}
-          onChange={(e) => onVictims(e.target.value)}
-          placeholder="0"
-          className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#0f2044]/30"
-        />
+      {/* Vehicles involved / casualties — kept as two separate fields since they
+          feed different signals to the engine (vehicle count affects multi-vehicle
+          dispatch logic; casualty count affects severity + ambulance dispatch) and
+          conflating them previously sent whatever was typed here as vehiclesInvolved
+          regardless of which the reporter meant. */}
+      <div className="flex gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+            Vehicles Involved
+          </label>
+          <input
+            type="number"
+            min="0"
+            max="999"
+            value={vehiclesInvolved}
+            onChange={(e) => onVehiclesInvolved(e.target.value)}
+            placeholder="0"
+            className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#0f2044]/30"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1.5">
+            Casualties / Injured
+          </label>
+          <input
+            type="number"
+            min="0"
+            max="999"
+            value={casualties}
+            onChange={(e) => onCasualties(e.target.value)}
+            placeholder="0"
+            className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#0f2044]/30"
+          />
+        </div>
       </div>
 
       {/* Quick flags */}
@@ -1210,7 +1232,8 @@ export default function ReportPanel({
   const [panelStatus, setPanelStatus] = useState<PanelStatus>("IDLE");
   const [sosError, setSosError] = useState<string | null>(null);
   const [description, setDescription] = useState("");
-  const [victims, setVictims] = useState("");
+  const [vehiclesInvolved, setVehiclesInvolved] = useState("");
+  const [casualties, setCasualties] = useState("");
   const [selectedFlags, setSelectedFlags] = useState<Set<string>>(new Set());
   const [selectedSubType, setSelectedSubType] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
@@ -1235,7 +1258,8 @@ export default function ReportPanel({
     setPanelStatus("IDLE");
     setSosError(null);
     setDescription("");
-    setVictims("");
+    setVehiclesInvolved("");
+    setCasualties("");
     setSelectedFlags(new Set());
     setSelectedSubType("");
     setSelectedCategory("");
@@ -1412,8 +1436,8 @@ export default function ReportPanel({
         pinnedLabel ||
         `${pinnedLocation.lat.toFixed(5)}, ${pinnedLocation.lng.toFixed(5)}`,
       reportMode: mode === "VOICE" ? "VOICE" : "TEXT",
-      vehiclesInvolved: victims ? Number(victims) : null,
-      estimatedCasualties: null,
+      vehiclesInvolved: vehiclesInvolved ? Number(vehiclesInvolved) : null,
+      estimatedCasualties: casualties ? Number(casualties) : null,
       description: description.trim(),
       flags: Array.from(selectedFlags),
       severity: "UNKNOWN",
@@ -1672,8 +1696,10 @@ export default function ReportPanel({
               onSubType={(v, cat) => { setSelectedSubType(v); setSelectedCategory(cat); }}
               description={description}
               onDescription={setDescription}
-              victims={victims}
-              onVictims={setVictims}
+              vehiclesInvolved={vehiclesInvolved}
+              onVehiclesInvolved={setVehiclesInvolved}
+              casualties={casualties}
+              onCasualties={setCasualties}
               selectedFlags={selectedFlags}
               onToggleFlag={toggleFlag}
               onSubmit={handleFormSubmit}
