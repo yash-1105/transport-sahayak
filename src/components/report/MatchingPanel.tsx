@@ -229,21 +229,31 @@ function fmtClock(min: number): string {
 // needing all three shows all three, each on its own independent clock.
 
 const VEHICLE_ETA_CONFIG: Record<SimulatedVehicleKind, {
-  label: string; border: string; bg: string; text: string; accent: string; speedKmph: number; roleLabel: string;
+  label: string; border: string; bg: string; text: string; accent: string; speedKmph: number; serviceNoun: string;
 }> = {
   AMBULANCE: {
     label: "Estimated Ambulance Arrival", border: "border-green-200", bg: "bg-green-50/40",
-    text: "text-green-800", accent: "#16a34a", speedKmph: AVG_AMBULANCE_SPEED_KMPH, roleLabel: "ambulance",
+    text: "text-green-800", accent: "#16a34a", speedKmph: AVG_AMBULANCE_SPEED_KMPH, serviceNoun: "Ambulance service",
   },
   FIRE: {
     label: "Estimated Fire Truck Arrival", border: "border-red-200", bg: "bg-red-50/40",
-    text: "text-red-800", accent: "#dc2626", speedKmph: AVG_FIRE_TRUCK_SPEED_KMPH, roleLabel: "fire truck",
+    text: "text-red-800", accent: "#dc2626", speedKmph: AVG_FIRE_TRUCK_SPEED_KMPH, serviceNoun: "Fire service",
   },
   TOWING: {
     label: "Estimated Tow Truck Arrival", border: "border-gray-300", bg: "bg-gray-100/60",
-    text: "text-gray-700", accent: "#57534e", speedKmph: AVG_TOWING_SPEED_KMPH, roleLabel: "tow truck",
+    text: "text-gray-700", accent: "#57534e", speedKmph: AVG_TOWING_SPEED_KMPH, serviceNoun: "Towing service",
   },
 };
+
+// Station names in the seed data follow "<Facility label> — <Location>" (e.g.
+// "108 Post — Baraut", "Fire Post — Ganeshpur / Roorkee"). The facility label
+// ("108 Post"/"Fire Post"/"Recovery Post") reads as internal jargon to a
+// reporter — what actually matters to them is which location it's coming
+// from, so the card shows "<Service> inbound from <Location>" instead.
+function locationFromStationName(stationName: string): string {
+  const idx = stationName.indexOf("—");
+  return idx >= 0 ? stationName.slice(idx + 1).trim() : stationName;
+}
 
 function EtaCountdownCard({
   kind, stationName, subtitle, distanceKm, etaMinutes, source, computedAt,
@@ -257,6 +267,7 @@ function EtaCountdownCard({
   computedAt: string; // ISO timestamp — when this estimate was first logged, from the event log
 }) {
   const cfg = VEHICLE_ETA_CONFIG[kind];
+  const location = locationFromStationName(stationName);
 
   // Countdown is a client-side clock ticking down from `computedAt` — the
   // moment this estimate was first computed and logged (persisted in the
@@ -285,7 +296,7 @@ function EtaCountdownCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className={`text-[10px] font-black tracking-widest uppercase ${cfg.text}`}>{cfg.label}</p>
-          <p className="text-sm font-bold text-gray-900 mt-0.5">{stationName}</p>
+          <p className="text-sm font-bold text-gray-900 mt-0.5">{cfg.serviceNoun} inbound from {location}</p>
           <p className="text-[11px] text-gray-400">{subtitle}</p>
         </div>
         <div className="text-right flex-shrink-0">
@@ -309,7 +320,7 @@ function EtaCountdownCard({
       </div>
 
       <p className="text-sm text-gray-800">
-        Estimated arrival <span className="font-semibold" style={{ color: cfg.accent }}>~{Math.round(etaMinutes)} min</span> from {stationName}
+        Estimated arrival <span className="font-semibold" style={{ color: cfg.accent }}>~{Math.round(etaMinutes)} min</span> from {location}
         <span className="text-gray-500"> · {distanceKm.toFixed(1)} km</span>
       </p>
       <p className="text-[11px] text-gray-500">

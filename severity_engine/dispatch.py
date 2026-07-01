@@ -59,18 +59,43 @@ def resolve(record, signals, severity, location=None) -> DispatchResult:
         if c not in codes:
             codes.append(c)
 
+    vehicles = int(s.get("vehiclesInvolved", 1) or 1)
+    casualties = int(s.get("casualties", 0) or 0)
+
     if s.get("fire"):
         add("FIRE")
+        # A vehicle that caught fire is almost never driveable afterward.
+        add("TOWING")
     if s.get("hazmat"):
         add("FIRE"); add("POLLUTION_CONTROL")
     if s.get("entrapment"):
         add("SDRF")
+        # Extraction always needs medical standby, regardless of what the
+        # matched taxonomy record's own baseline agencies list happens to say.
+        add("AMBULANCE")
         if severity.score == 4:
             add("NDRF")
-    if int(s.get("casualties", 0) or 0) >= 20:
+    if casualties >= 20:
         add("HOSPITAL_ICS"); add("SDRF")
+    if casualties >= 1:
+        # Any confirmed casualty implies medical response is relevant,
+        # regardless of the baseline record — some records omit AMBULANCE
+        # (e.g. property-damage-only subtypes) since it's assumed irrelevant
+        # until a casualty is actually reported.
+        add("AMBULANCE")
     if s.get("roadBlocked"):
         add("TOWING")
+    if vehicles >= 2:
+        # Multi-vehicle collisions almost always leave at least one vehicle
+        # immobile and obstructing the carriageway, and need traffic control
+        # while it's cleared -- true across essentially every subtype, not
+        # just the ones whose own baseline list happens to include TOWING/
+        # POLICE. This was a real gap: a 4-vehicle collision-with-fire report
+        # got AMBULANCE/POLICE/FIRE but no TOWING, even though wrecked
+        # vehicles blocking the road are the norm for any multi-vehicle
+        # incident, not the exception.
+        add("TOWING")
+        add("POLICE")
     if severity.score == 4:
         add("POLICE"); add("AMBULANCE")
 

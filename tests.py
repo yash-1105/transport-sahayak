@@ -68,4 +68,20 @@ check("paraphrase 'flipped over' classifies as a rollover", "Rollover" in o["sub
 o = engine.assess({"description": "Tanker is leaking gas near the bridge, strong toxic smell"}, {}, None)
 check("local hazmat detection floors severity >= HIGH", o["severityScore"] >= 3)
 
+# multi-vehicle collisions must always get TOWING + POLICE dispatched, even
+# when the matched taxonomy record's own baseline agencies list omits them --
+# a real gap: a 4-vehicle collision-with-fire report got AMBULANCE/POLICE/
+# FIRE but no TOWING, even though wrecked vehicles blocking the road are the
+# norm for any multi-vehicle incident, across every subtype, not an exception.
+o = engine.assess({"subType": "Rear-End Collision"}, {"vehiclesInvolved": 4, "fire": True}, None)
+check("multi-vehicle collision always gets TOWING dispatched",
+      any(a["code"] == "TOWING" for a in o["agencies"]))
+
+# any confirmed casualty implies medical response, regardless of what the
+# matched record's baseline agencies say (some property-damage-only subtypes
+# omit AMBULANCE by default since none was assumed until reported)
+o = engine.assess({"subType": "Mob Blocking Highway / Road Roko"}, {"casualties": 2}, None)
+check("any casualty always gets AMBULANCE dispatched",
+      any(a["code"] == "AMBULANCE" for a in o["agencies"]))
+
 print("\nALL TESTS PASSED")
