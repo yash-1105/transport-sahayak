@@ -1,5 +1,5 @@
 """Guardrail tests — determinism + cost. Run: python tests.py"""
-from severity_engine import engine, classifier, severity
+from severity_engine import engine, classifier, severity, local_extract
 
 def check(name, cond):
     print(("PASS" if cond else "FAIL"), "-", name)
@@ -44,5 +44,28 @@ for i in range(5):
     if engine.assess({"description": "xyzzy something unclear"}, {}, None)["llmUsed"]:
         calls += 1
 check("no spurious LLM calls when key absent", calls == 0)
+
+# local extraction (no LLM) catches fire dispatch from free text alone — the
+# original bug: a confidently-matched "Car vs. Car Collision" record with no
+# FIRE in its baseline agencies must still get FIRE when the text says so.
+o = engine.assess({"description": "Car collided with car and now there is fire"}, {}, {"km": 40})
+check("local extraction dispatches FIRE from free text, no LLM needed",
+      any(a["code"] == "FIRE" for a in o["agencies"]) and o["llmUsed"] is False)
+
+# negation suppresses false positives on both sides of the hazard word
+sig = local_extract.extract_signals_locally(
+    "Truck accident, the fire has already been extinguished, no one trapped inside"
+)
+check("negation suppresses fire and entrapment", sig["fire"] is False and sig["entrapment"] is False)
+
+# common paraphrasing is caught via synonym normalization + TF-IDF blend, not
+# just exact keyword overlap
+o = engine.assess({"description": "The truck flipped over on the curve near km 60"}, {}, None)
+check("paraphrase 'flipped over' classifies as a rollover", "Rollover" in o["subType"])
+
+# hazmat detection from free text alone floors severity at HIGH, same as the
+# existing explicit-signal test above, but sourced from the local extractor
+o = engine.assess({"description": "Tanker is leaking gas near the bridge, strong toxic smell"}, {}, None)
+check("local hazmat detection floors severity >= HIGH", o["severityScore"] >= 3)
 
 print("\nALL TESTS PASSED")

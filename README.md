@@ -3,18 +3,27 @@
 A deterministic accident severity & dispatch engine for the **Delhi–Dehradun Expressway**.
 Rule-first: it classifies the incident, scores severity, and resolves which agencies to
 dispatch from a fixed 470-row rule book — severity and agencies are **always** computed by
-rules, never by an LLM. Gemini is consulted for two narrow, read-only jobs:
-1. **Classification escalation** — only when free-text input is genuinely ambiguous, to pick
-   a record from the rule book.
-2. **Hazard-signal extraction** — on every request with free text, reads the description for
-   fire/hazmat/road-blocked/entrapment/casualty signals a confidently-matched record's own
-   static baseline can't know about (e.g. a routine "Car vs. Car Collision" that also mentions
-   a fire). An operator's explicit signal (quick-flag) always wins; this only ever adds,
-   never removes. See `severity_engine/engine.py`'s `_merge_signals()`.
+rules, never by an LLM.
 
-Both degrade gracefully — no key, SDK failure, timeout, or bad output all fail closed to
-rules-only, never fabricate. Runs **locally alongside your existing POC** for dev; see
-"Deploying to production" below for the real deployment.
+Reading free text for hazard signals and taxonomy hints happens in two layers, in order:
+1. **Local NLP (primary, always on)** — `severity_engine/local_extract.py` extracts
+   fire/hazmat/road-blocked/entrapment/vulnerable-victim/casualty signals from the description
+   using a curated phrase lexicon with negation detection ("fire was extinguished" correctly
+   does NOT set `fire: true`), and `severity_engine/classifier.py` matches free text to a
+   taxonomy record via token overlap + synonym normalization + a TF-IDF similarity blend
+   (catches paraphrasing like "rammed into"/"flipped over" that raw keyword matching misses).
+   Deterministic, no network, no API key, no external dependency beyond `scikit-learn`
+   (small, pure-math, no model download) — this is what correctness depends on.
+2. **Gemini (optional bonus)** — `severity_engine/gemini_client.py`'s `classify_with_gemini`
+   (record escalation when local classification is still uncertain) and
+   `extract_hazard_signals` (a second opinion on hazard signals) layer on top when available.
+   Both already fail closed to `None` on any error (no key, quota, timeout, bad output) and
+   only ever ADD to what local extraction already found — never required, never overrides.
+
+An operator's explicit signal (quick-flag in the UI) always wins over either extraction layer;
+extraction only ever adds. See `severity_engine/engine.py`'s `_merge_signals()`. Runs **locally
+alongside your existing POC** for dev; see "Deploying to production" below for the real
+deployment.
 
 ## Run it (for the demo)
 
@@ -44,19 +53,21 @@ curl -s localhost:8000/assess -H 'content-type: application/json' -d '{
 }'
 ```
 
-## Optional Gemini extraction
+## Optional Gemini extraction (bonus layer only)
 
 ```bash
-export GEMINI_API_KEY=your_key      # without this: rules-only classification, and hazard
-                                     # signals only come from explicit quick-flags, not free text
+export GEMINI_API_KEY=your_key
 export GEMINI_MODEL=gemini-2.0-flash
 ```
 
-The engine works fully without the key — it just won't auto-reclassify ambiguous free text or
-auto-detect hazard signals (fire/hazmat/road-blocked/etc.) mentioned in the description; those
-still work if the reporter used the explicit quick-flags in the UI. Free-tier Gemini API keys
-sometimes have a 0-request quota until billing is linked — that also fails closed the same way,
-not silently broken (check `llmUsed` in the response to tell them apart from "no key set").
+The engine works fully — including hazard-signal detection and paraphrase-tolerant
+classification — without this key; local NLP (`local_extract.py` + `classifier.py`'s
+TF-IDF blend) is the primary path, not a fallback. Gemini only adds a second opinion on top when
+configured and reachable. Free-tier Gemini API keys sometimes have a 0-request quota until
+billing is linked — that fails closed the same way as a missing key, not silently broken (check
+`llmUsed` in the response: `true` only when Gemini specifically contributed, regardless of
+whether local extraction also caught the same signal). `GET /debug/gemini` makes one trivial
+call and reports the real error (bad key, quota, billing) if you need to diagnose it.
 
 ## Wiring into your existing POC (local dev)
 
@@ -81,10 +92,9 @@ already set up for Railway:
    public URL (Railway services aren't public by default). Copy it, e.g.
    `https://transport-sahayak-severity.up.railway.app`.
 3. Verify it: `curl https://<your-railway-domain>/health` → `{"ok":true,"records":471}`.
-4. (Optional but recommended) Add `GEMINI_API_KEY` as a Railway environment variable to enable
-   both ambiguous-free-text classification and hazard-signal extraction — the engine works
-   fully without it, but reports won't get FIRE/hazmat dispatch from free-text alone (only from
-   explicit quick-flags) if it's unset.
+4. (Optional) Add `GEMINI_API_KEY` as a Railway environment variable for a bonus second opinion
+   on classification/hazard signals — not required. Local NLP already handles FIRE/hazmat/
+   road-blocked dispatch from free text with no key configured at all.
 5. In your **Vercel** project → Settings → Environment Variables, set
    `SEVERITY_ENGINE_URL` = the Railway URL from step 2 (no trailing slash), for Production
    (and Preview if you want PR previews to hit the same engine). Redeploy.
@@ -103,13 +113,17 @@ demo.py                        offline live-demo script
 tests.py                       determinism + cost guardrail tests
 requirements.txt
 severity_engine/
-  classifier.py                free-text/dropdown -> record (global keyword scoring)
+  classifier.py                free-text/dropdown -> record: synonym normalization + token
+                                overlap + TF-IDF similarity blend (primary, no LLM)
+  local_extract.py             free-text -> hazard signals: curated phrase lexicon + negation
+                                detection (primary, no LLM)
   severity.py                  base + modifiers + hard overrides -> LOW/MED/HIGH/CRITICAL
   dispatch.py                  agency resolution + corridor state-aware labels
-  gemini_client.py             OPTIONAL: classify_with_gemini (record escalation) +
+  gemini_client.py             OPTIONAL bonus layer: classify_with_gemini (record escalation) +
                                 extract_hazard_signals (free-text hazard extraction) — both
-                                graceful if no key/failure
-  engine.py                    orchestrator (rule-first; LLM only reads, never decides)
+                                graceful if no key/failure, never required
+  engine.py                    orchestrator (rule-first; local NLP primary, LLM only reads as
+                                a bonus, neither ever decides severity/dispatch)
   data/accident_index.json     470-row rule book (your Excel, structured)
   data/category_groups.json    raw category (50) -> curated top-level UI category (11) —
                                 single source of truth, also read by src/lib/incidentClassifier.ts
