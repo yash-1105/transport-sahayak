@@ -102,4 +102,38 @@ o = engine.assess({"description": "दो गाड़ियों की टक
 check("Hindi collision+fire description still dispatches FIRE via local hazard extraction",
       any(a["code"] == "FIRE" for a in o["agencies"]))
 
+# regression test for a real reported bug: "गाड़ी की गाड़ी के साथ टक्कर हो गई और आग लग गई"
+# ("a car collided with a car and a fire erupted") classified as "Dhaba / Roadside Shop Fire
+# Spreading to Highway" instead of a vehicle-to-vehicle collision -- root cause was translating
+# गाड़ी/वाहन to the plural "vehicles" (which only matches Car vs. Car Collision's cause text,
+# 1x weight) instead of the singular "car" (which is literally that record's entire subType,
+# 2x weight), and टक्कर to the overloaded "struck" (shared across ~8 unrelated "X Struck"
+# subtypes) instead of "hit"/"collided" (the record's own cause-text vocabulary). Confirmed via
+# testing that the identical failure mode reproduces with an English paraphrase ("Two cars
+# collided...now there is a fire" -> also wrong before some phrasings dodge it by luck), so this
+# was never Hindi-exclusive -- it was corpus-vocabulary-specific, just consistently exposed by
+# the dictionary's original word choices.
+r = classifier.classify({"description": "गाड़ी की गाड़ी के साथ टक्कर हो गई और आग लग गई।"})
+check("Hindi car-vs-car + fire description classifies as a vehicle collision, not a fire record",
+      r.record is not None and "Car" in r.record["subType"] and "Collision" in r.record["subType"])
+
+# Hindi/English parity: the same real-world scenario, described in either language, should land
+# on the same subType (or at minimum a record from the same category) -- this is the actual bar
+# for "understands all incident types in Hindi", checked automatically rather than by spot check.
+PARITY_CASES = [
+    ("ड्राइवर को दिल का दौरा पड़ गया है, वह बेहोश है",
+     "The driver had a heart attack and is unconscious"),
+    ("सड़क पर हाथी आ गया और बाइक से टकरा गया",
+     "An elephant came onto the road and hit a motorcycle"),
+    ("गाड़ी की गाड़ी के साथ टक्कर हो गई और आग लग गई।",
+     "A car hit another car and caught fire"),
+]
+for hi, en in PARITY_CASES:
+    r_hi = classifier.classify({"description": hi})
+    r_en = classifier.classify({"description": en})
+    st_hi = r_hi.record["subType"] if r_hi.record else None
+    st_en = r_en.record["subType"] if r_en.record else None
+    check(f"Hindi/English parity: {en!r} -> same subType ({st_hi!r} == {st_en!r})",
+          st_hi == st_en)
+
 print("\nALL TESTS PASSED")
