@@ -69,6 +69,46 @@ billing is linked — that fails closed the same way as a missing key, not silen
 whether local extraction also caught the same signal). `GET /debug/gemini` makes one trivial
 call and reports the real error (bad key, quota, billing) if you need to diagnose it.
 
+## Voice streaming (Google Cloud Speech-to-Text V2 / Chirp)
+
+`GET/WS /ws/voice` — replaces the old browser Web Speech API entirely. The browser streams
+raw PCM16/16kHz/mono microphone audio directly to this WebSocket (see
+`src/hooks/useVoiceInput.ts` on the Next.js side); `severity_engine/voice_stream.py` forwards
+it to Speech-to-Text V2's `StreamingRecognize` (Chirp 2, English + Hindi, automatic
+punctuation) and relays `{"type":"interim"|"final","text":...}` events back as they arrive.
+Vercel serverless functions can't hold a WebSocket open, so the browser connects to this
+service directly — see `NEXT_PUBLIC_VOICE_STREAM_URL` in `.env.example`.
+
+Credentials (checked in this order, first match wins — see `voice_stream.py` for the exact
+logic):
+1. `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64` — base64-encoded service account JSON. **Use this in
+   production (Railway)**: `base64 -i path/to/key.json | tr -d '\n'`, paste the output as a
+   Railway environment variable.
+2. `GOOGLE_SERVICE_ACCOUNT_JSON` — the same JSON unencoded, if base64 is inconvenient.
+3. A local file (default `~/Downloads/trans-sahayak-8f5e1c61e87e.json`, override via
+   `GOOGLE_SERVICE_ACCOUNT_LOCAL_PATH`) — **local dev only**, never set in production.
+
+This is deliberately explicit rather than bare `gcloud auth login` / ambient ADC discovery —
+credentials are either configured or they're not, with a clear error either way, not a silent
+"works on my machine" surprise.
+
+**Required GCP setup** (one-time, on whichever project the service account belongs to):
+```bash
+gcloud services enable speech.googleapis.com --project=<your-project-id>
+gcloud projects add-iam-policy-binding <your-project-id> \
+  --member="serviceAccount:<your-service-account-email>" \
+  --role="roles/speech.client"
+```
+(or the Console equivalents: APIs & Services → Library → enable "Cloud Speech-to-Text API";
+IAM & Admin → IAM → find the service account → add the "Cloud Speech Client" role.) Chirp is a
+regional model — this integration talks to the `us-central1` regional endpoint by default
+(`GOOGLE_SPEECH_LOCATION` to change it), which requires enabling the API and granting the role
+before any request will succeed — a `403 PERMISSION_DENIED` naming
+`speech.recognizers.recognize` means this step hasn't been done yet on that project.
+
+Speech-to-Text V2/Chirp is a paid, metered API — separate billing/quota from the Gemini setup
+above, even if you reuse the same GCP project.
+
 ## Wiring into your existing POC (local dev)
 
 1. Run this engine locally on port 8000 (above).
@@ -95,11 +135,18 @@ already set up for Railway:
 4. (Optional) Add `GEMINI_API_KEY` as a Railway environment variable for a bonus second opinion
    on classification/hazard signals — not required. Local NLP already handles FIRE/hazmat/
    road-blocked dispatch from free text with no key configured at all.
-5. In your **Vercel** project → Settings → Environment Variables, set
-   `SEVERITY_ENGINE_URL` = the Railway URL from step 2 (no trailing slash), for Production
-   (and Preview if you want PR previews to hit the same engine). Redeploy.
-6. `/api/assess` in the Next.js app will now reach the real engine instead of falling back
-   to the "severity engine unreachable — treat as HIGH" stub.
+5. Add `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64` as a Railway environment variable (see "Voice
+   streaming" above) — **required** for voice input to work at all in production; unlike
+   Gemini, there's no local fallback for speech recognition.
+6. In your **Vercel** project → Settings → Environment Variables, set:
+   - `SEVERITY_ENGINE_URL` = the Railway URL from step 2 (no trailing slash), `https://...`.
+   - `NEXT_PUBLIC_VOICE_STREAM_URL` = the same Railway domain with `wss://` and `/ws/voice`,
+     e.g. `wss://transport-sahayak-severity.up.railway.app/ws/voice`.
+   Set both for Production (and Preview if you want PR previews to hit the same engine), then
+   redeploy.
+7. `/api/assess` in the Next.js app will now reach the real engine instead of falling back
+   to the "severity engine unreachable — treat as HIGH" stub, and the Voice report mode will
+   stream to Speech-to-Text V2 instead of the browser's (now-removed) built-in recognizer.
 
 Note: Railway redeploys this service whenever anything in the repo changes, including
 Next.js–only commits — harmless (same build, no code difference for this service) but worth
@@ -108,7 +155,7 @@ knowing if you see redeploys you didn't expect.
 ## Files
 
 ```
-app.py                         FastAPI wrapper (/health /subtypes /assess)
+app.py                         FastAPI wrapper (/health /subtypes /assess /ws/voice)
 demo.py                        offline live-demo script
 tests.py                       determinism + cost guardrail tests
 requirements.txt
@@ -122,6 +169,8 @@ severity_engine/
   gemini_client.py             OPTIONAL bonus layer: classify_with_gemini (record escalation) +
                                 extract_hazard_signals (free-text hazard extraction) — both
                                 graceful if no key/failure, never required
+  voice_stream.py              Speech-to-Text V2 (Chirp) streaming bridge for /ws/voice —
+                                credential loading + StreamingRecognize forwarding
   engine.py                    orchestrator (rule-first; local NLP primary, LLM only reads as
                                 a bonus, neither ever decides severity/dispatch)
   data/accident_index.json     470-row rule book (your Excel, structured)

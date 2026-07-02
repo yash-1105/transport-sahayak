@@ -8,10 +8,13 @@ Run locally (for tomorrow's demo):
 Your existing Next.js /api/assess route calls POST http://localhost:8000/assess.
 No new deployment required — this runs alongside your POC on localhost.
 """
+import asyncio
+import logging
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from google.api_core.exceptions import GoogleAPIError
 from pydantic import BaseModel
 
 from severity_engine import engine
@@ -22,6 +25,9 @@ from severity_engine.classifier import (
     get_subtypes_for as _get_subtypes_for,
     guess as _clf_guess,
 )
+from severity_engine.voice_stream import SpeechCredentialsError, stream_transcripts
+
+logger = logging.getLogger("app")
 
 app = FastAPI(title="Transport Sahayak — Rule-First Severity Engine", version="1.0")
 
@@ -123,3 +129,81 @@ def assess(req: AssessRequest):
         req.signals.model_dump(),
         req.location.model_dump() if req.location else None,
     )
+
+
+async def _safe_send_json(websocket: WebSocket, payload: dict) -> None:
+    """Best-effort send — the socket may already be closing/closed by the
+    time an error is ready to report; never let that raise a second error."""
+    try:
+        await websocket.send_json(payload)
+    except Exception:
+        logger.debug("Could not send message on /ws/voice (socket likely closed)", exc_info=True)
+
+
+@app.websocket("/ws/voice")
+async def voice_stream_ws(websocket: WebSocket) -> None:
+    """
+    Streaming speech-to-text over WebSocket, backed by Google Cloud
+    Speech-to-Text V2 (Chirp) — see severity_engine/voice_stream.py.
+
+    Client protocol: after the handshake, send raw PCM16/16kHz/mono audio as
+    binary WebSocket frames, in small chunks, for as long as recording is
+    active; close the socket to signal "stop" (no separate stop message).
+    Server sends JSON text frames back: {"type": "interim", "text": "..."},
+    {"type": "final", "text": "..."}, or {"type": "error", "message": "..."}.
+    """
+    await websocket.accept()
+    logger.info("Client connected to /ws/voice")
+
+    audio_queue: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
+    chunks_received = 0
+
+    async def receive_loop() -> None:
+        nonlocal chunks_received
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                chunks_received += 1
+                await audio_queue.put(data)
+        except WebSocketDisconnect:
+            logger.info("Client disconnected from /ws/voice (%d chunk(s) received)", chunks_received)
+        except Exception:
+            logger.exception("Error receiving audio on /ws/voice")
+        finally:
+            await audio_queue.put(None)  # sentinel: tells audio_iterator to stop
+
+    async def audio_iterator():
+        while True:
+            chunk = await audio_queue.get()
+            if chunk is None:
+                break
+            yield chunk
+
+    receive_task = asyncio.create_task(receive_loop())
+
+    try:
+        async for event in stream_transcripts(audio_iterator()):
+            await _safe_send_json(websocket, event)
+    except SpeechCredentialsError as e:
+        logger.error("Speech-to-Text credentials error: %s", e)
+        await _safe_send_json(
+            websocket, {"type": "error", "message": "Speech recognition is not configured on the server."}
+        )
+    except GoogleAPIError as e:
+        logger.exception("Google Speech-to-Text API error")
+        await _safe_send_json(websocket, {"type": "error", "message": f"Speech recognition failed: {e}"})
+    except WebSocketDisconnect:
+        logger.info("Client disconnected from /ws/voice mid-stream")
+    except Exception:
+        logger.exception("Unexpected error on /ws/voice")
+        await _safe_send_json(
+            websocket, {"type": "error", "message": "Unexpected server error during speech recognition."}
+        )
+    finally:
+        receive_task.cancel()
+        if chunks_received == 0:
+            logger.info("No audio received on /ws/voice before the stream ended (empty recording)")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
