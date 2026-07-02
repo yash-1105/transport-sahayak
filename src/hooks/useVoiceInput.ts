@@ -35,6 +35,14 @@ const ERROR_MSGS: Record<string, string> = {
 const WORKLET_URL = "/audio/pcm16-worklet.js";
 const WORKLET_NAME = "pcm16-processor";
 const TARGET_SAMPLE_RATE = 16000;
+// Sent as a text frame to tell the server "no more audio is coming" without
+// closing the socket — closing immediately races the server's in-flight
+// final transcript and can silently drop it (confirmed while testing: a
+// full sentence never made it back because the client had already hung up).
+const END_OF_AUDIO_SIGNAL = "__end__";
+// Safety net: force-close if the server hasn't closed on its own by then
+// (e.g. it hung, or the end-of-audio signal never arrived).
+const STOP_GRACE_MS = 5000;
 
 interface TranscriptEvent {
   type: "interim" | "final" | "error";
@@ -42,8 +50,16 @@ interface TranscriptEvent {
   message?: string;
 }
 
-function getVoiceStreamUrl(): string | null {
-  return process.env.NEXT_PUBLIC_VOICE_STREAM_URL || null;
+// Chirp 2 doesn't support recognizing English and Hindi simultaneously
+// within one request on this project's setup (confirmed against the real
+// API — see severity_engine/voice_stream.py) — the selected locale applies
+// to the whole recording session, same as the previous browser-API hook's
+// per-session `rec.lang`, so it's passed as a query param on the WS URL.
+function getVoiceStreamUrl(locale: VoiceLocale): string | null {
+  const base = process.env.NEXT_PUBLIC_VOICE_STREAM_URL;
+  if (!base) return null;
+  const separator = base.includes("?") ? "&" : "?";
+  return `${base}${separator}locale=${encodeURIComponent(locale)}`;
 }
 
 function isSupported(): boolean {
@@ -72,7 +88,10 @@ export function useVoiceInput(): UseVoiceInput {
   // a newer session's resources, or writing state after stop() already ran.
   const sessionIdRef = useRef(0);
 
-  const teardown = useCallback(() => {
+  const stopCapture = useCallback(() => {
+    // Stops the mic/audio pipeline only — deliberately leaves the WebSocket
+    // alone so a caller can decide whether to close it immediately (hard
+    // error) or let the server drain its final result first (normal stop).
     workletNodeRef.current?.port.close();
     workletNodeRef.current?.disconnect();
     workletNodeRef.current = null;
@@ -86,7 +105,12 @@ export function useVoiceInput(): UseVoiceInput {
       });
     }
     audioContextRef.current = null;
+  }, []);
 
+  // Immediate, unconditional teardown including the socket — used for hard-
+  // error paths where there's no in-flight transcript worth waiting for.
+  const teardown = useCallback(() => {
+    stopCapture();
     if (wsRef.current) {
       const ws = wsRef.current;
       wsRef.current = null;
@@ -98,27 +122,41 @@ export function useVoiceInput(): UseVoiceInput {
         ws.close();
       }
     }
-  }, []);
+  }, [stopCapture]);
 
   const stop = useCallback(() => {
     sessionIdRef.current += 1; // invalidate any in-flight start()
-    teardown();
-    setListening(false);
-    setInterimTranscript("");
-  }, [teardown]);
+    stopCapture();
+
+    const ws = wsRef.current;
+    if (!ws) {
+      setListening(false);
+      setInterimTranscript("");
+      return;
+    }
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(END_OF_AUDIO_SIGNAL);
+      setTimeout(() => {
+        if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
+          ws.close(); // safety net — server should have closed by now
+        }
+      }, STOP_GRACE_MS);
+    } else {
+      wsRef.current = null;
+      setListening(false);
+      setInterimTranscript("");
+    }
+    // listening/interimTranscript for the normal path are updated by
+    // ws.onclose once the server has flushed the final transcript and closed.
+  }, [stopCapture]);
 
   const start = useCallback(
-    (_locale: VoiceLocale) => {
-      // Both supported languages (English + Hindi) are always recognized
-      // together server-side (see severity_engine/voice_stream.py's
-      // _LANGUAGE_CODES) — the locale argument is kept for interface
-      // compatibility with the previous browser-API-backed hook, which used
-      // it to pick a single recognition language.
+    (locale: VoiceLocale) => {
       if (!supported) {
         setError(ERROR_MSGS["audio-capture"]);
         return;
       }
-      const wsUrl = getVoiceStreamUrl();
+      const wsUrl = getVoiceStreamUrl(locale);
       if (!wsUrl) {
         setError(ERROR_MSGS["not-configured"]);
         return;
@@ -183,6 +221,7 @@ export function useVoiceInput(): UseVoiceInput {
         };
 
         ws.onclose = () => {
+          if (wsRef.current === ws) wsRef.current = null;
           if (isStale()) return;
           setListening(false);
           setInterimTranscript("");
@@ -220,13 +259,13 @@ export function useVoiceInput(): UseVoiceInput {
             } catch {
               if (isStale()) return;
               setError("Could not start audio capture in this browser.");
-              stop();
+              teardown(); // hard failure — no in-flight transcript worth waiting for
             }
           })();
         };
       })();
     },
-    [supported, stop]
+    [supported, teardown]
   );
 
   const clearTranscript = useCallback(() => {

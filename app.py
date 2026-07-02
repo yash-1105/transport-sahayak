@@ -25,8 +25,16 @@ from severity_engine.classifier import (
     get_subtypes_for as _get_subtypes_for,
     guess as _clf_guess,
 )
-from severity_engine.voice_stream import SpeechCredentialsError, stream_transcripts
+from severity_engine.voice_stream import (
+    SUPPORTED_LANGUAGES,
+    SpeechCredentialsError,
+    stream_transcripts,
+)
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 logger = logging.getLogger("app")
 
 app = FastAPI(title="Transport Sahayak — Rule-First Severity Engine", version="1.0")
@@ -146,14 +154,28 @@ async def voice_stream_ws(websocket: WebSocket) -> None:
     Streaming speech-to-text over WebSocket, backed by Google Cloud
     Speech-to-Text V2 (Chirp) — see severity_engine/voice_stream.py.
 
-    Client protocol: after the handshake, send raw PCM16/16kHz/mono audio as
-    binary WebSocket frames, in small chunks, for as long as recording is
-    active; close the socket to signal "stop" (no separate stop message).
-    Server sends JSON text frames back: {"type": "interim", "text": "..."},
+    Client protocol: connect with ?locale=en-IN or ?locale=hi-IN (defaults to
+    en-IN if omitted/unrecognized — English and Hindi are the only two
+    supported languages; Chirp 2 doesn't support recognizing both at once in
+    a single request on this project, see voice_stream.py, so the reporter's
+    selected language applies to the whole recording session). After the
+    handshake, send raw PCM16/16kHz/mono audio as binary WebSocket frames, in
+    small chunks, for as long as recording is active; send any text frame
+    (the client sends "__end__") to signal "no more audio" WITHOUT closing
+    the socket — the server needs a beat to flush the last transcript back
+    before the connection goes away, so it closes the socket itself once
+    streaming is done. Abruptly closing from the client works too (handled
+    as a normal disconnect) but risks losing an in-flight final result — this
+    raced and silently dropped the last utterance during testing, hence the
+    explicit end-of-audio signal instead of relying on close alone. Server
+    sends JSON text frames back: {"type": "interim", "text": "..."},
     {"type": "final", "text": "..."}, or {"type": "error", "message": "..."}.
     """
     await websocket.accept()
-    logger.info("Client connected to /ws/voice")
+    language_code = websocket.query_params.get("locale", "")
+    if language_code not in SUPPORTED_LANGUAGES:
+        language_code = "en-IN"
+    logger.info("Client connected to /ws/voice (language=%s)", language_code)
 
     audio_queue: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
     chunks_received = 0
@@ -162,9 +184,18 @@ async def voice_stream_ws(websocket: WebSocket) -> None:
         nonlocal chunks_received
         try:
             while True:
-                data = await websocket.receive_bytes()
-                chunks_received += 1
-                await audio_queue.put(data)
+                message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    break
+                if message.get("bytes") is not None:
+                    chunks_received += 1
+                    await audio_queue.put(message["bytes"])
+                elif message.get("text") is not None:
+                    # any text frame means "no more audio" — end the request
+                    # stream so Speech-to-Text can finalize and we can flush
+                    # the last result back before the socket closes.
+                    logger.info("Received end-of-audio signal on /ws/voice")
+                    break
         except WebSocketDisconnect:
             logger.info("Client disconnected from /ws/voice (%d chunk(s) received)", chunks_received)
         except Exception:
@@ -182,7 +213,7 @@ async def voice_stream_ws(websocket: WebSocket) -> None:
     receive_task = asyncio.create_task(receive_loop())
 
     try:
-        async for event in stream_transcripts(audio_iterator()):
+        async for event in stream_transcripts(audio_iterator(), language_code=language_code):
             await _safe_send_json(websocket, event)
     except SpeechCredentialsError as e:
         logger.error("Speech-to-Text credentials error: %s", e)

@@ -71,13 +71,30 @@ call and reports the real error (bad key, quota, billing) if you need to diagnos
 
 ## Voice streaming (Google Cloud Speech-to-Text V2 / Chirp)
 
-`GET/WS /ws/voice` — replaces the old browser Web Speech API entirely. The browser streams
-raw PCM16/16kHz/mono microphone audio directly to this WebSocket (see
+`WS /ws/voice?locale=en-IN|hi-IN` — replaces the old browser Web Speech API entirely. The
+browser streams raw PCM16/16kHz/mono microphone audio directly to this WebSocket (see
 `src/hooks/useVoiceInput.ts` on the Next.js side); `severity_engine/voice_stream.py` forwards
-it to Speech-to-Text V2's `StreamingRecognize` (Chirp 2, English + Hindi, automatic
-punctuation) and relays `{"type":"interim"|"final","text":...}` events back as they arrive.
-Vercel serverless functions can't hold a WebSocket open, so the browser connects to this
-service directly — see `NEXT_PUBLIC_VOICE_STREAM_URL` in `.env.example`.
+it to Speech-to-Text V2's `StreamingRecognize` (Chirp 2, automatic punctuation) and relays
+`{"type":"interim"|"final","text":...}` events back as they arrive. Vercel serverless functions
+can't hold a WebSocket open, so the browser connects to this service directly — see
+`NEXT_PUBLIC_VOICE_STREAM_URL` in `.env.example`.
+
+**Language is selected per recording session, not simultaneously.** English and Hindi are the
+only two supported languages (matching the `locale` query param), but Chirp 2 doesn't support
+recognizing both at once in a single request on this project: multi-language mode is only
+available in the `eu`/`global`/`us` multi-region locations, and `chirp_2` isn't deployed to any
+of them there — only to specific single regions like `us-central1` (both confirmed via real
+400s while building this). So the reporter's selected language (the existing "English"/"हिंदी"
+toggle already in the UI) applies to the whole recording, same as the old browser API's
+per-session `rec.lang`.
+
+**Client protocol:** after the handshake, send binary PCM16 audio frames while recording; send
+any text frame (the client sends `"__end__"`) to signal "no more audio" *without* closing the
+socket — the server needs a moment to flush the final transcript before the connection goes
+away, so it closes the socket itself once done. Closing from the client immediately (skipping
+the text signal) is handled as a normal disconnect, but risks losing an in-flight final result —
+this raced and silently dropped the last utterance during testing, which is why the explicit
+signal exists instead of relying on close alone.
 
 Credentials (checked in this order, first match wins — see `voice_stream.py` for the exact
 logic):
@@ -100,10 +117,11 @@ gcloud projects add-iam-policy-binding <your-project-id> \
   --role="roles/speech.client"
 ```
 (or the Console equivalents: APIs & Services → Library → enable "Cloud Speech-to-Text API";
-IAM & Admin → IAM → find the service account → add the "Cloud Speech Client" role.) Chirp is a
-regional model — this integration talks to the `us-central1` regional endpoint by default
-(`GOOGLE_SPEECH_LOCATION` to change it), which requires enabling the API and granting the role
-before any request will succeed — a `403 PERMISSION_DENIED` naming
+IAM & Admin → IAM → find the service account → add the "Cloud Speech Client" role.) Chirp 2 is
+a regional model — this integration talks to the `us-central1` regional endpoint by default
+(`GOOGLE_SPEECH_LOCATION` to change it — `chirp_2` is only deployed to specific regions, not
+`eu`/`global`/`us`, see "Voice streaming" above), which requires enabling the API and granting
+the role before any request will succeed — a `403 PERMISSION_DENIED` naming
 `speech.recognizers.recognize` means this step hasn't been done yet on that project.
 
 Speech-to-Text V2/Chirp is a paid, metered API — separate billing/quota from the Gemini setup
