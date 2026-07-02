@@ -84,4 +84,22 @@ o = engine.assess({"subType": "Mob Blocking Highway / Road Roko"}, {"casualties"
 check("any casualty always gets AMBULANCE dispatched",
       any(a["code"] == "AMBULANCE" for a in o["agencies"]))
 
+# classifier.py originally had zero Hindi awareness at all -- any Hindi report
+# scored 0 token overlap on every record (Devanagari never matches the
+# English-only index) and fell through to an arbitrary placeholder record
+# regardless of what was actually described. hindi_glossary.json fixes this;
+# these check real understanding survives (non-zero, non-placeholder matches
+# across distinct categories), not just that it doesn't crash.
+r = classifier.classify({"description": "ड्राइवर को दिल का दौरा पड़ गया है, वह बेहोश है"})
+check("Hindi cardiac-arrest description classifies correctly",
+      r.record is not None and "Cardiac" in r.record["subType"])
+
+r = classifier.classify({"description": "सड़क पर हाथी आ गया और बाइक से टकरा गया"})
+check("Hindi elephant-strike description classifies correctly",
+      r.record is not None and "Elephant" in r.record["subType"])
+
+o = engine.assess({"description": "दो गाड़ियों की टक्कर हो गई है और आग लग गई।"}, {}, None)
+check("Hindi collision+fire description still dispatches FIRE via local hazard extraction",
+      any(a["code"] == "FIRE" for a in o["agencies"]))
+
 print("\nALL TESTS PASSED")

@@ -3,6 +3,7 @@
 
 import INDEX_RAW from "../../severity_engine/data/accident_index.json";
 import CATEGORY_GROUPS_RAW from "../../severity_engine/data/category_groups.json";
+import HINDI_GLOSSARY_RAW from "../../severity_engine/data/hindi_glossary.json";
 
 interface IndexRecord {
   category: string;
@@ -30,26 +31,13 @@ const HINDI_STOP = new Set([
 
 // ── Hindi → English normalization ─────────────────────────────────────────────
 // Translates key Hindi accident terms to English equivalents before tokenising,
-// so the existing English-indexed scoring still works for Hindi input.
+// so the existing English-indexed scoring still works for Hindi input. Shared
+// with severity_engine/classifier.py (Python) via hindi_glossary.json — see
+// that file's _meta note for how targets were chosen (must survive the
+// stopword filter below AND have real signal in the corpus; e.g. Hindi
+// collision verbs map to "struck", not the stopworded "collision").
 
-const HINDI_TO_EN: [string, string][] = [
-  ["टक्कर", "collision"],    ["दुर्घटना", "crash"],    ["हादसा", "accident"],
-  ["पलटना", "overturn"],     ["पलट", "overturn"],      ["उलट", "rollover"],
-  ["टकराना", "collision"],   ["टकरा", "collision"],
-  ["आग", "fire"],             ["जलना", "fire"],         ["विस्फोट", "explosion"],
-  ["ईंधन रिसाव", "fuel leak"],
-  ["घायल", "injury"],        ["चोट", "injury"],        ["बेहोश", "unconscious"],
-  ["फँसा", "trapped"],       ["फंसा", "trapped"],      ["खून", "blood"],
-  ["मृत", "dead"],            ["हताहत", "casualty"],   ["जख्मी", "injury"],
-  ["गाड़ी", "vehicle"],      ["वाहन", "vehicle"],      ["ट्रक", "truck"],
-  ["बस", "bus"],              ["बाइक", "motorcycle"],   ["मोटरसाइकिल", "motorcycle"],
-  ["टेंपो", "tempo"],        ["ऑटो", "auto rickshaw"],
-  ["खराब", "breakdown"],     ["पंचर", "puncture"],     ["टायर", "tyre"],
-  ["ब्रेक", "brake"],        ["इंजन", "engine"],       ["टायर फटा", "tyre burst"],
-  ["गड्ढा", "pothole"],      ["बाढ़", "flood"],        ["भूस्खलन", "landslide"],
-  ["पेड़ गिरा", "fallen tree"], ["पत्थर गिरा", "rockfall"],
-  ["सड़क", "road"],          ["राजमार्ग", "highway"],
-];
+const HINDI_TO_EN = (HINDI_GLOSSARY_RAW as unknown as { pairs: [string, string][] }).pairs;
 
 function normalizeHindi(text: string): string {
   let out = text;

@@ -21,6 +21,8 @@ with open(os.path.join(_DATA_DIR, "accident_index.json"), encoding="utf-8") as _
 with open(os.path.join(_DATA_DIR, "category_groups.json"), encoding="utf-8") as _f:
     _CATEGORY_GROUPS = json.load(_f)
     _CATEGORY_GROUPS.pop("_meta", None)
+with open(os.path.join(_DATA_DIR, "hindi_glossary.json"), encoding="utf-8") as _f:
+    _HINDI_GLOSSARY = json.load(_f)["pairs"]
 
 # ---- build a keyword index once at import ----
 _STOP = {
@@ -51,8 +53,25 @@ _SYNONYMS = [
 ]
 
 
+# ── Hindi → English normalization ─────────────────────────────────────────────
+# Applied before the English synonym pass and before lowercasing (Hindi has no
+# case, so order relative to .lower() doesn't matter for these substitutions
+# themselves, but they must run before _word_re only captures [a-z0-9]).
+# Shared with src/lib/incidentClassifier.ts (the /api/guess picker UI) via
+# hindi_glossary.json — see that file's _meta note for how targets were
+# chosen. Previously this classifier had zero Hindi awareness: any Hindi
+# report scored 0 token overlap on every record and fell through to whatever
+# arbitrary placeholder record classify() defaults to, regardless of what was
+# actually described.
+def _translate_hindi(text: str) -> str:
+    out = text or ""
+    for hi, en in _HINDI_GLOSSARY:
+        out = out.replace(hi, f" {en} ")
+    return out
+
+
 def _normalize(text: str) -> str:
-    out = (text or "").lower()
+    out = _translate_hindi(text).lower()
     for phrase, canonical in _SYNONYMS:
         out = out.replace(phrase, f" {canonical} ")
     return out

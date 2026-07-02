@@ -1,0 +1,81 @@
+{
+  "_meta": {
+    "note": "Hindi -> English normalization pairs applied (literal substring replace, longest-first) before tokenizing free text for incident-type classification. Shared by src/lib/incidentClassifier.ts (TS, the /api/guess picker UI) and severity_engine/classifier.py (Python, the actual /api/assess dispatch decision) so both understand Hindi consistently -- previously only the TS side had any Hindi support at all, and Python's classifier fell back to an arbitrary placeholder record for every Hindi report.",
+    "targetSelection": "English targets are chosen to survive the English stopword filter (generic terms like 'collision'/'vehicle'/'accident'/'road' are deliberately stopworded since they're too common to discriminate between incident types) AND to have real signal in the accident_index.json corpus -- e.g. 'struck' appears 22x in cause/subType text vs 'collided' only 1x, so Hindi collision verbs map to 'struck', not 'collided'. Common noun inflections (oblique plural etc.) are listed as explicit separate entries rather than handled by a stemmer, to avoid over-stripping risk.",
+    "order": "Longest Hindi phrase first within each group so multi-word phrases match before a shorter phrase they contain could partially match instead."
+  },
+  "pairs": [
+    ["ईंधन रिसाव", "fuel leak"],
+    ["गैस रिसाव", "gas leak"],
+    ["टायर फटा", "tyre burst"],
+    ["पेड़ गिरा", "fallen tree"],
+    ["पत्थर गिरा", "rockfall"],
+    ["चट्टान गिरी", "rockfall"],
+    ["आग लग गई", "fire"],
+    ["आग लगी", "fire"],
+    ["सांस नहीं ले पा", "not breathing"],
+    ["दिल का दौरा", "heart attack"],
+    ["ब्रेक फेल", "brake failure"],
+    ["इंजन फेल", "engine failure"],
+    ["इंजन बंद", "engine failure"],
+    ["पैदल यात्री", "pedestrian"],
+    ["साइकिल सवार", "cyclist"],
+    ["ऑटो रिक्शा", "auto rickshaw"],
+    ["ऑटोरिक्शा", "auto rickshaw"],
+
+    ["टक्कर", "struck"], ["टकराना", "struck"], ["टकरा", "struck"], ["टकराई", "struck"], ["टकराया", "struck"],
+    ["भिड़ंत", "struck"], ["ठोकर", "struck"], ["कुचल", "crushed"], ["कुचला", "crushed"],
+    ["रौंद", "ran over"], ["रौंदा", "ran over"],
+
+    ["गाड़ियों", "vehicles"], ["गाड़ियां", "vehicles"], ["गाड़ियाँ", "vehicles"], ["गाड़ी", "vehicles"],
+    ["वाहनों", "vehicles"], ["वाहन", "vehicles"],
+    ["ट्रकों", "truck"], ["ट्रक", "truck"],
+    ["बसों", "bus"], ["बस", "bus"],
+    ["बाइकों", "motorcycle"], ["बाइक", "motorcycle"],
+    ["मोटरसाइकिलों", "motorcycle"], ["मोटरसाइकिल", "motorcycle"],
+    ["स्कूटर", "scooter"], ["टेंपो", "tempo"],
+    ["साइकिलों", "bicycle"], ["साइकिल", "bicycle"],
+    ["ट्रेलर", "trailer"], ["टैंकरों", "tanker"], ["टैंकर", "tanker"],
+
+    ["पलटना", "rollover"], ["पलटी", "rollover"], ["पलटा", "rollover"], ["पलट", "rollover"],
+    ["उलटना", "rollover"], ["उलट", "rollover"],
+    ["गिर गई", "fell"], ["गिर गया", "fell"], ["गिरना", "fell"], ["गिर", "fell"],
+    ["खाई में गिर", "fell into ditch"],
+
+    ["आग", "fire"], ["जल रहा", "fire"], ["जल रही", "fire"], ["जलना", "fire"], ["जल गई", "fire"], ["जल गया", "fire"],
+    ["विस्फोट", "explosion"], ["धमाका", "explosion"], ["फट गया", "burst"], ["फटना", "burst"],
+    ["धुआं", "smoke"], ["धुआँ", "smoke"], ["केमिकल", "chemical"], ["रसायन", "chemical"],
+    ["जहरीला", "toxic"], ["विषैला", "toxic"],
+
+    ["घायल हो गया", "injured"], ["घायल हो गई", "injured"], ["घायल", "injured"], ["चोट लगी", "injured"], ["चोट", "injured"],
+    ["बेहोश हो गया", "unconscious"], ["बेहोश", "unconscious"],
+    ["खून बह रहा", "bleeding"], ["खून", "bleeding"],
+    ["मृत्यु", "casualty"], ["मर गया", "casualty"], ["मृत", "casualty"], ["हताहत", "casualty"], ["जख्मी", "injured"],
+    ["फंस गया", "trapped"], ["फँसा", "trapped"], ["फंसा", "trapped"],
+    ["दब गया", "pinned"], ["दबा", "pinned"],
+    ["गर्भवती", "pregnant"], ["बच्चों", "child"], ["बच्चे", "child"], ["बच्चा", "child"], ["बुजुर्ग", "elderly"],
+
+    ["खराब हो गई", "breakdown"], ["खराब", "breakdown"], ["पंचर", "puncture"],
+    ["ब्रेक", "brake"], ["इंजन", "engine"], ["ओवरहीट", "overheating"],
+    ["रुक गई", "stalled"], ["गाड़ी बंद", "stalled"],
+    ["टायर", "tyre"], ["स्टीयरिंग", "steering"],
+
+    ["बाढ़ आ गई", "flood"], ["बाढ़", "flood"], ["कोहरा", "fog"], ["धुंध", "fog"],
+    ["भारी बारिश", "rain"], ["बारिश", "rain"], ["तूफान", "storm"], ["आंधी", "storm"],
+    ["बर्फ", "snow"], ["भूस्खलन", "landslide"], ["भूकंप", "earthquake"],
+
+    ["गड्ढे", "pothole"], ["गड्ढा", "pothole"], ["मलबा", "debris"],
+    ["सड़क क्षतिग्रस्त", "road damage"], ["सड़क टूटी", "road damage"], ["बैरियर टूटा", "barrier damage"],
+
+    ["जानवरों", "animal"], ["जानवर", "animal"], ["हाथियों", "elephant"], ["हाथी", "elephant"],
+    ["तेंदुआ", "leopard"], ["गायों", "cow"], ["गाय", "cow"], ["भैंस", "buffalo"],
+    ["कुत्ते", "dog"], ["कुत्ता", "dog"], ["बंदर", "monkey"], ["नीलगाय", "nilgai"],
+
+    ["डकैती", "robbery"], ["लूट", "robbery"], ["चोरी", "theft"],
+    ["मारपीट", "fight"], ["झगड़ा", "fight"], ["हथियार", "weapon"], ["हमला", "attack"],
+
+    ["यात्रियों", "passenger"], ["यात्री", "passenger"], ["ड्राइवर", "driver"], ["चालक", "driver"],
+    ["सुरंग", "tunnel"], ["फ्लाईओवर", "bridge"], ["पुल", "bridge"], ["टोल प्लाजा", "toll"],
+    ["सड़क", "road"], ["राजमार्ग", "highway"], ["दुर्घटना", "accident"], ["हादसा", "accident"]
+  ]
+}
