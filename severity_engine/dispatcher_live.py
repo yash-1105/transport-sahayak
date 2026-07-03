@@ -280,7 +280,7 @@ def _system_instruction(language_code: str) -> str:
 
 LANGUAGE: Conduct this entire conversation in {lang_name} only. If the caller speaks a different language, gently continue in {lang_name} rather than switching -- never randomly switch languages yourself.
 
-TONE: Calm, brief, professional, like a real emergency dispatcher. Ask one question at a time. Keep every response to 1-2 short sentences -- never make the caller wait through a long speech.
+TONE: Calm, brief, professional, like a real emergency dispatcher. Ask one question at a time. Keep every response to 1-2 short sentences -- never make the caller wait through a long speech. Speak a little slower than normal conversational pace, and pronounce each word clearly -- the caller may be stressed or on a poor phone line, so clarity matters more than speed. Never repeat a sentence you have already said unless the caller explicitly asks you to.
 
 OPENING (the very first thing you do, before the caller says anything): as soon as the call connects, say this exact sentence, word for word, with nothing before it and nothing added: "{opening_line}" Immediately after saying it, call get_current_location (do not wait to be asked), then briefly mention the location it returns ("I have your location as X, is that right?") and ask what happened. If get_current_location comes back unavailable, tell the caller to use the map-pin button to mark their location -- do not try to guess a location from a spoken description.
 
@@ -457,6 +457,23 @@ class DispatcherSession:
             system_instruction=types.Content(parts=[types.Part(text=_system_instruction(self.state.language))]),
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            # Without headphones, the caller's mic inevitably picks up some of
+            # Gemini's own voice bleeding out of the speaker -- confirmed live
+            # this was being misread as the caller interrupting mid-sentence,
+            # which made the model re-say parts of what it had just said
+            # ("repeating sentences"). NO_INTERRUPTION plus a lower start-of-
+            # speech sensitivity stops server-side VAD from treating that
+            # echo as real speech. The frontend also stops transmitting mic
+            # audio while status is "speaking" (see useVoiceDispatcher.ts) as
+            # a second layer -- between the two, genuine caller barge-in is
+            # traded away deliberately in favor of not garbling the model's
+            # own speech, which matters more for a dispatch call.
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                ),
+                activity_handling=types.ActivityHandling.NO_INTERRUPTION,
+            ),
         )
 
     async def run(self) -> None:
@@ -474,7 +491,23 @@ class DispatcherSession:
                 turns=types.Content(role="user", parts=[types.Part(text="(The call has just connected. Begin now.)")]),
                 turn_complete=True,
             )
-            await asyncio.gather(self._pump_client_to_gemini(), self._pump_gemini_to_client())
+            # Run both pumps as cancellable tasks, not a plain gather -- if
+            # the client disconnects/ends the call, _pump_client_to_gemini
+            # returns, but _pump_gemini_to_client is blocked awaiting the
+            # NEXT Gemini message and would otherwise hang indefinitely,
+            # leaving the Live session (and its quota/cost) running forever
+            # server-side with nobody listening. Whichever pump finishes
+            # first, cancel the other so the `async with` block actually
+            # exits and the session closes.
+            client_task = asyncio.create_task(self._pump_client_to_gemini())
+            gemini_task = asyncio.create_task(self._pump_gemini_to_client())
+            _, pending = await asyncio.wait({client_task, gemini_task}, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
     async def _pump_client_to_gemini(self) -> None:
         assert self._live_session is not None

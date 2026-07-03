@@ -71,6 +71,10 @@ const WORKLET_URL = "/audio/pcm16-worklet.js";
 const WORKLET_NAME = "pcm16-processor";
 const TARGET_SAMPLE_RATE = 16000;
 const PLAYBACK_SAMPLE_RATE = 24000; // Gemini Live's fixed output rate, confirmed via live testing
+// Gemini Live's native-audio model has no API-level speaking-rate control, so
+// this is enforced client-side. A mild slowdown for clarity — low enough that
+// the pitch-lowering side effect of simple rate-based playback stays natural.
+const PLAYBACK_RATE = 0.88;
 const END_SIGNAL = JSON.stringify({ type: "end" });
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000];
@@ -118,6 +122,9 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
   const reconnectAttemptRef = useRef(0);
   const intentionalStopRef = useRef(false);
   const sessionIdRef = useRef(0);
+  // Mirrors `status` for the worklet's onmessage closure, which is created
+  // once in startCapture() and can't see fresh React state without this.
+  const statusRef = useRef<DispatcherStatus>("idle");
 
   // Playback scheduling state
   const playbackCtxRef = useRef<AudioContext | null>(null);
@@ -137,6 +144,10 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
       window.removeEventListener("online", goOnline);
     };
   }, []);
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const flushPlayback = useCallback(() => {
     activeSourcesRef.current.splice(0).forEach((src) => {
@@ -167,10 +178,13 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
 
     const source = ctx.createBufferSource();
     source.buffer = buffer;
+    source.playbackRate.value = PLAYBACK_RATE;
     source.connect(ctx.destination);
     const startAt = Math.max(ctx.currentTime, nextStartTimeRef.current);
     source.start(startAt);
-    nextStartTimeRef.current = startAt + buffer.duration;
+    // Slower playbackRate stretches actual duration beyond buffer.duration —
+    // must schedule off the real playback time or chunks start overlapping.
+    nextStartTimeRef.current = startAt + buffer.duration / PLAYBACK_RATE;
     activeSourcesRef.current.push(source);
     source.onended = () => {
       activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
@@ -309,6 +323,73 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
     [flushPlayback]
   );
 
+  const startCapture = useCallback(
+    async (sessionId: number, isStale: () => boolean) => {
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        });
+      } catch (err) {
+        if (isStale()) return;
+        const name = err instanceof DOMException ? err.name : "";
+        setError(
+          name === "NotAllowedError" || name === "PermissionDeniedError"
+            ? ERROR_MSGS["not-allowed"]
+            : name === "NotFoundError" || name === "DevicesNotFoundError"
+              ? ERROR_MSGS["audio-capture"]
+              : "Could not access the microphone. Check your device and try again."
+        );
+        setStatus("error");
+        return;
+      }
+      if (isStale()) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      streamRef.current = stream;
+
+      try {
+        const audioContext = new AudioContext();
+        if (isStale()) {
+          audioContext.close().catch(() => {});
+          return;
+        }
+        audioContextRef.current = audioContext;
+        await audioContext.audioWorklet.addModule(WORKLET_URL);
+        if (isStale()) return;
+
+        const source = audioContext.createMediaStreamSource(stream);
+        const workletNode = new AudioWorkletNode(audioContext, WORKLET_NAME, {
+          processorOptions: { targetSampleRate: TARGET_SAMPLE_RATE },
+        });
+        workletNodeRef.current = workletNode;
+
+        workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+          // Read wsRef.current fresh each call (not a captured `ws` param) so
+          // this same worklet keeps working after a reconnect swaps in a new
+          // socket, instead of silently sending into a closed one forever.
+          // Also don't transmit while Gemini is speaking/thinking -- without
+          // headphones the mic picks up its own voice, which the server was
+          // misreading as the caller interrupting and repeating sentences.
+          const ws = wsRef.current;
+          if (ws?.readyState === WebSocket.OPEN && statusRef.current === "listening") {
+            ws.send(e.data);
+          }
+        };
+
+        // Deliberately not connecting workletNode to audioContext.destination —
+        // only capturing the mic, never playing it back out.
+        source.connect(workletNode);
+      } catch {
+        if (isStale()) return;
+        setError("Could not start audio capture in this browser.");
+        setStatus("error");
+      }
+    },
+    []
+  );
+
   const connect = useCallback(
     (locale: VoiceLocale, sessionId: number, isReconnect: boolean) => {
       const isStale = () => sessionId !== sessionIdRef.current;
@@ -362,70 +443,10 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
 
       ws.onopen = () => {
         if (isReconnect) return; // mic capture is already running from the original start()
-        void startCapture(sessionId, isStale, ws);
+        void startCapture(sessionId, isStale);
       };
     },
-    [playChunk, handleServerEvent]
-  );
-
-  const startCapture = useCallback(
-    async (sessionId: number, isStale: () => boolean, ws: WebSocket) => {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-        });
-      } catch (err) {
-        if (isStale()) return;
-        const name = err instanceof DOMException ? err.name : "";
-        setError(
-          name === "NotAllowedError" || name === "PermissionDeniedError"
-            ? ERROR_MSGS["not-allowed"]
-            : name === "NotFoundError" || name === "DevicesNotFoundError"
-              ? ERROR_MSGS["audio-capture"]
-              : "Could not access the microphone. Check your device and try again."
-        );
-        setStatus("error");
-        return;
-      }
-      if (isStale()) {
-        stream.getTracks().forEach((t) => t.stop());
-        return;
-      }
-      streamRef.current = stream;
-
-      try {
-        const audioContext = new AudioContext();
-        if (isStale()) {
-          audioContext.close().catch(() => {});
-          return;
-        }
-        audioContextRef.current = audioContext;
-        await audioContext.audioWorklet.addModule(WORKLET_URL);
-        if (isStale()) return;
-
-        const source = audioContext.createMediaStreamSource(stream);
-        const workletNode = new AudioWorkletNode(audioContext, WORKLET_NAME, {
-          processorOptions: { targetSampleRate: TARGET_SAMPLE_RATE },
-        });
-        workletNodeRef.current = workletNode;
-
-        workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(e.data);
-          }
-        };
-
-        // Deliberately not connecting workletNode to audioContext.destination —
-        // only capturing the mic, never playing it back out.
-        source.connect(workletNode);
-      } catch {
-        if (isStale()) return;
-        setError("Could not start audio capture in this browser.");
-        setStatus("error");
-      }
-    },
-    []
+    [playChunk, handleServerEvent, startCapture]
   );
 
   const start = useCallback(
