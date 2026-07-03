@@ -125,6 +125,10 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
   // Mirrors `status` for the worklet's onmessage closure, which is created
   // once in startCapture() and can't see fresh React state without this.
   const statusRef = useRef<DispatcherStatus>("idle");
+  // Set once submit_incident has fired — the call should end after the
+  // model's current turn (e.g. a closing remark) finishes, not immediately
+  // mid-sentence, and not carry on any further after that.
+  const pendingEndAfterTurnRef = useRef(false);
 
   // Playback scheduling state
   const playbackCtxRef = useRef<AudioContext | null>(null);
@@ -255,7 +259,14 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           }
           break;
         case "turn_complete":
-          setStatus("listening");
+          if (pendingEndAfterTurnRef.current) {
+            // The report was submitted during (or just before) this turn —
+            // let the model's closing remark finish playing, then end the
+            // call outright rather than reopening the mic for more input.
+            stop();
+          } else {
+            setStatus("listening");
+          }
           break;
         case "interrupted":
           flushPlayback();
@@ -307,6 +318,13 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           break;
         }
         case "submitted":
+          // Do not reconnect once this call's job is done -- without this,
+          // the backend closing the session after submission looked to the
+          // reconnect logic like an unexpected drop, so it silently opened a
+          // brand new session (including a fresh opening greeting), which
+          // is why the agent appeared to "start speaking again" well after
+          // the report had already been submitted and assessed.
+          pendingEndAfterTurnRef.current = true;
           if (event.incident) cb.onSubmitReady(event.incident);
           break;
         case "error":
@@ -320,7 +338,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           break;
       }
     },
-    [flushPlayback]
+    [flushPlayback, stop]
   );
 
   const startCapture = useCallback(
@@ -457,6 +475,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
         return;
       }
       intentionalStopRef.current = false;
+      pendingEndAfterTurnRef.current = false;
       reconnectAttemptRef.current = 0;
       localeRef.current = locale;
       const sessionId = ++sessionIdRef.current;
