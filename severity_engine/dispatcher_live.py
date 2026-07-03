@@ -259,19 +259,34 @@ _TOOL_DECLARATIONS = [
 ]
 
 
+# The exact, mandatory opening line per language -- India's real national
+# highway helpline number is 1033, so this is treated like a scripted IVR
+# greeting rather than left to the model's own phrasing. Enforced via a hard
+# system-prompt instruction (see OPENING below) rather than backend-side TTS,
+# since it's spoken words with no downstream data implications (unlike
+# incident-type selection, which IS backend-validated) -- proportionate for
+# a PoC, matching the project's existing "prompt-constrain what's low-stakes,
+# code-validate what feeds real data" pattern.
+_OPENING_LINE = {
+    "en-IN": "Welcome to the 1033 Highway Helpline of India.",
+    "hi-IN": "भारत की 1033 हाईवे हेल्पलाइन में आपका स्वागत है।",
+}
+
+
 def _system_instruction(language_code: str) -> str:
     lang_name = "Hindi" if language_code == "hi-IN" else "English"
+    opening_line = _OPENING_LINE.get(language_code, _OPENING_LINE[_DEFAULT_LANGUAGE])
     return f"""You are an emergency dispatch call-taker for a road-accident first-response system in Assam, India. You are having a real-time voice conversation with someone reporting a road accident or emergency.
 
 LANGUAGE: Conduct this entire conversation in {lang_name} only. If the caller speaks a different language, gently continue in {lang_name} rather than switching -- never randomly switch languages yourself.
 
 TONE: Calm, brief, professional, like a real emergency dispatcher. Ask one question at a time. Keep every response to 1-2 short sentences -- never make the caller wait through a long speech.
 
+OPENING (the very first thing you do, before the caller says anything): as soon as the call connects, say this exact sentence, word for word, with nothing before it and nothing added: "{opening_line}" Immediately after saying it, call get_current_location (do not wait to be asked), then briefly mention the location it returns ("I have your location as X, is that right?") and ask what happened. If get_current_location comes back unavailable, tell the caller to use the map-pin button to mark their location -- do not try to guess a location from a spoken description.
+
 INCIDENT TYPE: Never guess or invent an incident type yourself. Always call search_incident_type with a description of what the caller told you, and refer to the incident only using the exact subType name it returns. If it doesn't sound right, call search_incident_categories to browse alternatives with the caller.
 
 FORM FILLING: Call update_form_field immediately every time the caller gives you a new piece of information -- INCLUDING conditions mentioned in passing, not just direct answers to your questions. If the caller mentions fire, hazmat, anyone trapped, consciousness, breathing, or bleeding ANYWHERE in what they say (even inside a general description), call update_form_field with field=flag for that condition right away -- do not wait for a dedicated question about it. Every tool response includes "still_missing" -- a list of what's not yet known. Use it to decide your next question and to know what NOT to ask again, so you never repeat a question the caller already answered.
-
-LOCATION: Call get_current_location once, early in the call. If it returns a location, just briefly confirm it ("I have your location as X, is that right?") instead of asking the caller to describe it. If it's unavailable, tell the caller to use the map-pin button to mark their location -- do not try to guess a location from a spoken description.
 
 FOLLOW-UP QUESTIONS: Once the incident type is confirmed, ask only about what "still_missing" shows, one thing at a time, phrased naturally for that kind of incident.
 
@@ -449,6 +464,16 @@ class DispatcherSession:
         async with client.aio.live.connect(model=_MODEL, config=self._build_config()) as live_session:
             self._live_session = live_session
             await self._safe_send_json({"type": "ready"})
+            # Gemini Live is reactive by default -- it won't speak until it
+            # receives input. The caller shouldn't have to speak first, so
+            # kick off the call with a synthetic system-directed turn (not
+            # real caller speech) instructing the model to begin its scripted
+            # opening now. Verified via live testing that this reliably
+            # triggers the model's first spoken turn immediately.
+            await live_session.send_client_content(
+                turns=types.Content(role="user", parts=[types.Part(text="(The call has just connected. Begin now.)")]),
+                turn_complete=True,
+            )
             await asyncio.gather(self._pump_client_to_gemini(), self._pump_gemini_to_client())
 
     async def _pump_client_to_gemini(self) -> None:
