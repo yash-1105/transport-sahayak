@@ -260,7 +260,7 @@ export interface AmbulanceEtaEstimate {
 export interface AccidentReport {
   id: string;
   timestamp: string; // ISO 8601
-  reportMode: "SOS" | "TEXT" | "VOICE";
+  reportMode: "SOS" | "TEXT" | "VOICE" | "DISPATCHER";
   location: GeoPoint;
   locationLabel: string;
   vehiclesInvolved: number | null;   // null when unknown (e.g. SOS)

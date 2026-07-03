@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useVoiceInput, type VoiceLocale } from "@/hooks/useVoiceInput";
+import { useVoiceDispatcher, type DispatcherSubmitPayload } from "@/hooks/useVoiceDispatcher";
+import { DispatcherSection } from "@/components/report/DispatcherSection";
 import { useEventLog } from "@/store/eventLog";
 import { reverseGeocode } from "@/lib/geocode";
 import { checkDuplicate, type DuplicateMatch } from "@/lib/dedup";
@@ -1216,7 +1218,7 @@ export interface ReportPanelProps {
   onAccidentSubmitted?: (r: AccidentReport) => void;
 }
 
-type ReportMode = "SOS" | "TEXT" | "VOICE" | "POTHOLE";
+type ReportMode = "SOS" | "TEXT" | "VOICE" | "DISPATCHER" | "POTHOLE";
 type PanelStatus = "IDLE" | "BUSY" | "ASSESSING" | "MATCHING" | "COMPLETE" | "ERROR" | "POTHOLE_DONE";
 
 export default function ReportPanel({
@@ -1243,11 +1245,48 @@ export default function ReportPanel({
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [dupMatch, setDupMatch] = useState<DuplicateMatch | null>(null);
   const [pendingIncident, setPendingIncident] = useState<AccidentReport | null>(null);
+  const [dispatcherLocation, setDispatcherLocation] = useState<{ point: GeoPoint; label: string } | null>(null);
 
   const [potholeDescription, setPotholeDescription] = useState("");
   const [potholeSeverity, setPotholeSeverity] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
 
   const voice = useVoiceInput();
+
+  function setFlag(f: string, active: boolean) {
+    setSelectedFlags((prev) => {
+      const next = new Set(prev);
+      if (active) next.add(f); else next.delete(f);
+      return next;
+    });
+  }
+
+  const dispatcher = useVoiceDispatcher({
+    onDescription: setDescription,
+    onVehiclesInvolved: (n) => setVehiclesInvolved(String(n)),
+    onCasualties: (n) => setCasualties(String(n)),
+    onSetFlag: setFlag,
+    onSubType: (v, cat) => { setSelectedSubType(v); setSelectedCategory(cat); },
+    onLocationCaptured: (loc, label) => setDispatcherLocation({ point: loc, label }),
+    onSubmitReady: (payload: DispatcherSubmitPayload) => {
+      const loc = dispatcherLocation?.point ?? payload.location ?? pinnedLocation;
+      if (!loc) return;
+      const label = dispatcherLocation?.label || pinnedLabel || `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`;
+      commitIncident({
+        id: makeIncidentId(),
+        timestamp: new Date().toISOString(),
+        location: loc,
+        locationLabel: label,
+        reportMode: "DISPATCHER",
+        vehiclesInvolved: payload.vehiclesInvolved,
+        estimatedCasualties: payload.casualties,
+        description: payload.description.trim(),
+        flags: payload.flags,
+        severity: "UNKNOWN",
+        severitySource: null,
+      });
+    },
+  });
+
   const appendReport = useEventLog((s) => s.appendReport);
   const appendAssessment = useEventLog((s) => s.appendAssessment);
   const appendDuplicateFlagged = useEventLog((s) => s.appendDuplicateFlagged);
@@ -1267,6 +1306,7 @@ export default function ReportPanel({
     setAssessmentResult(null);
     setDupMatch(null);
     setPendingIncident(null);
+    setDispatcherLocation(null);
     setPotholeDescription("");
     setPotholeSeverity("MEDIUM");
     clearRoutes();
@@ -1292,6 +1332,7 @@ export default function ReportPanel({
 
   function switchMode(m: ReportMode) {
     if (voice.listening) voice.stop();
+    if (dispatcher.status !== "idle" && dispatcher.status !== "ended") dispatcher.stop();
     setMode(m);
     resetForm();
   }
@@ -1546,7 +1587,7 @@ export default function ReportPanel({
         {/* Mode tabs — hidden while processing */}
         {panelStatus === "IDLE" || panelStatus === "ERROR" ? (
           <div className="flex border-b border-gray-100 mx-1 flex-shrink-0">
-            {(["SOS", "TEXT", "VOICE", "POTHOLE"] as ReportMode[]).map((m) => (
+            {(["SOS", "TEXT", "VOICE", "DISPATCHER", "POTHOLE"] as ReportMode[]).map((m) => (
               <button
                 key={m}
                 onClick={() => switchMode(m)}
@@ -1581,6 +1622,13 @@ export default function ReportPanel({
                       <line x1="8" y1="23" x2="16" y2="23" />
                     </svg>
                   )}
+                  {m === "DISPATCHER" && (
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H8l-4 3v-3H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                      <line x1="7" y1="8.5" x2="17" y2="8.5" />
+                      <line x1="7" y1="12" x2="13" y2="12" />
+                    </svg>
+                  )}
                   {m === "POTHOLE" && (
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
                       <path d="M2 20h20" />
@@ -1591,7 +1639,12 @@ export default function ReportPanel({
                       <path d="M10 16l1-4 2 2 1-4" />
                     </svg>
                   )}
-                  <span>{m === "POTHOLE" ? "Pothole" : m === "VOICE" ? "Voice" : m === "TEXT" ? "Text" : "SOS"}</span>
+                  <span>
+                    {m === "POTHOLE" ? "Pothole"
+                      : m === "DISPATCHER" ? "Voice"
+                      : m === "VOICE" ? "Speech-to-Text"
+                      : m === "TEXT" ? "Text" : "SOS"}
+                  </span>
                 </span>
               </button>
             ))}
@@ -1670,6 +1723,24 @@ export default function ReportPanel({
               error={sosError}
               onSend={handleSOS}
             />
+          ) : mode === "DISPATCHER" ? (
+            <div className="p-4">
+              <DispatcherSection
+                dispatcher={dispatcher}
+                locale={locale}
+                onLocaleChange={setLocale}
+                selectedSubType={selectedSubType}
+                selectedCategory={selectedCategory}
+                description={description}
+                vehiclesInvolved={vehiclesInvolved}
+                casualties={casualties}
+                selectedFlags={selectedFlags}
+                dispatcherLocation={dispatcherLocation}
+                pinnedLocation={pinnedLocation}
+                pinnedLabel={pinnedLabel}
+                onRequestPin={onRequestPin}
+              />
+            </div>
           ) : mode === "POTHOLE" ? (
             <PotholeFormView
               pinnedLocation={pinnedLocation}

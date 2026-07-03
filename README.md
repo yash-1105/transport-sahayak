@@ -127,6 +127,48 @@ the role before any request will succeed — a `403 PERMISSION_DENIED` naming
 Speech-to-Text V2/Chirp is a paid, metered API — separate billing/quota from the Gemini setup
 above, even if you reuse the same GCP project.
 
+## Voice dispatcher (Gemini Live via Vertex AI)
+
+`WS /ws/dispatcher?locale=en-IN|hi-IN` — a full conversational AI call-taker, distinct from the
+Chirp transcription above. The browser streams mic audio in; the server streams synthesized
+speech back (see `severity_engine/dispatcher_live.py`). Unlike Chirp, this is a real conversation:
+the model asks questions, calls backend tools to search the real incident taxonomy
+(`classifier.guess()`/`get_categories()`/`get_subtypes_for()` — never invents an incident type),
+pushes `form_update` events back to the browser as it collects each field, and only submits after
+the caller verbally confirms a summary. See the module docstring in `dispatcher_live.py` for the
+exact WebSocket message protocol and the 5 tools (`search_incident_type`,
+`search_incident_categories`, `update_form_field`, `get_current_location`, `submit_incident`).
+
+Uses the exact same service-account credentials as Speech-to-Text above (Vertex AI shares the
+same GCP service-account mechanism) — no new credential env vars. New vars: `VERTEX_AI_LOCATION`
+(default `us-central1`), `GEMINI_LIVE_MODEL` (default `gemini-live-2.5-flash-native-audio`),
+`GOOGLE_CLOUD_PROJECT` (optional override, defaults to the service account's own project).
+
+**GCP setup**: enable the Vertex AI API on the project:
+```bash
+gcloud services enable aiplatform.googleapis.com --project=<your-project-id>
+```
+During development this worked with the existing Speech-to-Text service account with no
+additional IAM role grant beyond what it already had — if you're using a fresh/more restricted
+service account and hit a `403`, grant it the Vertex AI User role:
+```bash
+gcloud projects add-iam-policy-binding <your-project-id> \
+  --member="serviceAccount:<your-service-account-email>" \
+  --role="roles/aiplatform.user"
+```
+
+**Verified empirically** (Vertex AI's Live API is new and fast-moving — don't trust the model
+name or region blindly, confirm against a live connection): `gemini-live-2.5-flash-native-audio`
+in `us-central1` connects successfully, function calling works with the standard
+`FunctionResponse` pattern (no `scheduling` field needed), and `send_realtime_input()` requires
+genuinely real-time-paced audio for Voice Activity Detection to detect end-of-speech — a live
+microphone stream is naturally paced this way, so this only matters for anyone writing a
+synthetic test client against this endpoint, not for the real feature.
+
+Gemini Live is a paid, metered, real-time API — separate billing from both the Gemini extraction
+bonus layer and Speech-to-Text above, even on the same GCP project, and typically more expensive
+per session than either since it's continuous bidirectional audio, not a single request.
+
 ## Wiring into your existing POC (local dev)
 
 1. Run this engine locally on port 8000 (above).

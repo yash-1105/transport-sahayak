@@ -15,6 +15,7 @@ from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from google.api_core.exceptions import GoogleAPIError
+from google.genai.errors import APIError as GeminiLiveAPIError
 from pydantic import BaseModel
 
 from severity_engine import engine
@@ -25,6 +26,11 @@ from severity_engine.classifier import (
     get_subtypes_for as _get_subtypes_for,
     guess as _clf_guess,
 )
+from severity_engine.dispatcher_live import (
+    DispatcherCredentialsError,
+    DispatcherSession,
+)
+from severity_engine.dispatcher_live import SUPPORTED_LANGUAGES as DISPATCHER_LANGUAGES
 from severity_engine.voice_stream import (
     SUPPORTED_LANGUAGES,
     SpeechCredentialsError,
@@ -234,6 +240,56 @@ async def voice_stream_ws(websocket: WebSocket) -> None:
         receive_task.cancel()
         if chunks_received == 0:
             logger.info("No audio received on /ws/voice before the stream ended (empty recording)")
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+@app.websocket("/ws/dispatcher")
+async def dispatcher_ws(websocket: WebSocket) -> None:
+    """
+    Conversational voice dispatcher over WebSocket, backed by Gemini Live via
+    Vertex AI — see severity_engine/dispatcher_live.py.
+
+    Client protocol: connect with ?locale=en-IN or ?locale=hi-IN (defaults to
+    en-IN). Send raw PCM16/16kHz/mono audio as binary frames while the caller
+    is speaking, and JSON text frames for control messages:
+    {"type":"location_result"|"location_error", "requestId":..., ...} in
+    response to a server "request_location" message, or {"type":"end"} to end
+    the call. Server sends binary PCM16/24kHz/mono synthesized speech back,
+    plus JSON text frames: {"type":"ready"}, {"type":"status","state":...},
+    {"type":"form_update","field":...,"value":...},
+    {"type":"request_location","requestId":...},
+    {"type":"submitted","incident":{...}}, {"type":"turn_complete"},
+    {"type":"interrupted"}, {"type":"transcript",...} (internal, not
+    rendered), or {"type":"error","message":...}.
+    """
+    await websocket.accept()
+    language_code = websocket.query_params.get("locale", "")
+    if language_code not in DISPATCHER_LANGUAGES:
+        language_code = "en-IN"
+    logger.info("Client connected to /ws/dispatcher (language=%s)", language_code)
+
+    session = DispatcherSession(websocket, language_code)
+    try:
+        await session.run()
+    except DispatcherCredentialsError as e:
+        logger.error("Gemini Live credentials error: %s", e)
+        await _safe_send_json(
+            websocket, {"type": "error", "message": "The voice dispatcher is not configured on the server."}
+        )
+    except (GeminiLiveAPIError, GoogleAPIError) as e:
+        logger.exception("Gemini Live API error")
+        await _safe_send_json(websocket, {"type": "error", "message": f"Voice dispatcher failed: {e}"})
+    except WebSocketDisconnect:
+        logger.info("Client disconnected from /ws/dispatcher")
+    except Exception:
+        logger.exception("Unexpected error on /ws/dispatcher")
+        await _safe_send_json(
+            websocket, {"type": "error", "message": "Unexpected server error in the voice dispatcher."}
+        )
+    finally:
         try:
             await websocket.close()
         except Exception:
