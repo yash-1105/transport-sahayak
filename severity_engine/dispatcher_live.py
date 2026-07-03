@@ -282,7 +282,7 @@ LANGUAGE: Conduct this entire conversation in {lang_name} only. If the caller sp
 
 TONE: Calm, brief, professional, like a real emergency dispatcher. Ask one question at a time. Keep every response to 1-2 short sentences -- never make the caller wait through a long speech. Speak a little slower than normal conversational pace, and pronounce each word clearly -- the caller may be stressed or on a poor phone line, so clarity matters more than speed. Never repeat a sentence you have already said unless the caller explicitly asks you to.
 
-OPENING (the very first thing you do, before the caller says anything): as soon as the call connects, say this exact sentence, word for word, with nothing before it and nothing added: "{opening_line}" Immediately after saying it, call get_current_location (do not wait to be asked), then briefly mention the location it returns ("I have your location as X, is that right?") and ask what happened. If get_current_location comes back unavailable, tell the caller to use the map-pin button to mark their location -- do not try to guess a location from a spoken description.
+OPENING (the very first thing you do, before the caller says anything, and only ever once for the whole call): as soon as the call connects, say this exact sentence, word for word, with nothing before it and nothing added: "{opening_line}" You will be told the caller's detected location (or that none was detected) in the same message that starts the call -- do not call get_current_location for this, it has already been resolved for you. If a location was given, briefly mention it ("I have your location as X, is that right?") and ask what happened, all in this same first turn. If no location was detected, tell the caller to use the map-pin button to mark their location instead -- do not try to guess a location from a spoken description. Once you have done this opening, it is complete -- never say the welcome sentence again for the rest of the call, no matter what happens, even if it feels like the conversation is starting over. Move straight to gathering information about the incident.
 
 INCIDENT TYPE: Never guess or invent an incident type yourself. Always call search_incident_type with a description of what the caller told you, and refer to the incident only using the exact subType name it returns. If it doesn't sound right, call search_incident_categories to browse alternatives with the caller.
 
@@ -481,14 +481,39 @@ class DispatcherSession:
         async with client.aio.live.connect(model=_MODEL, config=self._build_config()) as live_session:
             self._live_session = live_session
             await self._safe_send_json({"type": "ready"})
+            # Start the client->Gemini pump FIRST -- it's the only thing that
+            # listens for the browser's "location_result" reply, so the
+            # upfront location fetch below would otherwise just hang until
+            # its own timeout with nothing ever receiving the response.
+            client_task = asyncio.create_task(self._pump_client_to_gemini())
+            # Resolve GPS location BEFORE the model says anything, and hand
+            # it directly to the kickoff turn as plain text, rather than
+            # having the model call get_current_location mid-utterance for
+            # its opening line. Verified via live testing this was the real
+            # cause of Hindi-specific repeated openings: the model would
+            # sometimes end its first turn right after the scripted line
+            # (skipping the tool call), and then, on hearing the caller's
+            # next utterance, would restart the whole opening from scratch
+            # since it considered the greeting "incomplete." English tolerated
+            # the mid-turn tool call more reliably, but nothing here should
+            # depend on that per-language reliability, so this removes the
+            # tool call from the opening turn entirely for both languages.
+            location_result = await self._tool_get_current_location()
+            if location_result.get("status") in ("ok", "already_have_location"):
+                location_note = f"Detected location: {location_result.get('label', '')}."
+            else:
+                location_note = "No location was detected."
             # Gemini Live is reactive by default -- it won't speak until it
             # receives input. The caller shouldn't have to speak first, so
             # kick off the call with a synthetic system-directed turn (not
             # real caller speech) instructing the model to begin its scripted
-            # opening now. Verified via live testing that this reliably
-            # triggers the model's first spoken turn immediately.
+            # opening now, with the location already resolved. Verified via
+            # live testing that this reliably triggers the model's first
+            # spoken turn immediately.
             await live_session.send_client_content(
-                turns=types.Content(role="user", parts=[types.Part(text="(The call has just connected. Begin now.)")]),
+                turns=types.Content(role="user", parts=[types.Part(
+                    text=f"(The call has just connected. {location_note} Begin now.)"
+                )]),
                 turn_complete=True,
             )
             # Run both pumps as cancellable tasks, not a plain gather -- if
@@ -498,8 +523,8 @@ class DispatcherSession:
             # leaving the Live session (and its quota/cost) running forever
             # server-side with nobody listening. Whichever pump finishes
             # first, cancel the other so the `async with` block actually
-            # exits and the session closes.
-            client_task = asyncio.create_task(self._pump_client_to_gemini())
+            # exits and the session closes. (client_task was already started
+            # above, before the upfront location fetch.)
             gemini_task = asyncio.create_task(self._pump_gemini_to_client())
             _, pending = await asyncio.wait({client_task, gemini_task}, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:

@@ -250,8 +250,17 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
       const cb = callbacksRef.current;
       switch (event.type) {
         case "ready":
+          // "ready" only means the socket handshake succeeded -- it fires
+          // BEFORE the backend's scripted opening greeting actually starts
+          // generating audio (kicked off separately, right after this
+          // message). Treating it as "listening" opened a window where the
+          // mic could transmit real audio while the model's kickoff turn was
+          // still being set up, which was confusing it into restarting/
+          // repeating the opening line. Stay "connecting" (mic stays gated)
+          // until a real "status":"listening" arrives, which only happens
+          // once the greeting's turn has actually completed.
           reconnectAttemptRef.current = 0;
-          setStatus("listening");
+          setStatus("connecting");
           break;
         case "status":
           if (event.state === "listening" || event.state === "thinking" || event.state === "speaking" || event.state === "reconnecting") {
