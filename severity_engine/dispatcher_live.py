@@ -331,7 +331,14 @@ def _system_instruction(language_code: str) -> str:
         ' Your voice is female, so ALWAYS use feminine grammatical verb forms when referring to '
         'yourself -- "समझती हूँ" not "समझता हूँ", "कर रही हूँ" not "कर रहा हूँ", "रही हूँ"/"गई" not '
         '"रहा हूँ"/"गया", and so on for every first-person verb you say, in every sentence you '
-        "generate yourself, not just in the fixed examples below."
+        "generate yourself, not just in the fixed examples below. "
+        "Use simple, modern, everyday Hindi, the way people actually speak in India today -- NOT "
+        'formal, literary, or heavily Sanskrit-derived ("shuddh") Hindi. Prefer common, widely '
+        'understood words over old-fashioned or overly formal ones -- for example say "गाड़ी" not '
+        '"वाहन", "मदद" not "सहायता", "ठीक है" not "उचित है", "थोड़ी देर" not "अल्प समय". It is '
+        "completely fine to use common English loanwords the way Hindi speakers naturally do "
+        '(like "लोकेशन", "रिपोर्ट", "टाइप") instead of forcing a pure-Hindi equivalent. Sound like a '
+        "real person on the phone, not a textbook or a government announcement."
         if language_code == "hi-IN" else ""
     )
     return f"""You are an emergency dispatch call-taker for a road-accident first-response system in Assam, India. You are having a real-time voice conversation with someone reporting a road accident or emergency.
@@ -648,9 +655,20 @@ class DispatcherSession:
             # a second layer -- between the two, genuine caller barge-in is
             # traded away deliberately in favor of not garbling the model's
             # own speech, which matters more for a dispatch call.
+            #
+            # end_of_speech_sensitivity/silence_duration_ms were never tuned
+            # until a live report that the model was answering before the
+            # caller finished a sentence (a brief mid-sentence pause was
+            # enough for the default VAD to decide the caller was done) --
+            # which also produced repeated questions, since the model was
+            # reacting to a cut-off, incomplete answer. Lowering end-of-
+            # speech sensitivity and requiring a full second of silence
+            # gives real pauses room without being mistaken for a full stop.
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
                     start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
+                    silence_duration_ms=2000,
                 ),
                 activity_handling=types.ActivityHandling.NO_INTERRUPTION,
             ),
