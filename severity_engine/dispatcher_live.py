@@ -284,7 +284,7 @@ TONE: Calm, warm, and genuinely concerned -- like a caring human dispatcher, not
 
 OPENING (the very first thing you do, before the caller says anything, and only ever once for the whole call): as soon as the call connects, say this exact sentence, word for word, with nothing before it and nothing added: "{opening_line}" You will be told the caller's detected location (or that none was detected) in the same message that starts the call -- do not call get_current_location for this, it has already been resolved for you. If a location was given, briefly mention it ("I have your location as X, is that right?") and ask what happened, all in this same first turn. If no location was detected, tell the caller to use the map-pin button to mark their location instead -- do not try to guess a location from a spoken description. Once you have done this opening, it is complete -- never say the welcome sentence again for the rest of the call, no matter what happens, even if it feels like the conversation is starting over. Move straight to gathering information about the incident.
 
-INCIDENT TYPE: Never guess or invent an incident type yourself. Always call search_incident_type with a description of what the caller told you, and refer to the incident only using the exact subType name it returns. If it doesn't sound right, call search_incident_categories to browse alternatives with the caller.
+INCIDENT TYPE: Never guess or invent an incident type yourself. Always call search_incident_type with a description of what the caller told you -- it automatically records a confident match for you, so once you've called it you do not need a separate step to confirm the type unless the caller says it's wrong. Refer to the incident only using the exact subType name it returns. If it doesn't sound right to the caller, call search_incident_categories to browse alternatives, then call update_form_field with field=incidentType and the exact subType you both agreed on.
 
 FORM FILLING: Call update_form_field immediately every time the caller gives you a new piece of information -- INCLUDING conditions mentioned in passing, not just direct answers to your questions. If the caller mentions fire, hazmat, anyone trapped, consciousness, breathing, or bleeding ANYWHERE in what they say (even inside a general description), call update_form_field with field=flag for that condition right away -- do not wait for a dedicated question about it. Every tool response includes "still_missing" -- a list of what's not yet known. Use it to decide your next question and to know what NOT to ask again, so you never repeat a question the caller already answered.
 
@@ -330,8 +330,36 @@ class DispatcherSession:
 
     # ── Tools ──────────────────────────────────────────────────────────────
 
+    async def _apply_incident_type(self, sub_type: str, category_hint: Optional[str] = None) -> bool:
+        """Validate sub_type against the real taxonomy and, if valid, apply it
+        to state and push a form_update. Returns False (no state change) if
+        sub_type doesn't match a real record exactly."""
+        rec = classifier._find_exact(sub_type)
+        if not rec:
+            return False
+        self.state.sub_type = rec["subType"]
+        self.state.category = classifier._CATEGORY_MAP.get(rec["subType"], category_hint or "Other")
+        await self._safe_send_json({
+            "type": "form_update", "field": "incidentType",
+            "value": {"subType": self.state.sub_type, "category": self.state.category},
+        })
+        return True
+
     async def _tool_search_incident_type(self, description: str = "") -> dict:
         result = classifier.guess(description or "")
+        # Hindi conversations were unreliable at the model completing a
+        # SEPARATE update_form_field(field="incidentType", ...) call right
+        # after this search -- confirmed live: the model would sometimes move
+        # on without ever confirming the type, then get stuck later when
+        # submit_incident correctly refused to submit without one, looping on
+        # "what kind of incident was this?" with no way to recover mid-call.
+        # Apply a confident match immediately here instead of requiring a
+        # second precise round-trip. The model can still correct this later
+        # via search_incident_categories + update_form_field if the caller
+        # says this match is wrong.
+        sub_type = result.get("subType")
+        if sub_type and not result.get("lowConfidence"):
+            await self._apply_incident_type(sub_type, result.get("category"))
         result["still_missing"] = self._compute_still_missing()
         return result
 
@@ -353,19 +381,12 @@ class DispatcherSession:
         if field == "incidentType":
             if not sub_type:
                 return {"ok": False, "error": "sub_type is required for field=incidentType"}
-            rec = classifier._find_exact(sub_type)
-            if not rec:
+            if not await self._apply_incident_type(sub_type, category):
                 return {
                     "ok": False,
                     "error": f"{sub_type!r} is not a real incident type -- call search_incident_type "
                              "or search_incident_categories first and use the exact value returned.",
                 }
-            self.state.sub_type = rec["subType"]
-            self.state.category = classifier._CATEGORY_MAP.get(rec["subType"], category or "Other")
-            await self._safe_send_json({
-                "type": "form_update", "field": "incidentType",
-                "value": {"subType": self.state.sub_type, "category": self.state.category},
-            })
         elif field == "description":
             if text_value is None:
                 return {"ok": False, "error": "text_value is required for field=description"}
