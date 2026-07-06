@@ -136,4 +136,21 @@ for hi, en in PARITY_CASES:
     check(f"Hindi/English parity: {en!r} -> same subType ({st_hi!r} == {st_en!r})",
           st_hi == st_en)
 
+# Vehicle-pair override in the voice dispatcher's incident search: a caller
+# naming both a car and a truck must never be recorded as "Car vs. Car"
+# (real reported bug: "मेरी कार की ट्रक से टक्कर हो गई" -> Car vs. Car
+# Collision, because that record's keyword-stuffed cause text out-scores the
+# correct Truck vs. Car record in plain keyword overlap).
+from severity_engine.dispatcher_live import _mentioned_vehicle_types, _find_vehicle_pair_subtype
+m = _mentioned_vehicle_types("मेरी कार की ट्रक से टक्कर हो गई।")
+check("Hindi car+truck mention detected as two vehicle types", m == {"car", "truck"})
+check("car+truck pair resolves to the Truck vs. Car subtype",
+      "Truck vs. Car" in (_find_vehicle_pair_subtype(m) or ""))
+check("English 'car collided with a truck' detects both types",
+      _mentioned_vehicle_types("car collided with a truck") == {"car", "truck"})
+check("'सरकार' (government) never false-matches 'कार'",
+      _mentioned_vehicle_types("सरकार की मदद चाहिए") == set())
+check("'cargo' never false-matches 'car'",
+      _mentioned_vehicle_types("cargo truck accident") == {"truck"})
+
 print("\nALL TESTS PASSED")

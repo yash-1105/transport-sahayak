@@ -40,6 +40,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
@@ -61,6 +62,65 @@ SUPPORTED_LANGUAGES = ("en-IN", "hi-IN")
 _DEFAULT_LANGUAGE = "en-IN"
 
 _LOCATION_TIMEOUT_S = 8.0
+
+# ── Reliability (Issue: "sometimes the agent simply stops responding") ────────
+# If the caller has spoken and the model has produced nothing for this long,
+# the watchdog first nudges the live session with a synthetic "the caller is
+# waiting" turn; if that also produces nothing within the same window again,
+# the session is torn down and transparently reconnected (state is preserved
+# in DispatcherState, so the fresh session apologizes and continues where the
+# call left off instead of starting over). Env-overridable for testing.
+_RESPONSE_TIMEOUT_S = float(os.environ.get("GEMINI_RESPONSE_TIMEOUT_S", "12"))
+_GREETING_TIMEOUT_S = float(os.environ.get("GEMINI_GREETING_TIMEOUT_S", "15"))
+_MAX_RECONNECTS = int(os.environ.get("GEMINI_MAX_RECONNECTS", "2"))
+
+_RECONNECT_APOLOGY = {
+    "hi-IN": "मुझे क्षमा कीजिए, तकनीकी समस्या आ गई है। कृपया दोबारा बोलें।",
+    "en-IN": "I'm sorry, there was a brief technical problem. Could you please say that again?",
+}
+
+# ── Vehicle-pair matching (Issue: "कार की ट्रक से टक्कर" -> Car vs. Car) ──────
+# The keyword classifier's "Car vs. Car Collision" record has keyword-stuffed
+# cause text ("car to car crash / another car / car hit car ...") that
+# out-scores "Truck vs. Car – Speed Differential" even when the caller
+# explicitly named both a car AND a truck -- reproduced directly:
+# classifier.guess("car collided with a truck") -> Car vs. Car Collision.
+# Deterministic fix at the dispatcher-tool level: when the caller's own words
+# name two distinct vehicle types, the recorded subType must name both.
+# Devanagari aliases are matched as EXACT whole tokens (never substrings) so
+# "सरकार" can never match "कार", and English aliases with word boundaries so
+# "cargo" can never match "car".
+_VEHICLE_TYPES: dict[str, dict] = {
+    "car": {"say": ["car", "कार", "गाड़ी"], "subtype": [r"\bcar\b"]},
+    "truck": {"say": ["truck", "lorry", "ट्रक", "लॉरी", "ट्राला"], "subtype": [r"\btruck\b"]},
+    "bus": {"say": ["bus", "बस"], "subtype": [r"\bbus\b"]},
+    "two-wheeler": {
+        "say": ["motorcycle", "motorbike", "bike", "scooter", "scooty",
+                "बाइक", "मोटरसाइकिल", "स्कूटर", "स्कूटी"],
+        "subtype": [r"\btwo-wheeler\b"],
+    },
+    "auto-rickshaw": {"say": ["auto", "rickshaw", "ऑटो", "रिक्शा"], "subtype": [r"\bauto-rickshaw\b"]},
+}
+
+_DEVANAGARI_TOKEN_RE = re.compile(r"[ऀ-ॿ]+")
+_LATIN_TOKEN_RE = re.compile(r"[a-z]+")
+
+
+def _mentioned_vehicle_types(text: str) -> set:
+    """Canonical vehicle types explicitly named in the caller's words."""
+    lower = (text or "").lower()
+    tokens = set(_DEVANAGARI_TOKEN_RE.findall(lower)) | set(_LATIN_TOKEN_RE.findall(lower))
+    return {canon for canon, spec in _VEHICLE_TYPES.items() if tokens & set(spec["say"])}
+
+
+def _find_vehicle_pair_subtype(mentioned: set) -> Optional[str]:
+    """The taxonomy subType naming ALL the mentioned vehicle types, if one
+    exists (e.g. {car, truck} -> "Truck vs. Car – Speed Differential")."""
+    for rec in classifier.INDEX:
+        st = rec["subType"].lower()
+        if all(any(re.search(p, st) for p in _VEHICLE_TYPES[m]["subtype"]) for m in mentioned):
+            return rec["subType"]
+    return None
 
 _FLAG_NAMES = ["Conscious", "Breathing", "Trapped", "Heavy bleeding", "Fire", "Hazardous material"]
 
@@ -335,17 +395,38 @@ def _system_instruction(language_code: str) -> str:
     # change English), this restates the same requirements specifically for
     # Hindi, as an additional nudge only Hindi sessions receive.
     hindi_reinforcement = (
-        ' Your voice is female, so ALWAYS use feminine grammatical verb forms when referring to '
-        'yourself -- "समझती हूँ" not "समझता हूँ", "कर रही हूँ" not "कर रहा हूँ", "रही हूँ"/"गई" not '
-        '"रहा हूँ"/"गया", and so on for every first-person verb you say, in every sentence you '
-        "generate yourself, not just in the fixed examples below. "
-        "Use simple, modern, everyday Hindi, the way people actually speak in India today -- NOT "
-        'formal, literary, or heavily Sanskrit-derived ("shuddh") Hindi. Prefer common, widely '
-        'understood words over old-fashioned or overly formal ones -- for example say "गाड़ी" not '
-        '"वाहन", "मदद" not "सहायता", "ठीक है" not "उचित है", "थोड़ी देर" not "अल्प समय". It is '
-        "completely fine to use common English loanwords the way Hindi speakers naturally do "
-        '(like "लोकेशन", "रिपोर्ट", "टाइप") instead of forcing a pure-Hindi equivalent. Sound like a '
-        "real person on the phone, not a textbook or a government announcement. "
+        " WHO YOU ARE IN HINDI: you are a female operator at the 1033 highway emergency helpline "
+        "-- a real person doing a serious job, exactly like the operators callers reach when they "
+        "dial 1033 in India. You are NEVER an AI, an assistant, or a model -- never say anything "
+        'like "as an AI", "I think", or anything technical about yourself or how you work; if '
+        "asked who you are, you are the 1033 helpline operator, nothing more. "
+        "ALWAYS use feminine grammatical verb forms when referring to yourself -- "
+        '"समझती हूँ" not "समझता हूँ", "कर रही हूँ" not "कर रहा हूँ", "दर्ज कर रही हूँ" not '
+        '"दर्ज कर रहा हूँ", "पुष्टि करना चाहती हूँ" not "पुष्टि करना चाहता हूँ" -- in every sentence '
+        "you generate, not just the fixed examples here. "
+        "SPEAK LIKE A REAL OPERATOR, NOT A TRANSLATION: use simple, modern, everyday Hindi, the "
+        'way people actually speak in India today -- never formal, literary, or Sanskrit-heavy '
+        '("shuddh") Hindi, and never stiff literal translations of English phrasing. Say "क्या '
+        'हुआ है?" not "क्या आप घटना का प्रकार बता सकते हैं?"; say "ज़रा बताइए वहाँ क्या हुआ?" not '
+        '"कृपया विवरण प्रदान करें।"; say "गाड़ी" not "वाहन", "मदद" not "सहायता", "ठीक है" not '
+        '"उचित है". Common English loanwords are natural and welcome ("लोकेशन", "रिपोर्ट", '
+        '"एम्बुलेंस", "टाइप"). Phrases a real operator uses, in your natural repertoire: "मैं आपकी '
+        'मदद के लिए हूँ।" / "कृपया घबराइए मत।" / "सबसे पहले आपकी सुरक्षा ज़रूरी है।" / "क्या सभी '
+        'लोग सुरक्षित हैं?" / "क्या किसी को गंभीर चोट लगी है?" / "एम्बुलेंस भेजने के लिए मुझे थोड़ी '
+        'और जानकारी चाहिए।" / "धन्यवाद, मैं जानकारी दर्ज कर रही हूँ।" '
+        "UNDERSTAND HOW PEOPLE ACTUALLY TALK: callers use colloquial, indirect expressions -- "
+        '"टायर फट गया" (tyre burst), "गाड़ी पलट गई" (vehicle overturned), "ठोक दिया" / "भिड़ गई" '
+        '(collided), "आग पकड़ ली" (caught fire). Understand the MEANING, never demand the caller '
+        "rephrase into formal words. "
+        "INCIDENT TYPE IN HINDI -- CRITICAL: when the caller describes what happened, pass their "
+        "ACTUAL words (verbatim, in Hindi, exactly as they said them) as the description to "
+        "search_incident_type -- never your own paraphrase or translation, and NEVER decide the "
+        "vehicle types yourself. If the caller named two vehicles (जैसे कार और ट्रक), the recorded "
+        "incident type must name both -- the search tool guarantees this when it gets the "
+        "caller's real words. "
+        "CONFIRMATION IN HINDI: before submitting, summarize naturally and ask, for example: "
+        '"मैं पुष्टि करना चाहती हूँ — आपकी कार की ट्रक से टक्कर हुई है, दो लोग घायल हैं, एक व्यक्ति '
+        'फँसा हुआ है, लोकेशन NH-48 है। क्या यह जानकारी सही है?" '
         "IMPORTANT -- everything else in this system prompt (the TONE section's warmth and "
         "concern, the strict one-at-a-time order in FOLLOW-UP QUESTIONS, calling "
         "update_form_field immediately in FORM FILLING, always writing descriptions in English) "
@@ -354,12 +435,14 @@ def _system_instruction(language_code: str) -> str:
         "because the conversation is in Hindi. Specifically: the instant a caller mentions an "
         "injury, bleeding, someone trapped, or sounds frightened, react with the same real, "
         "sincere concern you would in English -- never just a flat acknowledgment like \"ठीक है\" "
-        'or "समझ गई" alone with no warmth. And follow "next_question" exactly, one topic at a '
-        "time, the same way you would in an English call -- do not wander to a different topic or "
-        "skip ahead just because you are speaking Hindi. And the SPEAK ONCE PER CALLER TURN rule "
-        "applies fully in Hindi too: one caller statement gets exactly ONE spoken response from "
-        "you, no matter how many tool results come back for it -- if you already spoke, stay "
-        "silent and wait; never ask the same question again in different words."
+        'or "समझ गई" alone with no warmth. Never ask about something the caller already told you '
+        '(if they said "दो लोग घायल हैं", never ask "क्या कोई घायल है?" afterwards). Follow '
+        '"next_question" exactly, one topic at a time, the same way you would in an English call '
+        "-- do not wander to a different topic or skip ahead just because you are speaking Hindi. "
+        "And the SPEAK ONCE PER CALLER TURN rule applies fully in Hindi too: one caller statement "
+        "gets exactly ONE spoken response from you, no matter how many tool results come back for "
+        "it -- if you already spoke, stay silent and wait; never ask the same question again in "
+        "different words."
         if language_code == "hi-IN" else ""
     )
     return f"""You are an emergency dispatch call-taker for a road-accident first-response system in Assam, India. You are having a real-time voice conversation with someone reporting a road accident or emergency.
@@ -390,6 +473,13 @@ class DispatcherSession:
         self.state = DispatcherState(language=language_code)
         self._pending_location: dict[str, "asyncio.Future"] = {}
         self._live_session = None
+        self._client_task: Optional["asyncio.Task"] = None
+        # Watchdog bookkeeping (see _watchdog): monotonic timestamps of the
+        # last caller speech and last model activity in the CURRENT session.
+        self._session_started: float = 0.0
+        self._caller_last_spoke: float = 0.0
+        self._model_last_spoke: float = 0.0
+        self._nudge_sent_at: float = 0.0
 
     async def _safe_send_json(self, payload: dict) -> None:
         try:
@@ -533,6 +623,23 @@ class DispatcherSession:
 
     async def _tool_search_incident_type(self, description: str = "") -> dict:
         result = classifier.guess(description or "")
+        logger.info("Incident search: %r -> %s (conf %s)",
+                    (description or "")[:200], result.get("subType"), result.get("confidence"))
+        # Deterministic vehicle-pair override: if the caller's words name two
+        # distinct vehicle types and the taxonomy has a subType naming both,
+        # that beats whatever keyword-overlap scoring picked -- this is the
+        # "कार की ट्रक से टक्कर -> Car vs. Car Collision" fix, done in code
+        # rather than trusting the model to notice the mismatch.
+        mentioned = _mentioned_vehicle_types(description)
+        if len(mentioned) == 2:
+            pair_subtype = _find_vehicle_pair_subtype(mentioned)
+            if pair_subtype and pair_subtype != result.get("subType"):
+                logger.info("Vehicle-pair override: %s -> %s (mentioned: %s)",
+                            result.get("subType"), pair_subtype, sorted(mentioned))
+                result["subType"] = pair_subtype
+                result["category"] = classifier._CATEGORY_MAP.get(pair_subtype, "Other")
+                result["confidence"] = 0.9
+                result["lowConfidence"] = False
         # Hindi conversations were unreliable at the model completing a
         # SEPARATE update_form_field(field="incidentType", ...) call right
         # after this search -- confirmed live: the model would sometimes move
@@ -661,9 +768,14 @@ class DispatcherSession:
         }
         handler = handlers.get(name)
         if handler is None:
+            logger.warning("Unknown tool requested: %r", name)
             return {"ok": False, "error": f"Unknown tool {name!r}"}
+        logger.info("Tool call: %s(%s)", name, json.dumps(args, ensure_ascii=False, default=str)[:300])
         try:
-            return await handler(**args)
+            result = await handler(**args)
+            logger.info("Tool result: %s -> %s", name,
+                        json.dumps(result, ensure_ascii=False, default=str)[:300])
+            return result
         except Exception:
             logger.exception("Tool %s failed", name)
             return {"ok": False, "error": "Internal error executing this tool -- please try again."}
@@ -731,64 +843,174 @@ class DispatcherSession:
 
     async def run(self) -> None:
         client = _get_client()
-        async with client.aio.live.connect(model=_MODEL, config=self._build_config()) as live_session:
-            self._live_session = live_session
-            await self._safe_send_json({"type": "ready"})
-            # Start the client->Gemini pump FIRST -- it's the only thing that
-            # listens for the browser's "location_result" reply, so the
-            # upfront location fetch below would otherwise just hang until
-            # its own timeout with nothing ever receiving the response.
-            client_task = asyncio.create_task(self._pump_client_to_gemini())
+        await self._safe_send_json({"type": "ready"})
+        # Start the client->Gemini pump FIRST -- it's the only thing that
+        # listens for the browser's "location_result" reply, so the upfront
+        # location fetch below would otherwise just hang until its own
+        # timeout with nothing ever receiving the response. It runs for the
+        # WHOLE call, across Gemini session reconnects -- the browser-facing
+        # socket never restarts just because the Gemini side had to.
+        self._client_task = asyncio.create_task(self._pump_client_to_gemini())
+        try:
             # Resolve GPS location BEFORE the model says anything, and hand
             # it directly to the kickoff turn as plain text, rather than
             # having the model call get_current_location mid-utterance for
-            # its opening line. Verified via live testing this was the real
-            # cause of Hindi-specific repeated openings: the model would
-            # sometimes end its first turn right after the scripted line
-            # (skipping the tool call), and then, on hearing the caller's
-            # next utterance, would restart the whole opening from scratch
-            # since it considered the greeting "incomplete." English tolerated
-            # the mid-turn tool call more reliably, but nothing here should
-            # depend on that per-language reliability, so this removes the
-            # tool call from the opening turn entirely for both languages.
+            # its opening line (verified live: that mid-turn tool call was
+            # the cause of Hindi-specific repeated openings).
             location_result = await self._tool_get_current_location()
             if location_result.get("status") in ("ok", "already_have_location"):
                 location_note = f"Detected location: {location_result.get('label', '')}."
             else:
                 location_note = "No location was detected."
-            # Gemini Live is reactive by default -- it won't speak until it
-            # receives input. The caller shouldn't have to speak first, so
-            # kick off the call with a synthetic system-directed turn (not
-            # real caller speech) instructing the model to begin its scripted
-            # opening now, with the location already resolved. Verified via
-            # live testing that this reliably triggers the model's first
-            # spoken turn immediately.
-            await live_session.send_client_content(
-                turns=types.Content(role="user", parts=[types.Part(
-                    text=f"(The call has just connected. {location_note} Begin now.)"
-                )]),
-                turn_complete=True,
-            )
-            # Run both pumps as cancellable tasks, not a plain gather -- if
-            # the client disconnects/ends the call, _pump_client_to_gemini
-            # returns, but _pump_gemini_to_client is blocked awaiting the
-            # NEXT Gemini message and would otherwise hang indefinitely,
-            # leaving the Live session (and its quota/cost) running forever
-            # server-side with nobody listening. Whichever pump finishes
-            # first, cancel the other so the `async with` block actually
-            # exits and the session closes. (client_task was already started
-            # above, before the upfront location fetch.)
-            gemini_task = asyncio.create_task(self._pump_gemini_to_client())
-            _, pending = await asyncio.wait({client_task, gemini_task}, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
+            kickoff = f"(The call has just connected. {location_note} Begin now.)"
+
+            # Reliability loop (Issue: "sometimes the agent simply stops
+            # responding -- mic stays active but Gemini never speaks again").
+            # A Gemini Live session can die or wedge mid-call (Google-side
+            # session limits, transient stream failures) while the browser
+            # socket stays perfectly healthy -- previously that ended the
+            # whole call silently. Now: the session is reconnected in place,
+            # DispatcherState (all collected form fields) survives because it
+            # lives on this object rather than in the model's context, and
+            # the fresh session is told to apologize briefly and continue
+            # from exactly where the call left off -- never the greeting
+            # again, never a silent dead call.
+            reconnects = 0
+            while True:
+                outcome = await self._run_live_session(client, kickoff)
+                if outcome == "ended":
+                    return
+                if reconnects >= _MAX_RECONNECTS:
+                    logger.error("Gemini Live session failed after %d reconnect(s) -- giving up", reconnects)
+                    await self._safe_send_json({
+                        "type": "error",
+                        "message": "The voice service hit a technical problem. Please end the call and try again.",
+                    })
+                    return
+                reconnects += 1
+                logger.warning("Reconnecting Gemini Live session (attempt %d/%d)", reconnects, _MAX_RECONNECTS)
+                await self._safe_send_json({"type": "status", "state": "reconnecting"})
+                kickoff = self._reconnect_kickoff()
+                await asyncio.sleep(1.0)
+        finally:
+            self._client_task.cancel()
+            try:
+                await self._client_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def _run_live_session(self, client: "genai.Client", kickoff_text: str) -> str:
+        """One Gemini Live session within the browser call. Returns "ended"
+        when the call is genuinely over (client hung up or report submitted),
+        "reconnect" when the Gemini side died/wedged but the caller is still
+        there."""
+        try:
+            async with client.aio.live.connect(model=_MODEL, config=self._build_config()) as live_session:
+                self._live_session = live_session
+                self._session_started = time.monotonic()
+                self._model_last_spoke = 0.0
+                self._nudge_sent_at = 0.0
+                # Gemini Live is reactive -- it won't speak until it receives
+                # input, so kick off with a synthetic system-directed turn.
+                await live_session.send_client_content(
+                    turns=types.Content(role="user", parts=[types.Part(text=kickoff_text)]),
+                    turn_complete=True,
+                )
+                gemini_task = asyncio.create_task(self._pump_gemini_to_client())
+                watchdog_task = asyncio.create_task(self._watchdog())
+                done, _ = await asyncio.wait(
+                    {self._client_task, gemini_task, watchdog_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in (gemini_task, watchdog_task):
+                    if task not in done:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                if self._client_task in done or self.state.submitted:
+                    return "ended"
+                if watchdog_task in done and not watchdog_task.cancelled():
+                    logger.warning("Watchdog requested reconnect")
+                    return "reconnect"
+                # gemini pump ended on its own: session closed server-side
+                # (or errored) while the caller is still connected.
+                logger.warning("Gemini Live session ended mid-call")
+                return "reconnect"
+        except Exception:
+            logger.exception("Gemini Live session failed to start/run")
+            return "reconnect"
+
+    async def _watchdog(self) -> None:
+        """Returns (completing its task) ONLY when the session looks wedged
+        and should be reconnected: the caller spoke (or the call just
+        started) and the model has produced nothing for too long, even after
+        a nudge. Runs forever otherwise."""
+        while True:
+            await asyncio.sleep(2.0)
+            if self.state.submitted:
+                await asyncio.sleep(3600)  # nothing left to guard; park until cancelled
+                continue
+            now = time.monotonic()
+            if self._model_last_spoke == 0.0:
+                # Not even the greeting has arrived yet.
+                waiting_since = self._session_started
+                timeout = _GREETING_TIMEOUT_S
+            elif self._caller_last_spoke > self._model_last_spoke:
+                waiting_since = self._caller_last_spoke
+                timeout = _RESPONSE_TIMEOUT_S
+            else:
+                continue
+            if now - waiting_since <= timeout:
+                continue
+            if self._nudge_sent_at < waiting_since:
+                self._nudge_sent_at = now
+                logger.warning("Watchdog: no model response for %.0fs -- nudging session",
+                               now - waiting_since)
                 try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+                    await self._live_session.send_client_content(
+                        turns=types.Content(role="user", parts=[types.Part(
+                            text="(The caller is still waiting for your reply. Respond to their last statement now.)"
+                        )]),
+                        turn_complete=True,
+                    )
+                except Exception:
+                    logger.warning("Watchdog: nudge send failed -- session is dead")
+                    return
+            elif now - self._nudge_sent_at > timeout:
+                logger.warning("Watchdog: nudge did not revive the session -- requesting reconnect")
+                return
+
+    def _reconnect_kickoff(self) -> str:
+        """Kickoff turn for a fresh Gemini session mid-call: the model has no
+        memory of the conversation (state lives here, not in its context), so
+        hand it everything collected so far plus the exact apology to say."""
+        apology = _RECONNECT_APOLOGY.get(self.state.language, _RECONNECT_APOLOGY["en-IN"])
+        recorded = []
+        if self.state.sub_type:
+            recorded.append(f"incident type: {self.state.sub_type}")
+        if self.state.description:
+            recorded.append(f"description: {self.state.description}")
+        if self.state.vehicles_involved is not None:
+            recorded.append(f"vehicles involved: {self.state.vehicles_involved}")
+        if self.state.casualties is not None:
+            recorded.append(f"casualties: {self.state.casualties}")
+        if self.state.flags:
+            recorded.append(f"confirmed conditions: {', '.join(sorted(self.state.flags))}")
+        if self.state.location:
+            recorded.append(f"location: {self.state.location.get('label', '')}")
+        summary = "; ".join(recorded) if recorded else "nothing recorded yet"
+        missing = self._compute_still_missing()
+        next_topic = missing[0] if missing else "the final confirmation and submission"
+        return (
+            "(The call reconnected after a brief technical problem, mid-conversation. Do NOT say the "
+            f'welcome line again. First say exactly this, word for word: "{apology}" '
+            f"Already recorded, do not re-ask any of it: {summary}. "
+            f"Then continue from where the call left off -- the next thing to ask about is: {next_topic}.)"
+        )
 
     async def _pump_client_to_gemini(self) -> None:
-        assert self._live_session is not None
         try:
             while True:
                 message = await self.websocket.receive()
@@ -796,9 +1018,17 @@ class DispatcherSession:
                     break
                 data = message.get("bytes")
                 if data is not None:
-                    await self._live_session.send_realtime_input(
-                        audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
-                    )
+                    # Per-chunk try: this pump outlives Gemini session
+                    # reconnects, so a chunk arriving during the brief gap
+                    # between sessions (or into a just-died session) must be
+                    # dropped, not kill the whole browser-facing call.
+                    try:
+                        if self._live_session is not None:
+                            await self._live_session.send_realtime_input(
+                                audio=types.Blob(data=data, mime_type="audio/pcm;rate=16000")
+                            )
+                    except Exception:
+                        logger.debug("Dropped one audio chunk (Gemini session unavailable)")
                     continue
                 text = message.get("text")
                 if text is None:
@@ -823,38 +1053,54 @@ class DispatcherSession:
             logger.debug("Client->Gemini pump ended", exc_info=True)
 
     async def _pump_gemini_to_client(self) -> None:
-        assert self._live_session is not None
-        while not self.state.submitted:
-            async for response in self._live_session.receive():
-                if response.tool_call:
-                    function_responses = []
-                    for fc in response.tool_call.function_calls:
-                        result = await self._dispatch_tool(fc.name, fc.args or {})
-                        function_responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
-                    await self._live_session.send_tool_response(function_responses=function_responses)
+        live_session = self._live_session
+        assert live_session is not None
+        try:
+            while not self.state.submitted:
+                async for response in live_session.receive():
+                    if response.tool_call:
+                        # Deliberately NOT counted as the model "speaking" --
+                        # the watchdog tracks audible replies only, so a
+                        # caller left hanging behind silent tool churn or an
+                        # empty turn still gets nudged ("never leave the
+                        # user without a spoken reply").
+                        function_responses = []
+                        for fc in response.tool_call.function_calls:
+                            result = await self._dispatch_tool(fc.name, fc.args or {})
+                            function_responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+                        await live_session.send_tool_response(function_responses=function_responses)
 
-                sc = response.server_content
-                if sc is None:
-                    continue
-                if sc.input_transcription and sc.input_transcription.text:
-                    await self._safe_send_json({"type": "transcript", "role": "user", "text": sc.input_transcription.text})
-                    self.state.caller_transcript += " " + sc.input_transcription.text
-                    await self._apply_local_signals_from_transcript()
-                if sc.output_transcription and sc.output_transcription.text:
-                    await self._safe_send_json({"type": "transcript", "role": "model", "text": sc.output_transcription.text})
-                if sc.model_turn:
-                    for part in sc.model_turn.parts:
-                        if part.inline_data and part.inline_data.data:
-                            await self._safe_send_json({"type": "status", "state": "speaking"})
-                            try:
-                                await self.websocket.send_bytes(part.inline_data.data)
-                            except Exception:
-                                return
-                if sc.interrupted:
-                    await self._safe_send_json({"type": "interrupted"})
-                if sc.turn_complete:
-                    await self._safe_send_json({"type": "turn_complete"})
-                    await self._safe_send_json({"type": "status", "state": "listening"})
-                    break
-            else:
-                break  # receive() generator ended (session closed) with no turn_complete
+                    sc = response.server_content
+                    if sc is None:
+                        continue
+                    if sc.input_transcription and sc.input_transcription.text:
+                        self._caller_last_spoke = time.monotonic()
+                        await self._safe_send_json({"type": "transcript", "role": "user", "text": sc.input_transcription.text})
+                        self.state.caller_transcript += " " + sc.input_transcription.text
+                        await self._apply_local_signals_from_transcript()
+                    if sc.output_transcription and sc.output_transcription.text:
+                        self._model_last_spoke = time.monotonic()
+                        await self._safe_send_json({"type": "transcript", "role": "model", "text": sc.output_transcription.text})
+                    if sc.model_turn:
+                        for part in sc.model_turn.parts:
+                            if part.inline_data and part.inline_data.data:
+                                self._model_last_spoke = time.monotonic()
+                                await self._safe_send_json({"type": "status", "state": "speaking"})
+                                try:
+                                    await self.websocket.send_bytes(part.inline_data.data)
+                                except Exception:
+                                    return
+                    if sc.interrupted:
+                        await self._safe_send_json({"type": "interrupted"})
+                    if sc.turn_complete:
+                        # Not a _model_last_spoke update: an EMPTY turn (no
+                        # audio) is not a reply, and must still trip the
+                        # watchdog if the caller is waiting on one.
+                        await self._safe_send_json({"type": "turn_complete"})
+                        await self._safe_send_json({"type": "status", "state": "listening"})
+                        break
+                else:
+                    break  # receive() generator ended (session closed) with no turn_complete
+        except Exception:
+            # Treated by _run_live_session as "session died" -> reconnect.
+            logger.exception("Gemini->client pump errored")
