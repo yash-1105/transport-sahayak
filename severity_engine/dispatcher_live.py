@@ -655,6 +655,18 @@ class DispatcherSession:
     # ── Session lifecycle ───────────────────────────────────────────────────
 
     def _build_config(self) -> "types.LiveConnectConfig":
+        # Hindi-only sampling controls: every Start Conversation opens a fresh
+        # Gemini Live session, and at default sampling settings the Hindi
+        # model's call-to-call variance was high enough that each call felt
+        # like "a different agent" -- different phrasing, sometimes drifting
+        # into off-list questions despite next_question. A fixed seed plus a
+        # lower temperature makes each fresh session behave like the same,
+        # consistent agent. English is deliberately left at API defaults --
+        # it's confirmed working well and must not change (per user request).
+        hindi_consistency: dict = (
+            {"temperature": 0.4, "seed": 1033}  # 1033 = the helpline number
+            if self.state.language == "hi-IN" else {}
+        )
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(language_code=self.state.language),
@@ -662,6 +674,7 @@ class DispatcherSession:
             system_instruction=types.Content(parts=[types.Part(text=_system_instruction(self.state.language))]),
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            **hindi_consistency,
             # Without headphones, the caller's mic inevitably picks up some of
             # Gemini's own voice bleeding out of the speaker -- confirmed live
             # this was being misread as the caller interrupting mid-sentence,
