@@ -48,7 +48,7 @@ from google import genai
 from google.genai import types
 from google.oauth2 import service_account
 
-from . import classifier
+from . import classifier, local_extract
 from .google_credentials import load_service_account_info
 
 logger = logging.getLogger("dispatcher_live")
@@ -62,6 +62,30 @@ _DEFAULT_LANGUAGE = "en-IN"
 _LOCATION_TIMEOUT_S = 8.0
 
 _FLAG_NAMES = ["Conscious", "Breathing", "Trapped", "Heavy bleeding", "Fire", "Hazardous material"]
+
+# Maps severity_engine.local_extract's signal keys (its lexicon already
+# includes Hindi phrases -- see local_extract.py's _FIRE_PHRASES etc.) onto
+# this feature's flag vocabulary. Used as a deterministic backstop: confirmed
+# live that the model sometimes never calls update_form_field for a
+# condition the caller mentioned, even while its own spoken summary shows it
+# understood the mention -- so hazard flags are not left depending solely on
+# the model remembering to make a separate tool call, same "rule-first,
+# LLM-optional" pattern this project already uses for the text-based /assess
+# pipeline (see engine.py's _merge_signals, which this mirrors: OR-only,
+# never downgrades something already confirmed).
+#
+# Deliberately does NOT include local_extract's "vulnerableVictim" signal --
+# confirmed live that it's a broad "at-risk victim" category (child,
+# pregnant, elderly, disabled, OR unconscious -- see local_extract.py's
+# _VULNERABLE_PHRASES), not specifically bleeding, so mapping it to the
+# "Heavy bleeding" flag produced a false positive the instant a caller said
+# "unconscious" with no bleeding mentioned at all. Only signals with a clean,
+# unambiguous 1:1 correspondence to a real flag belong here.
+_LOCAL_SIGNAL_TO_FLAG = {
+    "fire": "Fire",
+    "entrapment": "Trapped",
+    "hazmat": "Hazardous material",
+}
 
 
 class DispatcherCredentialsError(RuntimeError):
@@ -107,6 +131,8 @@ class DispatcherState:
     flags_discussed: set = field(default_factory=set)  # flags asked about, active or not
     location: Optional[dict] = None  # {"lat", "lng", "label"}
     submitted: bool = False
+    caller_transcript: str = ""  # accumulated raw transcript of what the caller has said
+    description_set_explicitly: bool = False  # True once update_form_field(description) is called
 
 
 # Additional structured fields to ask about per curated category (beyond the
@@ -224,7 +250,17 @@ _TOOL_DECLARATIONS = [
                 },
                 "flag_active": {
                     "type": "BOOLEAN",
-                    "description": "Required when field=flag: true if present, false if explicitly ruled out.",
+                    "description": (
+                        "Required when field=flag: true means the state named by flag_name is "
+                        "confirmed TRUE, false means it is confirmed FALSE -- watch the polarity "
+                        "carefully, it is NOT always 'true = bad'. For Trapped, Fire, and "
+                        "Hazardous material: true means that hazard IS present (bad), false means "
+                        "it is ruled out. For Conscious and Breathing: true means the person IS "
+                        "conscious / IS breathing normally (good) -- so if the caller says "
+                        "'unconscious', set Conscious to false, and if the caller says 'not "
+                        "breathing' or 'struggling to breathe', set Breathing to false. For Heavy "
+                        "bleeding: true means there IS heavy bleeding (bad)."
+                    ),
                 },
                 "number_value": {
                     "type": "INTEGER",
@@ -276,19 +312,29 @@ _OPENING_LINE = {
 def _system_instruction(language_code: str) -> str:
     lang_name = "Hindi" if language_code == "hi-IN" else "English"
     opening_line = _OPENING_LINE.get(language_code, _OPENING_LINE[_DEFAULT_LANGUAGE])
+    # Your voice is female in Hindi -- Hindi verbs conjugate by the speaker's
+    # gender, so every first-person verb must use feminine forms, in every
+    # sentence generated live, not just the fixed example phrases below.
+    gender_note = (
+        ' Your voice is female, so ALWAYS use feminine grammatical verb forms when referring to '
+        'yourself -- "समझती हूँ" not "समझता हूँ", "कर रही हूँ" not "कर रहा हूँ", "रही हूँ"/"गई" not '
+        '"रहा हूँ"/"गया", and so on for every first-person verb you say, in every sentence you '
+        "generate yourself, not just in the fixed examples below."
+        if language_code == "hi-IN" else ""
+    )
     return f"""You are an emergency dispatch call-taker for a road-accident first-response system in Assam, India. You are having a real-time voice conversation with someone reporting a road accident or emergency.
 
-LANGUAGE: Conduct this entire conversation in {lang_name} only. If the caller speaks a different language, gently continue in {lang_name} rather than switching -- never randomly switch languages yourself.
+LANGUAGE: Conduct this entire conversation in {lang_name} only. If the caller speaks a different language, gently continue in {lang_name} rather than switching -- never randomly switch languages yourself.{gender_note}
 
-TONE: Calm, warm, and genuinely concerned -- like a serious, caring human dispatcher handling an emergency, not a neutral form-filling bot, and absolutely NOT an upbeat customer-service agent. This is a safety call, not a friendly chat -- your delivery must sound measured, sincere, and a little subdued, never cheerful, chipper, energetic, or excited, even when you are simply acknowledging routine details. If in doubt, err toward quieter and more serious rather than lively. This warmth must come through on EVERY call, not only when the caller explicitly mentions an injury or sounds distressed -- even a caller who reports a routine-sounding incident calmly is still someone dealing with a road accident, and should hear a human who cares, not a checklist. Never let two or more responses in a row go by with a purely neutral, transactional acknowledgment ("Okay." / "Noted.") -- always warm it up at least a little, for example (English, said quietly and sincerely, not brightly): "Thank you for telling me, I'm noting that down" / "I understand, let's get this sorted quickly" / "Alright, I have that noted" -- and when the caller mentions an injury, bleeding, or sounds frightened, go further with real concern: "I'm sorry to hear that, help is on the way" / "That sounds frightening, please try to stay calm" / "I understand, we'll get you help as quickly as we can". In Hindi, the same range applies, spoken with the same quiet seriousness: "ठीक है, धन्यवाद, मैं इसे नोट कर रहा हूँ" / "समझ गया, चलिए इसे जल्दी सुलझाते हैं" for routine acknowledgments, and for real distress: "मुझे यह सुनकर दुख हुआ, मदद आ रही है" / "कृपया घबराइए मत, हम आपकी मदद कर रहे हैं" / "मैं समझता हूँ, हम जल्द से जल्द सहायता भेज रहे हैं". Vary the phrasing -- never repeat the exact same acknowledgment twice in one call. This warmth must never come at the cost of the rest of this prompt: still ask one question at a time, still keep every response to 1-2 short sentences, still speak a little slower than normal conversational pace with clear pronunciation, and still never repeat a sentence you have already said unless the caller explicitly asks you to. Gathering the information needed to send help quickly is still the priority -- empathy should feel human and serious, not slow the call down and not sound upbeat.
+TONE: Calm, warm, and genuinely concerned -- like a serious, caring human dispatcher handling an emergency, not a neutral form-filling bot, and absolutely NOT an upbeat customer-service agent. This is a safety call, not a friendly chat -- your delivery must sound measured, sincere, and a little subdued, never cheerful, chipper, energetic, or excited, even when you are simply acknowledging routine details. If in doubt, err toward quieter and more serious rather than lively. This warmth must come through on EVERY call, not only when the caller explicitly mentions an injury or sounds distressed -- even a caller who reports a routine-sounding incident calmly is still someone dealing with a road accident, and should hear a human who cares, not a checklist. Never let two or more responses in a row go by with a purely neutral, transactional acknowledgment ("Okay." / "Noted.") -- always warm it up at least a little, for example (English, said quietly and sincerely, not brightly): "Thank you for telling me, I'm noting that down" / "I understand, let's get this sorted quickly" / "Alright, I have that noted" -- and when the caller mentions an injury, bleeding, or sounds frightened, go further with real concern: "I'm sorry to hear that, help is on the way" / "That sounds frightening, please try to stay calm" / "I understand, we'll get you help as quickly as we can". In Hindi, the same range applies, spoken with the same quiet seriousness and always in feminine grammatical form: "ठीक है, धन्यवाद, मैं इसे नोट कर रही हूँ" / "समझ गई, चलिए इसे जल्दी सुलझाते हैं" for routine acknowledgments, and for real distress: "मुझे यह सुनकर दुख हुआ, मदद आ रही है" / "कृपया घबराइए मत, हम आपकी मदद कर रहे हैं" / "मैं समझती हूँ, हम जल्द से जल्द सहायता भेज रहे हैं". Vary the phrasing -- never repeat the exact same acknowledgment twice in one call. Every tool response you receive includes a "tone_reminder" -- follow it every single time, not just when you happen to remember to. This warmth must never come at the cost of the rest of this prompt: still ask one question at a time, still keep every response to 1-2 short sentences, still speak a little slower than normal conversational pace with clear pronunciation, and still never repeat a sentence you have already said unless the caller explicitly asks you to. Gathering the information needed to send help quickly is still the priority -- empathy should feel human and serious, not slow the call down and not sound upbeat.
 
 OPENING (the very first thing you do, before the caller says anything, and only ever once for the whole call): as soon as the call connects, say this exact sentence, word for word, with nothing before it and nothing added: "{opening_line}" You will be told the caller's detected location (or that none was detected) in the same message that starts the call -- do not call get_current_location for this, it has already been resolved for you. If a location was given, briefly mention it ("I have your location as X, is that right?") and ask what happened, all in this same first turn. If no location was detected, tell the caller to use the map-pin button to mark their location instead -- do not try to guess a location from a spoken description. Once you have done this opening, it is complete -- never say the welcome sentence again for the rest of the call, no matter what happens, even if it feels like the conversation is starting over. Move straight to gathering information about the incident.
 
 INCIDENT TYPE: Never guess or invent an incident type yourself. Always call search_incident_type with a description of what the caller told you -- it automatically records a confident match for you, so once you've called it you do not need a separate step to confirm the type unless the caller says it's wrong. Refer to the incident only using the exact subType name it returns. If it doesn't sound right to the caller, call search_incident_categories to browse alternatives, then call update_form_field with field=incidentType and the exact subType you both agreed on.
 
-FORM FILLING: Call update_form_field immediately every time the caller gives you a new piece of information -- INCLUDING conditions mentioned in passing, not just direct answers to your questions. If the caller mentions fire, hazmat, anyone trapped, consciousness, breathing, or bleeding ANYWHERE in what they say (even inside a general description), call update_form_field with field=flag for that condition right away -- do not wait for a dedicated question about it. Every tool response includes "still_missing" -- a list of what's not yet known. Use it to decide your next question and to know what NOT to ask again, so you never repeat a question the caller already answered.
+FORM FILLING: Call update_form_field immediately every time the caller gives you a new piece of information -- INCLUDING conditions mentioned in passing, not just direct answers to your questions. If the caller mentions fire, hazmat, anyone trapped, consciousness, breathing, or bleeding ANYWHERE in what they say (even inside a general description), call update_form_field with field=flag for that condition right away -- do not wait for a dedicated question about it.
 
-FOLLOW-UP QUESTIONS: Once the incident type is confirmed, ask ONLY about what "still_missing" shows -- never ask about anything that is not on that list, even if it feels clinically relevant or like something a real dispatcher would normally ask (for example, do not ask about consciousness or breathing unless "still_missing" specifically mentions it). Ask about the items in "still_missing" one at a time, IN THE SAME ORDER they are listed -- do not skip ahead, reorder them, or add extra questions of your own based on what feels natural in the moment. This keeps the flow of questions identical regardless of language or how the caller phrases things.
+FOLLOW-UP QUESTIONS -- THIS IS A HARD RULE, NOT A SUGGESTION: every tool response includes "next_question", the ONE specific thing to ask about next, or null if nothing is left. This is precomputed for you deterministically -- it is not your judgment call. After any brief acknowledgment, your very next question must be about EXACTLY the topic named in "next_question", worded naturally for the conversation but not substituted for a different topic. Never ask about anything else, never invent your own question (for example, do not ask about consciousness or breathing unless "next_question" specifically says so), never skip ahead to a topic that isn't in "next_question" yet, and never ask about something already answered. Keep asking about the same "next_question" topic (rephrasing if needed) until it is answered and the next tool response gives you a new one, or null. This must produce the exact same sequence of questions regardless of language -- if you find yourself wanting to ask something "next_question" doesn't mention, don't.
 
 FINAL CONFIRMATION: Before calling submit_incident, verbally summarize everything collected (incident type, key facts, location) and ask "Would you like me to submit this report?" Only call submit_incident after the caller clearly confirms. If it comes back still missing something, ask for it and try again.
 """
@@ -328,6 +374,69 @@ class DispatcherSession:
                 missing.append(item["hint"])
         return missing
 
+    _TONE_REMINDER = (
+        "Acknowledge what the caller just said warmly, seriously, and briefly (not upbeat) "
+        "before asking your next question."
+    )
+
+    def _state_block(self) -> dict:
+        """Common context merged into every tool response, so the model
+        always gets fresh, unambiguous guidance for its very next utterance
+        instead of depending on a system-prompt instruction it can drift
+        away from over a long conversation. "next_question" (singular, not a
+        list) removes any judgment call about which topic or what order to
+        ask in -- confirmed via live testing that giving the model a list to
+        interpret ("still_missing") let it wander to unrelated questions or
+        a different order between runs and between languages; giving it one
+        specific next topic each time does not."""
+        missing = self._compute_still_missing()
+        return {
+            "still_missing": missing,
+            "next_question": missing[0] if missing else None,
+            "tone_reminder": self._TONE_REMINDER,
+        }
+
+    async def _apply_local_signals_from_transcript(self) -> None:
+        """Deterministic backstop, run on every fragment of the caller's own
+        speech (not tool calls): re-derive hazard signals from the full
+        accumulated transcript and OR them into state. Never downgrades
+        something already true, never needs the model to have called any
+        tool -- this is what catches a hazard the model verbally understood
+        but never recorded via update_form_field."""
+        if not self.state.caller_transcript.strip():
+            return
+        # Same backstop reasoning as the flags below, for the description
+        # field: confirmed live that the model can get stuck repeatedly
+        # asking for "a short description of what happened" even after the
+        # caller has already said plenty, because it never called
+        # update_form_field(field="description", ...) itself. Keep this
+        # auto-derived until the model explicitly sets its own (cleaner,
+        # summarized) description -- once it does, stop overwriting it here.
+        if not self.state.description_set_explicitly and len(self.state.caller_transcript.strip()) > 12:
+            self.state.description = self.state.caller_transcript.strip()[:500]
+            await self._safe_send_json({
+                "type": "form_update", "field": "description", "value": self.state.description,
+            })
+        signals = local_extract.extract_signals_locally(self.state.caller_transcript)
+        for signal_key, flag_name in _LOCAL_SIGNAL_TO_FLAG.items():
+            if signals.get(signal_key) and flag_name not in self.state.flags:
+                self.state.flags.add(flag_name)
+                self.state.flags_discussed.add(flag_name)
+                await self._safe_send_json({
+                    "type": "form_update", "field": "flag",
+                    "value": {"flag_name": flag_name, "flag_active": True},
+                })
+        if self.state.vehicles_involved is None and signals.get("estimatedVehiclesInvolved"):
+            self.state.vehicles_involved = signals["estimatedVehiclesInvolved"]
+            await self._safe_send_json({
+                "type": "form_update", "field": "vehiclesInvolved", "value": self.state.vehicles_involved,
+            })
+        if self.state.casualties is None and signals.get("estimatedCasualties") is not None:
+            self.state.casualties = signals["estimatedCasualties"]
+            await self._safe_send_json({
+                "type": "form_update", "field": "casualties", "value": self.state.casualties,
+            })
+
     # ── Tools ──────────────────────────────────────────────────────────────
 
     async def _apply_incident_type(self, sub_type: str, category_hint: Optional[str] = None) -> bool:
@@ -360,7 +469,7 @@ class DispatcherSession:
         sub_type = result.get("subType")
         if sub_type and not result.get("lowConfidence"):
             await self._apply_incident_type(sub_type, result.get("category"))
-        result["still_missing"] = self._compute_still_missing()
+        result.update(self._state_block())
         return result
 
     async def _tool_search_incident_categories(self, category: Optional[str] = None) -> dict:
@@ -391,6 +500,7 @@ class DispatcherSession:
             if text_value is None:
                 return {"ok": False, "error": "text_value is required for field=description"}
             self.state.description = text_value
+            self.state.description_set_explicitly = True
             await self._safe_send_json({"type": "form_update", "field": "description", "value": text_value})
         elif field == "vehiclesInvolved":
             if number_value is None:
@@ -416,11 +526,11 @@ class DispatcherSession:
             })
         else:
             return {"ok": False, "error": f"Unknown field {field!r}"}
-        return {"ok": True, "still_missing": self._compute_still_missing()}
+        return {"ok": True, **self._state_block()}
 
     async def _tool_get_current_location(self) -> dict:
         if self.state.location:
-            return {"status": "already_have_location", **self.state.location, "still_missing": self._compute_still_missing()}
+            return {"status": "already_have_location", **self.state.location, **self._state_block()}
         request_id = str(uuid.uuid4())
         fut: "asyncio.Future" = asyncio.get_event_loop().create_future()
         self._pending_location[request_id] = fut
@@ -429,15 +539,24 @@ class DispatcherSession:
             return await asyncio.wait_for(fut, timeout=_LOCATION_TIMEOUT_S)
         except asyncio.TimeoutError:
             self._pending_location.pop(request_id, None)
-            return {"status": "unavailable", "error": "Location request timed out.", "still_missing": self._compute_still_missing()}
+            return {"status": "unavailable", "error": "Location request timed out.", **self._state_block()}
 
     async def _tool_submit_incident(self) -> dict:
+        # Backstop, mirrors _apply_local_signals_from_transcript: if the model
+        # never explicitly called update_form_field(field="description", ...)
+        # despite the caller having said plenty (confirmed live this happens
+        # occasionally), fall back to the accumulated raw transcript rather
+        # than blocking submission on a field that has a reasonable value
+        # sitting right there.
+        if not self.state.description and self.state.caller_transcript.strip():
+            self.state.description = self.state.caller_transcript.strip()[:500]
+            await self._safe_send_json({"type": "form_update", "field": "description", "value": self.state.description})
         blocking = [
             m for m in self._compute_still_missing()
             if "incident type" in m or "location" in m or "description" in m
         ]
         if blocking:
-            return {"ok": False, "error": f"Cannot submit yet -- still missing: {'; '.join(blocking)}"}
+            return {"ok": False, "error": f"Cannot submit yet -- still missing: {'; '.join(blocking)}", **self._state_block()}
         payload = {
             "subType": self.state.sub_type,
             "category": self.state.category,
@@ -582,11 +701,11 @@ class DispatcherSession:
                     fut = self._pending_location.pop(msg.get("requestId"), None)
                     if fut and not fut.done():
                         self.state.location = {"lat": msg.get("lat"), "lng": msg.get("lng"), "label": msg.get("label", "")}
-                        fut.set_result({"status": "ok", **self.state.location, "still_missing": self._compute_still_missing()})
+                        fut.set_result({"status": "ok", **self.state.location, **self._state_block()})
                 elif mtype == "location_error":
                     fut = self._pending_location.pop(msg.get("requestId"), None)
                     if fut and not fut.done():
-                        fut.set_result({"status": "unavailable", "error": msg.get("message", "denied"), "still_missing": self._compute_still_missing()})
+                        fut.set_result({"status": "unavailable", "error": msg.get("message", "denied"), **self._state_block()})
         except Exception:
             logger.debug("Client->Gemini pump ended", exc_info=True)
 
@@ -606,6 +725,8 @@ class DispatcherSession:
                     continue
                 if sc.input_transcription and sc.input_transcription.text:
                     await self._safe_send_json({"type": "transcript", "role": "user", "text": sc.input_transcription.text})
+                    self.state.caller_transcript += " " + sc.input_transcription.text
+                    await self._apply_local_signals_from_transcript()
                 if sc.output_transcription and sc.output_transcription.text:
                     await self._safe_send_json({"type": "transcript", "role": "model", "text": sc.output_transcription.text})
                 if sc.model_turn:
