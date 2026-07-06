@@ -39,6 +39,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
@@ -86,6 +87,17 @@ _LOCAL_SIGNAL_TO_FLAG = {
     "entrapment": "Trapped",
     "hazmat": "Hazardous material",
 }
+
+# Speech-to-Text sometimes emits bracketed non-speech annotations for
+# silence/background noise (observed live: a literal "{background}" token in
+# the transcript) -- strip these before ever using raw transcript as a
+# last-resort description fallback.
+_TRANSCRIPT_ARTIFACT_RE = re.compile(r"[\{\[\(][^\}\]\)]{0,40}[\}\]\)]")
+
+
+def _strip_transcript_artifacts(text: str) -> str:
+    cleaned = _TRANSCRIPT_ARTIFACT_RE.sub(" ", text or "")
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 class DispatcherCredentialsError(RuntimeError):
@@ -334,6 +346,8 @@ INCIDENT TYPE: Never guess or invent an incident type yourself. Always call sear
 
 FORM FILLING: Call update_form_field immediately every time the caller gives you a new piece of information -- INCLUDING conditions mentioned in passing, not just direct answers to your questions. If the caller mentions fire, hazmat, anyone trapped, consciousness, breathing, or bleeding ANYWHERE in what they say (even inside a general description), call update_form_field with field=flag for that condition right away -- do not wait for a dedicated question about it.
 
+DESCRIPTION FIELD -- SPECIAL RULE: call update_form_field with field=description as soon as the caller has said ENOUGH for even a rough one-sentence summary -- do not wait until you have every detail or until the end of the call. Call it again, replacing the old value, whenever you learn something that should be added to the summary. ALWAYS write text_value in ENGLISH, no matter what language the conversation itself is in -- translate and summarize what the caller told you, never copy their words verbatim in Hindi or any other language. This is the one field that must always be English regardless of conversation language.
+
 FOLLOW-UP QUESTIONS -- THIS IS A HARD RULE, NOT A SUGGESTION: every tool response includes "next_question", the ONE specific thing to ask about next, or null if nothing is left. This is precomputed for you deterministically -- it is not your judgment call. After any brief acknowledgment, your very next question must be about EXACTLY the topic named in "next_question", worded naturally for the conversation but not substituted for a different topic. Never ask about anything else, never invent your own question (for example, do not ask about consciousness or breathing unless "next_question" specifically says so), never skip ahead to a topic that isn't in "next_question" yet, and never ask about something already answered. Keep asking about the same "next_question" topic (rephrasing if needed) until it is answered and the next tool response gives you a new one, or null. This must produce the exact same sequence of questions regardless of language -- if you find yourself wanting to ask something "next_question" doesn't mention, don't.
 
 FINAL CONFIRMATION: Before calling submit_incident, verbally summarize everything collected (incident type, key facts, location) and ask "Would you like me to submit this report?" Only call submit_incident after the caller clearly confirms. If it comes back still missing something, ask for it and try again.
@@ -374,10 +388,32 @@ class DispatcherSession:
                 missing.append(item["hint"])
         return missing
 
-    _TONE_REMINDER = (
-        "Acknowledge what the caller just said warmly, seriously, and briefly (not upbeat) "
-        "before asking your next question."
-    )
+    def _tone_reminder(self) -> str:
+        """Dynamic, not a fixed string -- escalates specifically when the
+        caller has reported an injury or someone in danger. Confirmed live
+        that a generic reminder alone still let the model respond to injury
+        reports with a flat "noted" -- naming the injury signal explicitly,
+        every single turn while it's true, makes the concern far more
+        reliable than depending on the model to remember the system prompt's
+        general instruction to escalate for distress."""
+        injury_reported = (
+            (self.state.casualties or 0) > 0
+            or "Heavy bleeding" in self.state.flags
+            or "Trapped" in self.state.flags
+            or ("Conscious" in self.state.flags_discussed and "Conscious" not in self.state.flags)
+            or ("Breathing" in self.state.flags_discussed and "Breathing" not in self.state.flags)
+        )
+        if injury_reported:
+            return (
+                "The caller has reported an injury, someone trapped, or a person in danger. "
+                "Your very next sentence, before anything else, must express real, sincere "
+                "concern in your own words (not a flat \"noted\" or \"okay\") -- this matters, "
+                "sound genuinely worried for them, not like you are filling out a form."
+            )
+        return (
+            "Acknowledge what the caller just said warmly, seriously, and briefly (not upbeat) "
+            "before asking your next question."
+        )
 
     def _state_block(self) -> dict:
         """Common context merged into every tool response, so the model
@@ -393,7 +429,7 @@ class DispatcherSession:
         return {
             "still_missing": missing,
             "next_question": missing[0] if missing else None,
-            "tone_reminder": self._TONE_REMINDER,
+            "tone_reminder": self._tone_reminder(),
         }
 
     async def _apply_local_signals_from_transcript(self) -> None:
@@ -405,18 +441,18 @@ class DispatcherSession:
         but never recorded via update_form_field."""
         if not self.state.caller_transcript.strip():
             return
-        # Same backstop reasoning as the flags below, for the description
-        # field: confirmed live that the model can get stuck repeatedly
-        # asking for "a short description of what happened" even after the
-        # caller has already said plenty, because it never called
-        # update_form_field(field="description", ...) itself. Keep this
-        # auto-derived until the model explicitly sets its own (cleaner,
-        # summarized) description -- once it does, stop overwriting it here.
-        if not self.state.description_set_explicitly and len(self.state.caller_transcript.strip()) > 12:
-            self.state.description = self.state.caller_transcript.strip()[:500]
-            await self._safe_send_json({
-                "type": "form_update", "field": "description", "value": self.state.description,
-            })
+        # NOTE: deliberately does NOT auto-fill "description" from the raw
+        # transcript here (an earlier version did). Confirmed live this
+        # backfired: description must always be in ENGLISH regardless of
+        # conversation language, which only the model can do (it requires
+        # translating/summarizing, not just copying text) -- and satisfying
+        # "next_question" for description this early, with raw untranslated
+        # text, removed the model's own reason to ever call
+        # update_form_field(field="description") with a proper English
+        # summary. The FORM FILLING instruction now tells the model to set
+        # this incrementally and always in English; _tool_submit_incident
+        # still has a last-resort fallback for the rare case the model never
+        # does, but it is no longer the first thing that happens here.
         signals = local_extract.extract_signals_locally(self.state.caller_transcript)
         for signal_key, flag_name in _LOCAL_SIGNAL_TO_FLAG.items():
             if signals.get(signal_key) and flag_name not in self.state.flags:
@@ -542,15 +578,19 @@ class DispatcherSession:
             return {"status": "unavailable", "error": "Location request timed out.", **self._state_block()}
 
     async def _tool_submit_incident(self) -> dict:
-        # Backstop, mirrors _apply_local_signals_from_transcript: if the model
-        # never explicitly called update_form_field(field="description", ...)
-        # despite the caller having said plenty (confirmed live this happens
-        # occasionally), fall back to the accumulated raw transcript rather
-        # than blocking submission on a field that has a reasonable value
-        # sitting right there.
+        # Last-resort backstop only -- if the model never explicitly called
+        # update_form_field(field="description", ...) despite being told to
+        # do so incrementally and in English, fall back to the accumulated
+        # raw transcript rather than blocking submission forever. This is
+        # NOT translated (no local translation engine available), so it may
+        # not be in English if the caller spoke Hindi -- an accepted, rare
+        # last resort, not the primary path (see FORM FILLING in the system
+        # instruction, which is the primary path and should make this rare).
         if not self.state.description and self.state.caller_transcript.strip():
-            self.state.description = self.state.caller_transcript.strip()[:500]
-            await self._safe_send_json({"type": "form_update", "field": "description", "value": self.state.description})
+            cleaned = _strip_transcript_artifacts(self.state.caller_transcript)
+            if cleaned:
+                self.state.description = cleaned[:500]
+                await self._safe_send_json({"type": "form_update", "field": "description", "value": self.state.description})
         blocking = [
             m for m in self._compute_still_missing()
             if "incident type" in m or "location" in m or "description" in m
