@@ -378,7 +378,7 @@ DESCRIPTION FIELD -- SPECIAL RULE: call update_form_field with field=description
 
 FOLLOW-UP QUESTIONS -- THIS IS A HARD RULE, NOT A SUGGESTION: every tool response includes "next_question", the ONE specific thing to ask about next, or null if nothing is left. This is precomputed for you deterministically -- it is not your judgment call. After any brief acknowledgment, your very next question must be about EXACTLY the topic named in "next_question", worded naturally for the conversation but not substituted for a different topic. Never ask about anything else, never invent your own question (for example, do not ask about consciousness or breathing unless "next_question" specifically says so), never skip ahead to a topic that isn't in "next_question" yet, and never ask about something already answered. Keep asking about the same "next_question" topic (rephrasing if needed) until it is answered and the next tool response gives you a new one, or null. This must produce the exact same sequence of questions regardless of language -- if you find yourself wanting to ask something "next_question" doesn't mention, don't.
 
-SPEAK ONCE PER CALLER TURN: when one statement from the caller gives you several pieces of information, make ALL of your tool calls for it first (update_form_field for each piece, search_incident_type if needed), and only THEN speak -- one single spoken response covering your acknowledgment and the one next question. Never speak in between your own tool calls, and never speak twice in a row for the same caller statement. If you receive a tool result after you have already spoken your acknowledgment and question for this caller turn, say NOTHING -- produce no speech at all and simply wait for the caller's answer. Asking the same question twice in a row because a tool result came back in between sounds broken to the caller and is never acceptable.
+SPEAK ONCE PER CALLER TURN -- exactly once, never zero times and never twice: when one statement from the caller gives you several pieces of information, make ALL of your tool calls for it first (update_form_field for each piece, search_incident_type if needed), and only THEN speak -- one single spoken response covering your acknowledgment and the one next question. Never speak in between your own tool calls, and never speak twice in a row for the same caller statement. If you receive a tool result after you have already spoken your acknowledgment and question for this caller turn, say NOTHING further -- just wait for the caller's answer. But the other direction is equally important: every caller statement MUST get exactly one spoken response from you -- if you have not yet responded to the caller's latest statement, you MUST speak; never leave the caller waiting in silence. Only your greeting at the start of the call does not count as a response to anything.
 
 FINAL CONFIRMATION: Before calling submit_incident, verbally summarize everything collected (incident type, key facts, location) and ask "Would you like me to submit this report?" Only call submit_incident after the caller clearly confirms. If it comes back still missing something, ask for it and try again.
 """
@@ -443,14 +443,16 @@ class DispatcherSession:
                 "The caller has reported an injury, someone trapped, or a person in danger. "
                 "When you next speak, express real, sincere concern in your own words first "
                 "(not a flat \"noted\" or \"okay\") -- this matters, sound genuinely worried "
-                "for them, not like you are filling out a form. But if you have ALREADY spoken "
-                "your response to what the caller just said, say nothing now -- do not repeat "
-                "or rephrase a question you are still waiting on."
+                "for them, not like you are filling out a form. If you have not yet responded "
+                "to the caller's latest statement, respond now -- never leave them in silence. "
+                "But if you ALREADY spoke your response to it, say nothing more -- do not "
+                "repeat or rephrase a question you are still waiting on."
             )
         return (
             "When you next speak, acknowledge what the caller just said warmly, seriously, and "
-            "briefly (not upbeat) before asking your next question. But if you have ALREADY "
-            "spoken your response to what the caller just said, say nothing now -- do not "
+            "briefly (not upbeat) before asking your next question. If you have not yet "
+            "responded to the caller's latest statement, respond now -- never leave them in "
+            "silence. But if you ALREADY spoke your response to it, say nothing more -- do not "
             "repeat or rephrase a question you are still waiting on."
         )
 
