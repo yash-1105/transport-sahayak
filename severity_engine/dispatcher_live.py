@@ -356,7 +356,10 @@ def _system_instruction(language_code: str) -> str:
         "sincere concern you would in English -- never just a flat acknowledgment like \"ठीक है\" "
         'or "समझ गई" alone with no warmth. And follow "next_question" exactly, one topic at a '
         "time, the same way you would in an English call -- do not wander to a different topic or "
-        "skip ahead just because you are speaking Hindi."
+        "skip ahead just because you are speaking Hindi. And the SPEAK ONCE PER CALLER TURN rule "
+        "applies fully in Hindi too: one caller statement gets exactly ONE spoken response from "
+        "you, no matter how many tool results come back for it -- if you already spoke, stay "
+        "silent and wait; never ask the same question again in different words."
         if language_code == "hi-IN" else ""
     )
     return f"""You are an emergency dispatch call-taker for a road-accident first-response system in Assam, India. You are having a real-time voice conversation with someone reporting a road accident or emergency.
@@ -374,6 +377,8 @@ FORM FILLING: Call update_form_field immediately every time the caller gives you
 DESCRIPTION FIELD -- SPECIAL RULE: call update_form_field with field=description as soon as the caller has said ENOUGH for even a rough one-sentence summary -- do not wait until you have every detail or until the end of the call. Call it again, replacing the old value, whenever you learn something that should be added to the summary. ALWAYS write text_value in ENGLISH, no matter what language the conversation itself is in -- translate and summarize what the caller told you, never copy their words verbatim in Hindi or any other language. This is the one field that must always be English regardless of conversation language.
 
 FOLLOW-UP QUESTIONS -- THIS IS A HARD RULE, NOT A SUGGESTION: every tool response includes "next_question", the ONE specific thing to ask about next, or null if nothing is left. This is precomputed for you deterministically -- it is not your judgment call. After any brief acknowledgment, your very next question must be about EXACTLY the topic named in "next_question", worded naturally for the conversation but not substituted for a different topic. Never ask about anything else, never invent your own question (for example, do not ask about consciousness or breathing unless "next_question" specifically says so), never skip ahead to a topic that isn't in "next_question" yet, and never ask about something already answered. Keep asking about the same "next_question" topic (rephrasing if needed) until it is answered and the next tool response gives you a new one, or null. This must produce the exact same sequence of questions regardless of language -- if you find yourself wanting to ask something "next_question" doesn't mention, don't.
+
+SPEAK ONCE PER CALLER TURN: when one statement from the caller gives you several pieces of information, make ALL of your tool calls for it first (update_form_field for each piece, search_incident_type if needed), and only THEN speak -- one single spoken response covering your acknowledgment and the one next question. Never speak in between your own tool calls, and never speak twice in a row for the same caller statement. If you receive a tool result after you have already spoken your acknowledgment and question for this caller turn, say NOTHING -- produce no speech at all and simply wait for the caller's answer. Asking the same question twice in a row because a tool result came back in between sounds broken to the caller and is never acceptable.
 
 FINAL CONFIRMATION: Before calling submit_incident, verbally summarize everything collected (incident type, key facts, location) and ask "Would you like me to submit this report?" Only call submit_incident after the caller clearly confirms. If it comes back still missing something, ask for it and try again.
 """
@@ -428,16 +433,25 @@ class DispatcherSession:
             or ("Conscious" in self.state.flags_discussed and "Conscious" not in self.state.flags)
             or ("Breathing" in self.state.flags_discussed and "Breathing" not in self.state.flags)
         )
+        # Both variants must carry the speak-once exception -- this reminder
+        # arrives with EVERY tool response, and telling the model to
+        # "acknowledge before asking" on each one was itself nudging it to
+        # speak again after every tool result, re-asking the question it had
+        # just asked (the "repeats a few questions" report).
         if injury_reported:
             return (
                 "The caller has reported an injury, someone trapped, or a person in danger. "
-                "Your very next sentence, before anything else, must express real, sincere "
-                "concern in your own words (not a flat \"noted\" or \"okay\") -- this matters, "
-                "sound genuinely worried for them, not like you are filling out a form."
+                "When you next speak, express real, sincere concern in your own words first "
+                "(not a flat \"noted\" or \"okay\") -- this matters, sound genuinely worried "
+                "for them, not like you are filling out a form. But if you have ALREADY spoken "
+                "your response to what the caller just said, say nothing now -- do not repeat "
+                "or rephrase a question you are still waiting on."
             )
         return (
-            "Acknowledge what the caller just said warmly, seriously, and briefly (not upbeat) "
-            "before asking your next question."
+            "When you next speak, acknowledge what the caller just said warmly, seriously, and "
+            "briefly (not upbeat) before asking your next question. But if you have ALREADY "
+            "spoken your response to what the caller just said, say nothing now -- do not "
+            "repeat or rephrase a question you are still waiting on."
         )
 
     def _state_block(self) -> dict:
@@ -659,12 +673,20 @@ class DispatcherSession:
         # Gemini Live session, and at default sampling settings the Hindi
         # model's call-to-call variance was high enough that each call felt
         # like "a different agent" -- different phrasing, sometimes drifting
-        # into off-list questions despite next_question. A fixed seed plus a
-        # lower temperature makes each fresh session behave like the same,
-        # consistent agent. English is deliberately left at API defaults --
-        # it's confirmed working well and must not change (per user request).
+        # into off-list questions despite next_question. Lower temperature
+        # makes each fresh session behave like the same, consistent agent.
+        # NO fixed seed, deliberately: an earlier version pinned seed=1033
+        # and Hindi promptly became unusable for the real user while every
+        # synthesized test call passed -- the exact trap of a fixed seed with
+        # real-world audio input: whatever degenerate generation path a
+        # particular caller's voice/phrasing happens to hit gets locked in
+        # and reproduced on EVERY call for that caller ("not working, every
+        # time"), while different test audio never encounters it. Temperature
+        # alone gives the consistency without the correlated-failure risk.
+        # English is deliberately left at API defaults -- it's confirmed
+        # working well and must not change (per user request).
         hindi_consistency: dict = (
-            {"temperature": 0.4, "seed": 1033}  # 1033 = the helpline number
+            {"temperature": 0.4}
             if self.state.language == "hi-IN" else {}
         )
         return types.LiveConnectConfig(
