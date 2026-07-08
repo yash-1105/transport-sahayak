@@ -42,6 +42,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -113,6 +114,31 @@ _STT_FAILURE_LINE = (
     "कृपया एक पल रुकें और फिर से बोलें।"
 )
 
+# Speech-rendering layer (see HindiDispatcherSession._render_for_speech):
+# Bulbul v3 has no SSML/pitch/emotion/style API (reconfirmed against
+# Sarvam's current docs) -- it's built on an LLM that infers pauses,
+# emphasis, and tone FROM THE TEXT AND PUNCTUATION itself. So the only real
+# lever for expressiveness is the text handed to it, which is why this
+# module shapes it in two places: the system prompt below asks Gemini to
+# write with this exact opener pool and "..."/"—" pause punctuation
+# directly (Gemini has full conversational context, so it can judge WHERE a
+# pause belongs far better than a rule-based rewrite could) -- and this
+# constant, plus _render_for_speech, mechanically GUARANTEE the one thing
+# prompting alone can't: that the same opener is never spoken twice in a
+# row. Every entry here is a complete, self-contained clause, so stripping
+# a repeated one is always grammatically safe.
+_OPENERS = [
+    "ओह...", "अच्छा...", "समझ गया...", "ठीक है...", "सबसे पहले...",
+    "मैं समझ सकता हूँ...", "कृपया घबराइए मत...", "मैं आपकी सहायता के लिए यहाँ हूँ...",
+]
+# Gemini sometimes writes one of the prompt's own suggested openers with a
+# plain comma ("ठीक है, मैं समझ रहा हूँ") instead of the pause punctuation
+# actually asked for -- this normalizes JUST that known pattern to "..."
+# rather than attempting any general rewriting.
+_OPENER_COMMA_RE = re.compile(
+    r"^(ओह|अरे|हाँ|ठीक है|सुनिए|अच्छा|समझ गया|सबसे पहले)\s*,\s*"
+)
+
 # Hindi-only opening line -- deliberately NOT the shared _OPENING_LINE["hi-IN"]
 # from dispatcher_live.py (English's own copy there is untouched). "1033" is
 # spelled out digit-by-digit ("एक शून्य तीन तीन") rather than left as the raw
@@ -136,7 +162,13 @@ def _hindi_system_prompt() -> str:
 
 बोली जाने वाली भाषा (टेक्स्ट-टू-स्पीच से बोला जाएगा): सरल, रोज़मर्रा की बोलचाल की हिंदी — औपचारिक, साहित्यिक या शुद्ध हिंदी कभी नहीं, अंग्रेज़ी का शब्दशः अनुवाद कभी नहीं ("गाड़ी" न कि "वाहन", "मदद" न कि "सहायता", "टक्कर हुई" न कि "दुर्घटनाग्रस्त हुई")। हमेशा पुल्लिंग क्रिया रूप अपने लिए ("समझ रहा हूँ", "दर्ज कर रहा हूँ", "पुष्टि करना चाहता हूँ")। कोई मार्कडाउन, सूची, इमोजी या अंग्रेज़ी वाक्य नहीं (लोकेशन, रिपोर्ट, ट्रक, एम्बुलेंस जैसे आम शब्द ठीक हैं)।
 
-हर जवाब की बनावट — हर बार अलग ढंग से शुरू करें, कभी हर जवाब "जी" या "ठीक है" से शुरू न करें: 1 से 3 छोटे वाक्य — पहले caller ने अभी जो बताया उसकी सच्ची, गर्मजोशी भरी स्वीकृति (कभी एक ही वाक्य दोबारा न दोहराएं), फिर ठीक ONE सवाल — कभी एक साथ दो सवाल नहीं। अच्छे उदाहरण: "समझ गया, एक व्यक्ति घायल है। क्या वह होश में है?" · "मुझे यह सुनकर अफ़सोस हुआ, घबराइए मत। क्या कहीं आग तो नहीं लगी?" ख़राब: सिर्फ सवाल बिना स्वीकृति के; हर बार "जी"/"ठीक है" से शुरुआत; formal भाषा जैसे "कृपया घटना का विवरण प्रदान करें।"
+बोलने में स्वाभाविक ठहराव — TTS पंक्चुएशन से ही रुकना और ज़ोर देना तय करता है, इसलिए इसका जानबूझकर इस्तेमाल करें: भावनात्मक पल के बाद सिर्फ कॉमा या पूर्णविराम नहीं, "..." लगाएं। जैसे "मुझे यह सुनकर दुख हुआ।" की जगह "ओह... मुझे यह सुनकर सचमुच बहुत अफ़सोस हुआ।" बोलें; "घबराइए मत, मदद आ रही है।" की जगह "घबराइए मत... मैं मदद भेज रहा हूँ।" बोलें। दो जुड़े विचारों के बीच "—" का इस्तेमाल भी स्वाभाविक है।
+
+शुरुआत में विविधता — हर बार अलग चुनें, कभी लगातार दो जवाबों में एक जैसी शुरुआत न करें, कभी हर बार "जी" या "ठीक है" से शुरू न करें: "ओह...", "अच्छा...", "समझ गया...", "ठीक है...", "सबसे पहले...", "मैं समझ सकता हूँ...", "कृपया घबराइए मत...", "मैं आपकी सहायता के लिए यहाँ हूँ..." — इनमें से चुनें या मिलती-जुलती अपनी शैली बनाएं।
+
+भावना गंभीरता के हिसाब से — हर टूल के नतीजे में "tone_reminder" आता है, हर बार उसे मानें। चोट, फँसा होना, या खतरे का ज़िक्र होने पर आवाज़ में सच्ची फ़िक्र झलके — धीमी, गंभीर बोली, ठहराव के साथ पहले सहानुभूति फिर सवाल। स्थिति सामान्य होने पर (मामूली टक्कर, बिना चोट के) शांत, पेशेवर, संक्षिप्त रहें — ज़रूरत से ज़्यादा भावुक हुए बिना, जैसे एक अनुभवी ऑपरेटर हर कॉल को उसकी असली गंभीरता के हिसाब से संभालता है।
+
+हर जवाब की बनावट — 1 से 3 छोटे वाक्य: पहले caller ने अभी जो बताया उसकी सच्ची स्वीकृति (ऊपर बताए ठहराव और शुरुआत के साथ), फिर ठीक ONE सवाल — कभी एक साथ दो सवाल नहीं, कभी सिर्फ सवाल बिना स्वीकृति के नहीं, formal भाषा कभी नहीं जैसे "कृपया घटना का विवरण प्रदान करें।"
 
 आम सवालों की सहज हिंदी (next_question के अंग्रेज़ी संकेत के लिए इस्तेमाल करें):
 चोट/casualties → "क्या किसी को चोट लगी है?" (हाँ पर "कितने लोग घायल हैं?")
@@ -182,6 +214,10 @@ class HindiDispatcherSession(DispatcherSession):
         # _collect_user_utterance() call that speech is already in progress,
         # so it doesn't wait for a speech_start event that already happened.
         self._resume_speech_active = False
+        # Tracks the opener (see _OPENERS) this call's last reply started
+        # with, if any -- lets _render_for_speech guarantee no immediate
+        # repeat, a hard mechanical backstop on top of prompting.
+        self._last_opener: Optional[str] = None
         # Per-turn latency breakdown (see _mark); reset at the top of each
         # cycle in run()'s main loop.
         self._turn_stats: dict = {}
@@ -381,12 +417,32 @@ class HindiDispatcherSession(DispatcherSession):
         reply = await self._reason(gemini_client, user_text)
         completed = True
         if reply:
+            reply = self._render_for_speech(reply)
             completed = await self._speak_or_fallback(reply)
         await self._safe_send_json({"type": "turn_complete"})
         if not self.state.submitted:
             await self._enter_listening(drain=completed)
         self._mark("turn_total", time.monotonic() - turn_start)
         self._log_turn_stats()
+
+    def _render_for_speech(self, text: str) -> str:
+        """The speech-rendering layer between Gemini and Bulbul (see the
+        _OPENERS comment above for why this, not an SSML/emotion API, is the
+        real lever). This does NOT rewrite meaning -- that's the system
+        prompt's job, done inside Gemini's single reasoning call where it
+        has full conversational context to judge where a pause actually
+        belongs. This is a narrow, deterministic, zero-cost, zero-latency
+        pass that fixes exactly two things prompting can't fully guarantee:
+        a known opener spoken with a flat comma instead of the pause
+        punctuation actually asked for, and the same opener repeating on
+        consecutive turns."""
+        rendered = _OPENER_COMMA_RE.sub(lambda m: f"{m.group(1)}... ", text, count=1)
+        opener = next((o for o in _OPENERS if rendered.startswith(o)), None)
+        if opener is not None and opener == self._last_opener:
+            rendered = rendered[len(opener):].lstrip()
+            opener = next((o for o in _OPENERS if rendered.startswith(o)), None)
+        self._last_opener = opener
+        return rendered
 
     async def _reason(self, gemini_client, user_text: str) -> str:
         self._history.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
