@@ -53,6 +53,15 @@ If Bulbul synthesis fails mid-call, the reply is sent as a `{"type":"tts_text"}`
 
 `severity_engine/local_extract.py`'s hazard-phrase lexicon includes Hindi phrases; its tokenizer must stay Devanagari-aware (`[ऀ-ॿ]+`) so Hindi negation markers (नहीं, मत, बुझ...) actually suppress false-positive hazard flags — this broke silently once already ("आग नहीं लगी" was setting Fire=true) because the tokenizer only matched `[a-z0-9]+`.
 
+### Hindi dispatcher: latency, empathy, and barge-in (`dispatcher_hindi.py`)
+
+- **Per-turn latency is logged**, not guessed at — every turn logs one `[latency] gemini_r0=...ms tts_first_chunk=...ms turn_total=...ms` line (toggle: `HINDI_LATENCY_LOG=false`). Measured honestly via `google-genai` on this project's real Vertex credentials: `gemini-2.5-flash` costs **~2.2–2.8s per call regardless of prompt/token-count tuning** (shrinking the system prompt ~40% and halving `max_output_tokens` did not move the number — the cost here is Vertex's fixed round-trip/generation overhead, not proportional to these short prompts/outputs). The one **deterministic, guaranteed** win is `_UTTERANCE_GRACE_S` (1.0s → 0.45s) — a fixed tax cut from every single turn. Don't assume further prompt-shrinking will reduce latency without measuring again; it didn't here. `gemini-2.5-flash-lite` was tried as a faster alternative and rejected: it returned empty `candidate.content.parts` and a `400 "Please use a valid role: user, model"` in testing that `gemini-2.5-flash` never produced — the code now defensively re-wraps model turns with an explicit `role="model"` and never returns a silently-empty reply regardless of model, but the *default* model stayed `gemini-2.5-flash` because it's the one proven reliable here.
+- **Barge-in (interrupting the agent's own reply) has exactly ONE reader of `SaarasStream`'s events at any moment** — `_speak_or_fallback` polls for interruption inline, in the same coroutine that streams TTS audio, rather than via a separate concurrent watcher task. An earlier two-task design (`_play_reply` + a separate `_watch_for_bargein` task both calling `get_event()`) had a real, empirically-confirmed race: whichever task "lost" the `asyncio.wait(FIRST_COMPLETED)` race had often *already* dequeued a real caller event as a side effect before being cancelled, silently corrupting or destroying the caller's next utterance. `get_event()` is a single-consumer read (like `Queue.get()`) — never give it two independent concurrent callers. If touching barge-in again, keep it to one reader.
+- Barge-in arms relative to when audio actually **starts playing** (the first real TTS chunk), not to when `_speak_or_fallback` merely begins — Bulbul's connect + first-chunk network latency can itself exceed a fixed arm delay, and arming any earlier risks treating the tail of the caller's *own* preceding utterance as an interruption of audio nobody has heard yet.
+- Real barge-in requires the browser to keep streaming mic audio while the agent is speaking, not just while listening — `useVoiceDispatcher.ts`'s mic-gate is `locale === "listening" || (hi-IN && "speaking")`, scoped so the added branch is structurally unreachable for `en-IN` (English's gate is unchanged: `"listening"` only, per `dispatcher_live.py`'s `NO_INTERRUPTION` design).
+- The system prompt bakes in a **Hindi phrasing glossary** for the most common `next_question` hints (चोट लगी है, फँसा हुआ, आग/रिसाव, होश में, साँस, खून, वाहनों की संख्या) and an explicit reply-shape rule (acknowledge what the caller just said, in varied phrasing, before asking exactly one question) — this was added after observing the agent re-ask "क्या किसी को चोट लगी है?" after the caller had already said "दो लोग घायल हैं", and after observing mechanical "जी"/"ठीक है" openers on every turn.
+- Bulbul v3 does **not** support pitch/loudness/SSML (verified against Sarvam's docs — don't add UI or config assuming otherwise). The real, tunable knobs are `pace`, `temperature`, and `min_buffer_size`/`max_chunk_length` (the latter two trade prosody smoothness for a faster time-to-first-audio-chunk) — all exposed as `SARVAM_TTS_*` env vars.
+
 ## API Key Architecture (two keys, never mix them)
 
 | Key | Env var | Reaches browser? | Restrictions |
@@ -299,7 +308,12 @@ SARVAM_API_KEY=              # dashboard.sarvam.ai
 SARVAM_STT_MODEL=saaras-v3
 SARVAM_TTS_MODEL=bulbul-v3
 SARVAM_TTS_SPEAKER=priya     # any female Bulbul v3 Hindi speaker
-GEMINI_TEXT_MODEL=gemini-2.5-flash   # plain generate_content, NOT Gemini Live; gemini-2.0-flash 404s on this Vertex project/region
+SARVAM_TTS_TEMPERATURE=0.6   # real, documented Bulbul v3 param (no pitch/loudness/SSML support)
+SARVAM_TTS_MIN_BUFFER_CHARS=30   # lower = faster time-to-first-audio-chunk, less prosody smoothing
+SARVAM_TTS_MAX_CHUNK_CHARS=90
+SARVAM_STT_INTERRUPT_MIN_FRAMES=   # optional; raise only if echo (no headphones) false-triggers barge-in
+HINDI_LATENCY_LOG=true       # per-turn [latency] breakdown in server logs
+GEMINI_TEXT_MODEL=gemini-2.5-flash   # plain generate_content, NOT Gemini Live; gemini-2.0-flash 404s on this Vertex project/region; flash-lite was tried and rejected (empty responses + a role-validation 400 in testing)
 
 # English dispatcher only (severity_engine/dispatcher_live.py) — unaffected by the above
 GEMINI_LIVE_MODEL=gemini-live-2.5-flash-native-audio

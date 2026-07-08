@@ -25,6 +25,10 @@ official `sarvamai` Python SDK (v0.1.28) rather than guessed:
     `send_completion_event=true` a {"type":"event","event_type":"final"}
     marks end-of-synthesis. Idle connections are kept alive with
     {"type":"ping"} (the SDK pings every 20s).
+  - Bulbul v3 does NOT support pitch/loudness or SSML (verified against
+    Sarvam's own docs) -- only pace, temperature, and the min_buffer_size/
+    max_chunk_length streaming-chunk controls are real, tunable parameters,
+    so that's all this module exposes; nothing here is invented.
 
 English is untouched by this module — it exists only for the hi-IN dispatcher
 (see dispatcher_hindi.py).
@@ -61,6 +65,21 @@ TTS_MODEL = _normalize_model(os.environ.get("SARVAM_TTS_MODEL", "bulbul:v3"))
 # Hindi speaker list (ritu/priya/neha/pooja/... — see docs.sarvam.ai).
 TTS_SPEAKER = os.environ.get("SARVAM_TTS_SPEAKER", "priya")
 TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.0"))
+# Real, documented Bulbul v3 config fields (not fabricated) -- v3 does NOT
+# support pitch/loudness/SSML, so those are deliberately not offered here.
+# temperature=0.6 matches the verified default of Sarvam's own Python SDK.
+# min_buffer_size/max_chunk_length control how much text Bulbul buffers
+# before it starts streaming audio back -- lower values trade a little
+# prosody smoothness for a faster time-to-first-audio-chunk, which matters
+# more for a live call than for pre-recorded narration.
+TTS_TEMPERATURE = float(os.environ.get("SARVAM_TTS_TEMPERATURE", "0.6"))
+TTS_MIN_BUFFER_CHARS = int(os.environ.get("SARVAM_TTS_MIN_BUFFER_CHARS", "30"))
+TTS_MAX_CHUNK_CHARS = int(os.environ.get("SARVAM_TTS_MAX_CHUNK_CHARS", "90"))
+# Optional Saaras v3 VAD tuning for barge-in robustness -- unset by default
+# (server default applies); raise this if speaker echo without headphones
+# ever false-triggers an interruption in the field. Real, documented
+# saaras:v3-only parameter (see Sarvam's streaming STT API reference).
+STT_INTERRUPT_MIN_SPEECH_FRAMES = os.environ.get("SARVAM_STT_INTERRUPT_MIN_FRAMES")
 
 _STT_RECONNECT_ATTEMPTS = 3
 _STT_KEEPALIVE_IDLE_S = 5.0
@@ -131,6 +150,8 @@ class SaarasStream:
             "sample_rate": str(_SAMPLE_RATE_IN),
             "vad_signals": "true",
         }
+        if STT_INTERRUPT_MIN_SPEECH_FRAMES:
+            params["interrupt_min_speech_frames"] = STT_INTERRUPT_MIN_SPEECH_FRAMES
         return _STT_WS_URL + "?" + urllib.parse.urlencode(params)
 
     async def connect(self) -> None:
@@ -271,6 +292,9 @@ class BulbulStream:
                 "speaker": TTS_SPEAKER,
                 "model": TTS_MODEL,
                 "pace": TTS_PACE,
+                "temperature": TTS_TEMPERATURE,
+                "min_buffer_size": TTS_MIN_BUFFER_CHARS,
+                "max_chunk_length": TTS_MAX_CHUNK_CHARS,
                 "speech_sample_rate": str(TTS_SAMPLE_RATE),
                 # Raw PCM16 — decoded client-side by the existing Int16Array
                 # playback path (no container, no compression).
@@ -343,6 +367,13 @@ class BulbulStream:
             except Exception:
                 pass
             self._ws = None
+
+    async def cancel_current(self) -> None:
+        """Abort whatever Bulbul is still synthesizing (e.g. a caller
+        barge-in cut the reply short). The protocol has no explicit "stop"
+        message, so closing the connection is the clean way to discard
+        in-flight audio -- the next speak() call opens a fresh one."""
+        await self._teardown_ws()
 
     async def close(self) -> None:
         self._closed = True

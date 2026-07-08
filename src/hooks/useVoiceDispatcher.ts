@@ -410,11 +410,19 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           // Read wsRef.current fresh each call (not a captured `ws` param) so
           // this same worklet keeps working after a reconnect swaps in a new
           // socket, instead of silently sending into a closed one forever.
-          // Also don't transmit while Gemini is speaking/thinking -- without
+          // English (Gemini Live) only transmits while "listening" -- without
           // headphones the mic picks up its own voice, which the server was
-          // misreading as the caller interrupting and repeating sentences.
+          // misreading as the caller interrupting and repeating sentences
+          // (see dispatcher_live.py's NO_INTERRUPTION config). Hindi (Sarvam)
+          // deliberately ALSO transmits while "speaking": the backend needs
+          // live mic audio during agent playback to detect a genuine caller
+          // barge-in and cut its own reply short (see dispatcher_hindi.py's
+          // _speak_or_fallback) -- this branch is unreachable for en-IN.
           const ws = wsRef.current;
-          if (ws?.readyState === WebSocket.OPEN && statusRef.current === "listening") {
+          const micOpen =
+            statusRef.current === "listening" ||
+            (localeRef.current === "hi-IN" && statusRef.current === "speaking");
+          if (ws?.readyState === WebSocket.OPEN && micOpen) {
             ws.send(e.data);
           }
         };
