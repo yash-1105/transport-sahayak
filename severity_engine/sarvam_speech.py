@@ -64,17 +64,27 @@ TTS_MODEL = _normalize_model(os.environ.get("SARVAM_TTS_MODEL", "bulbul:v3"))
 # Female Hindi voice, per spec. "priya" is on Bulbul v3's documented female
 # Hindi speaker list (ritu/priya/neha/pooja/... — see docs.sarvam.ai).
 TTS_SPEAKER = os.environ.get("SARVAM_TTS_SPEAKER", "priya")
-TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.0"))
+# 1.15 verified live against the real API (see project history): pace is a
+# real, functioning parameter (confirmed at both extremes -- 0.5x/2.0x -- and
+# with small increments at low temperature, where stochastic variance between
+# calls doesn't swamp the effect), a modest, natural-sounding step up from the
+# previous 1.0 default per user feedback that the agent spoke too slowly.
+TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.15"))
 # Real, documented Bulbul v3 config fields (not fabricated) -- v3 does NOT
 # support pitch/loudness/SSML, so those are deliberately not offered here.
-# temperature=0.6 matches the verified default of Sarvam's own Python SDK.
+# 0.7: a modest bump from the SDK's own 0.6 default -- per Sarvam's own
+# parameter semantics, temperature governs expressiveness/naturalness for v3,
+# and per user feedback that the previous setting sounded robotic/flat.
 # min_buffer_size/max_chunk_length control how much text Bulbul buffers
-# before it starts streaming audio back -- lower values trade a little
-# prosody smoothness for a faster time-to-first-audio-chunk, which matters
-# more for a live call than for pre-recorded narration.
-TTS_TEMPERATURE = float(os.environ.get("SARVAM_TTS_TEMPERATURE", "0.6"))
-TTS_MIN_BUFFER_CHARS = int(os.environ.get("SARVAM_TTS_MIN_BUFFER_CHARS", "30"))
-TTS_MAX_CHUNK_CHARS = int(os.environ.get("SARVAM_TTS_MAX_CHUNK_CHARS", "90"))
+# before it starts streaming audio back. A previous iteration lowered these
+# (30/90) purely to shave time-to-first-audio-chunk when LATENCY was the
+# priority; restored to Sarvam's own documented defaults (50/150) now that
+# per-turn latency is no longer the dominant complaint and prosody continuity
+# (fewer, larger synthesis segments = less per-segment "reset", a plausible
+# contributor to a choppy/robotic-sounding cadence) matters more.
+TTS_TEMPERATURE = float(os.environ.get("SARVAM_TTS_TEMPERATURE", "0.7"))
+TTS_MIN_BUFFER_CHARS = int(os.environ.get("SARVAM_TTS_MIN_BUFFER_CHARS", "50"))
+TTS_MAX_CHUNK_CHARS = int(os.environ.get("SARVAM_TTS_MAX_CHUNK_CHARS", "150"))
 # Optional Saaras v3 VAD tuning for barge-in robustness -- unset by default
 # (server default applies); raise this if speaker echo without headphones
 # ever false-triggers an interruption in the field. Real, documented
