@@ -14,7 +14,11 @@ both through the same logic:
 """
 import re
 
-_word_re = re.compile(r"[a-z0-9]+")
+# Devanagari included: without it, Hindi negation words were invisible to the
+# window check below ("आग नहीं लगी" tokenized to nothing, so "नहीं" could never
+# suppress the "आग" match — found live while testing the Hindi dispatcher).
+# English tokenization is unchanged.
+_word_re = re.compile(r"[a-z0-9]+|[ऀ-ॿ]+")
 
 # ── Negation markers ──────────────────────────────────────────────────────────
 # If one of these appears within NEGATION_WINDOW tokens before a matched phrase,
@@ -23,6 +27,9 @@ _word_re = re.compile(r"[a-z0-9]+")
 _NEGATION_MARKERS = {
     "no", "not", "without", "never", "none", "nobody",
     "extinguished", "cleared", "clear", "resolved", "avoided", "prevented",
+    # Hindi (matched as exact whole tokens, same as the English markers):
+    # "नहीं"/"मत" = no/not, "बुझ..." forms = extinguished, "टल"/"बच" = averted.
+    "नहीं", "मत", "बुझ", "बुझा", "बुझी", "बुझाई", "टल", "बच",
 }
 NEGATION_WINDOW = 4
 

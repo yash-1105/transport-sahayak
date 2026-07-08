@@ -36,6 +36,23 @@
 
 ---
 
+## Voice Dispatcher — Python Backend (`app.py` + `severity_engine/`)
+
+A separate FastAPI service (deployed on Railway, not Vercel) backs the "Voice" tab's conversational dispatcher at `/ws/dispatcher`, plus the plain speech-to-text tab at `/ws/voice` (Google Chirp — untouched by any of this). **English and Hindi run on two completely different pipelines** — `app.py`'s `/ws/dispatcher` route picks one by `?locale=`:
+
+| Locale | STT | Reasoning | TTS | File |
+|--------|-----|-----------|-----|------|
+| `en-IN` | Gemini Live (built-in) | Gemini Live (built-in, native-audio) | Gemini Live (built-in) | `severity_engine/dispatcher_live.py` |
+| `hi-IN` | Sarvam **Saaras v3** (streaming WS) | Plain Gemini `generate_content` (Vertex, text-only, no Gemini Live) | Sarvam **Bulbul v3** (streaming WS) | `severity_engine/dispatcher_hindi.py` |
+
+`HindiDispatcherSession` **subclasses** `DispatcherSession` — it reuses the exact same tool handlers (`search_incident_type` with the vehicle-pair override so "कार ट्रक से टकराई" never records as Car vs. Car, `update_form_field`'s taxonomy validation, `submit_incident`'s hard-gated required fields), the same `DispatcherState`, the same deterministic `next_question` sequencing, and the same browser-facing WebSocket protocol (`ready` / `status` / `form_update` / `request_location` / `submitted` / `turn_complete` / `transcript` / binary PCM audio out). Only the audio/reasoning transport differs. **Never edit `dispatcher_live.py` (or its English system prompt) to fix a Hindi issue** — Hindi-only behavior belongs in `dispatcher_hindi.py`'s own system prompt.
+
+Sarvam client code lives in `severity_engine/sarvam_speech.py` (raw WebSocket clients, no `sarvamai` SDK dependency — `websockets` is already a `uvicorn[standard]` transitive dep). Saaras runs with server-side VAD (`vad_signals=true`); each `{"type":"data"}` message is a **final** transcript for one detected utterance segment (no interim/partial results in this mode). Bulbul is configured for `linear16` output at 24 kHz — the same rate the frontend's Gemini-Live playback path already expects, so `useVoiceDispatcher.ts` needed no new audio-decoding path, only a Hindi-specific `playbackRate` of `1.0` (vs. Gemini Live's `0.88` slowdown, which is a Gemini-Live-specific compensation, not a general one).
+
+If Bulbul synthesis fails mid-call, the reply is sent as a `{"type":"tts_text"}` frame and rendered as a text bubble in `DispatcherSection.tsx` instead of leaving the caller in silence — this is a documented fallback, not a bug.
+
+`severity_engine/local_extract.py`'s hazard-phrase lexicon includes Hindi phrases; its tokenizer must stay Devanagari-aware (`[ऀ-ॿ]+`) so Hindi negation markers (नहीं, मत, बुझ...) actually suppress false-positive hazard flags — this broke silently once already ("आग नहीं लगी" was setting Fire=true) because the tokenizer only matched `[a-z0-9]+`.
+
 ## API Key Architecture (two keys, never mix them)
 
 | Key | Env var | Reaches browser? | Restrictions |
@@ -273,6 +290,24 @@ GOOGLE_MAPS_SERVER_KEY=AIza...
 ```
 
 Put these in `.env` or `.env.local` — both work in Next.js. Restart the dev server after any change. Never prefix the server key with `NEXT_PUBLIC_`.
+
+**Python voice-dispatcher backend (`app.py` — Railway, not Vercel):** set these on the Railway service (or repo-root `.env` for local `uvicorn app:app`), never on Vercel — the browser never talks to Sarvam or Vertex directly, only to this backend's WebSocket.
+
+```bash
+# Hindi dispatcher only (severity_engine/dispatcher_hindi.py + sarvam_speech.py)
+SARVAM_API_KEY=              # dashboard.sarvam.ai
+SARVAM_STT_MODEL=saaras-v3
+SARVAM_TTS_MODEL=bulbul-v3
+SARVAM_TTS_SPEAKER=priya     # any female Bulbul v3 Hindi speaker
+GEMINI_TEXT_MODEL=gemini-2.5-flash   # plain generate_content, NOT Gemini Live; gemini-2.0-flash 404s on this Vertex project/region
+
+# English dispatcher only (severity_engine/dispatcher_live.py) — unaffected by the above
+GEMINI_LIVE_MODEL=gemini-live-2.5-flash-native-audio
+VERTEX_AI_LOCATION=us-central1
+
+# Shared Vertex AI / Speech-to-Text credentials (English Live + Hindi text-Gemini + Chirp STT)
+GOOGLE_SERVICE_ACCOUNT_JSON_BASE64=   # or GOOGLE_SERVICE_ACCOUNT_JSON, or a local file for dev — see google_credentials.py
+```
 
 ---
 

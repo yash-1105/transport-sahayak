@@ -192,6 +192,14 @@ export function DispatcherSection({
         </p>
       )}
 
+      {/* Fallback only: shown when speech synthesis failed server-side and
+          the agent's reply arrived as text instead of audio (Hindi path). */}
+      {dispatcher.agentText && (
+        <p className="text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-2.5">
+          {dispatcher.agentText}
+        </p>
+      )}
+
       {(isActive || selectedSubType || description) && (
         <div className="bg-gray-50 border border-gray-200 rounded-lg divide-y divide-gray-100">
           <p className="text-[10px] font-black tracking-widest text-gray-400 uppercase px-2 pt-2 pb-1">

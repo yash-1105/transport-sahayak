@@ -31,6 +31,8 @@ from severity_engine.dispatcher_live import (
     DispatcherSession,
 )
 from severity_engine.dispatcher_live import SUPPORTED_LANGUAGES as DISPATCHER_LANGUAGES
+from severity_engine.dispatcher_hindi import HindiDispatcherSession
+from severity_engine.sarvam_speech import SarvamCredentialsError
 from severity_engine.voice_stream import (
     SUPPORTED_LANGUAGES,
     SpeechCredentialsError,
@@ -249,8 +251,13 @@ async def voice_stream_ws(websocket: WebSocket) -> None:
 @app.websocket("/ws/dispatcher")
 async def dispatcher_ws(websocket: WebSocket) -> None:
     """
-    Conversational voice dispatcher over WebSocket, backed by Gemini Live via
-    Vertex AI — see severity_engine/dispatcher_live.py.
+    Conversational voice dispatcher over WebSocket.
+
+    English (en-IN) is backed by Gemini Live via Vertex AI — see
+    severity_engine/dispatcher_live.py (unchanged). Hindi (hi-IN) is backed by
+    Sarvam Saaras v3 (STT) + text Gemini reasoning + Sarvam Bulbul v3 (TTS) —
+    see severity_engine/dispatcher_hindi.py. Both speak the exact same client
+    protocol described below.
 
     Client protocol: connect with ?locale=en-IN or ?locale=hi-IN (defaults to
     en-IN). Send raw PCM16/16kHz/mono audio as binary frames while the caller
@@ -271,11 +278,20 @@ async def dispatcher_ws(websocket: WebSocket) -> None:
         language_code = "en-IN"
     logger.info("Client connected to /ws/dispatcher (language=%s)", language_code)
 
-    session = DispatcherSession(websocket, language_code)
+    session = (
+        HindiDispatcherSession(websocket)
+        if language_code == "hi-IN"
+        else DispatcherSession(websocket, language_code)
+    )
     try:
         await session.run()
+    except SarvamCredentialsError as e:
+        logger.error("Sarvam credentials error: %s", e)
+        await _safe_send_json(
+            websocket, {"type": "error", "message": "The Hindi voice dispatcher is not configured on the server."}
+        )
     except DispatcherCredentialsError as e:
-        logger.error("Gemini Live credentials error: %s", e)
+        logger.error("Gemini credentials error: %s", e)
         await _safe_send_json(
             websocket, {"type": "error", "message": "The voice dispatcher is not configured on the server."}
         )

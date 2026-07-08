@@ -56,6 +56,9 @@ export interface UseVoiceDispatcher {
   status: DispatcherStatus;
   error: string | null;
   offline: boolean;
+  /** Fallback only: the agent's reply as text when speech synthesis failed
+   * server-side (Hindi/Sarvam path) — null whenever audio is working. */
+  agentText: string | null;
   start: (locale: VoiceLocale) => void;
   stop: () => void;
 }
@@ -70,11 +73,15 @@ const ERROR_MSGS: Record<string, string> = {
 const WORKLET_URL = "/audio/pcm16-worklet.js";
 const WORKLET_NAME = "pcm16-processor";
 const TARGET_SAMPLE_RATE = 16000;
-const PLAYBACK_SAMPLE_RATE = 24000; // Gemini Live's fixed output rate, confirmed via live testing
+const PLAYBACK_SAMPLE_RATE = 24000; // Gemini Live's fixed output rate, confirmed via live testing; Bulbul v3 (Hindi) is configured server-side to the same rate
 // Gemini Live's native-audio model has no API-level speaking-rate control, so
 // this is enforced client-side. A mild slowdown for clarity — low enough that
 // the pitch-lowering side effect of simple rate-based playback stays natural.
+// Hindi (Sarvam Bulbul TTS) already speaks at a natural operator pace and has
+// a server-side pace control, so it plays at 1.0 — the slowdown is a
+// Gemini-Live-specific compensation, not a general preference.
 const PLAYBACK_RATE = 0.88;
+const PLAYBACK_RATE_HINDI = 1.0;
 const END_SIGNAL = JSON.stringify({ type: "end" });
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAYS_MS = [1000, 2000, 4000];
@@ -113,6 +120,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
   const [status, setStatus] = useState<DispatcherStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
+  const [agentText, setAgentText] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -180,15 +188,16 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
     const buffer = ctx.createBuffer(1, float32.length, PLAYBACK_SAMPLE_RATE);
     buffer.copyToChannel(float32, 0);
 
+    const playbackRate = localeRef.current === "hi-IN" ? PLAYBACK_RATE_HINDI : PLAYBACK_RATE;
     const source = ctx.createBufferSource();
     source.buffer = buffer;
-    source.playbackRate.value = PLAYBACK_RATE;
+    source.playbackRate.value = playbackRate;
     source.connect(ctx.destination);
     const startAt = Math.max(ctx.currentTime, nextStartTimeRef.current);
     source.start(startAt);
     // Slower playbackRate stretches actual duration beyond buffer.duration —
     // must schedule off the real playback time or chunks start overlapping.
-    nextStartTimeRef.current = startAt + buffer.duration / PLAYBACK_RATE;
+    nextStartTimeRef.current = startAt + buffer.duration / playbackRate;
     activeSourcesRef.current.push(source);
     source.onended = () => {
       activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
@@ -343,6 +352,11 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
         case "transcript":
           // Internal only — never rendered, per spec (no STT UI in this tab).
           break;
+        case "tts_text":
+          // Hindi/Sarvam path only: speech synthesis failed server-side, so
+          // the agent's reply arrives as text to display instead of audio.
+          if (typeof event.text === "string") setAgentText(event.text);
+          break;
         default:
           break;
       }
@@ -489,6 +503,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
       localeRef.current = locale;
       const sessionId = ++sessionIdRef.current;
       setError(null);
+      setAgentText(null);
       connect(locale, sessionId, false);
     },
     [supported, connect]
@@ -496,5 +511,5 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
 
   useEffect(() => () => teardown(), [teardown]);
 
-  return { supported, status, error, offline, start, stop };
+  return { supported, status, error, offline, agentText, start, stop };
 }
