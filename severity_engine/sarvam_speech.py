@@ -61,15 +61,21 @@ def _normalize_model(value: str) -> str:
 
 STT_MODEL = _normalize_model(os.environ.get("SARVAM_STT_MODEL", "saaras:v3"))
 TTS_MODEL = _normalize_model(os.environ.get("SARVAM_TTS_MODEL", "bulbul:v3"))
-# Female Hindi voice, per spec. "priya" is on Bulbul v3's documented female
-# Hindi speaker list (ritu/priya/neha/pooja/... — see docs.sarvam.ai).
-TTS_SPEAKER = os.environ.get("SARVAM_TTS_SPEAKER", "priya")
-# 1.15 verified live against the real API (see project history): pace is a
-# real, functioning parameter (confirmed at both extremes -- 0.5x/2.0x -- and
-# with small increments at low temperature, where stochastic variance between
-# calls doesn't swamp the effect), a modest, natural-sounding step up from the
-# previous 1.0 default per user feedback that the agent spoke too slowly.
-TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.15"))
+# "shubh" -- male Bulbul v3 voice, switched from the original female "priya"
+# per user feedback after comparing voices in Sarvam's own playground. The
+# Hindi system prompt's self-referential grammar (dispatcher_hindi.py) must
+# stay in sync with whichever gender is set here -- a male voice speaking
+# feminine-conjugated Hindi ("समझ रही हूँ") sounds wrong to any Hindi
+# listener, so changing this alone without updating the prompt's gender
+# would make speech sound LESS natural, not more.
+TTS_SPEAKER = os.environ.get("SARVAM_TTS_SPEAKER", "shubh")
+# 1.3: verified live against the real API that pace is a real, functioning
+# parameter (confirmed at extremes and small increments at low temperature,
+# where stochastic variance between calls doesn't swamp the effect). Bumped
+# again from 1.15 per user feedback that speech was still too slow --
+# "shubh" also has a naturally brisker baseline cadence than "priya" did at
+# the same pace value (measured live: ~35% shorter audio for identical text).
+TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.3"))
 # Real, documented Bulbul v3 config fields (not fabricated) -- v3 does NOT
 # support pitch/loudness/SSML, so those are deliberately not offered here.
 # 0.7: a modest bump from the SDK's own 0.6 default -- per Sarvam's own
