@@ -69,13 +69,13 @@ TTS_MODEL = _normalize_model(os.environ.get("SARVAM_TTS_MODEL", "bulbul:v3"))
 # listener, so changing this alone without updating the prompt's gender
 # would make speech sound LESS natural, not more.
 TTS_SPEAKER = os.environ.get("SARVAM_TTS_SPEAKER", "shubh")
-# Pace history: 1.0 -> 1.15 -> 1.3 (too fast) -> 1.2, per iterative user
-# feedback with the "shubh" voice. Earlier live testing (see project
+# Pace history: 1.0 -> 1.15 -> 1.3 (too fast) -> 1.2 -> 1.1, per iterative
+# user feedback with the "shubh" voice. Earlier live testing (see project
 # history) confirmed pace is a real, functioning parameter and that "shubh"
 # has a naturally brisker baseline cadence than "priya" did at the same
 # value -- don't re-verify this again with a live API call unless the
 # parameter itself is in question; API credits are limited.
-TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.2"))
+TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.1"))
 # Real, documented Bulbul v3 config fields (not fabricated) -- v3 does NOT
 # support pitch/loudness/SSML, so those are deliberately not offered here.
 # 0.7: a modest bump from the SDK's own 0.6 default -- per Sarvam's own
