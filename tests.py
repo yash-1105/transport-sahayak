@@ -200,4 +200,90 @@ result, applied = asyncio.run(_search("मेरी कार की ट्र�
 check("two-distinct-type override (car+truck) still resolves and is unaffected by the same-type override",
       "Truck vs. Car" in applied)
 
+# Post-submission closing briefing must never cut a long reply off mid-speech
+# (real reported bug: caller heard the ambulance ETA, then got cut off
+# partway into the fire service ETA). Root cause: _brief_and_close's failsafe
+# used to be a single flat asyncio.sleep(45) "total time budget" from when the
+# briefing turn was sent -- but the full briefing (multiple responder ETAs +
+# up to 4 SOP lines + a 6-line closing script) can legitimately take well
+# over a minute of continuous speech, so the failsafe fired mid-reply and
+# told the frontend the call was over while the backend was still actively
+# streaming audio for it. Fixed by polling for genuine STALLING (time since
+# the last audio chunk) instead of a flat total budget -- verified here with
+# a simulated ~20s of continuously-arriving audio chunks (representative of
+# a long real briefing) that must never trigger a premature call_complete,
+# and a genuine no-audio-ever stall that must still end the call (no hang).
+import time as _time
+import logging as _logging
+
+class _FakeLive:
+    def __init__(self):
+        self.turns = []
+    async def send_client_content(self, turns=None, turn_complete=True):
+        self.turns.append(turns.parts[0].text)
+
+class _RecordingWS:
+    def __init__(self):
+        self.sent = []
+    async def send_json(self, payload):
+        self.sent.append(payload)
+    async def send_bytes(self, data):
+        pass
+
+async def _briefing_survives_a_long_active_reply():
+    from severity_engine import dispatcher_live as dl
+    old_timeout = dl._BRIEFING_STALL_TIMEOUT_S
+    dl._BRIEFING_STALL_TIMEOUT_S = 2.0  # shrunk only for test speed
+    _logging.disable(_logging.CRITICAL)
+    try:
+        s = DispatcherSession.__new__(DispatcherSession)
+        s.websocket = _RecordingWS()
+        s.state = DispatcherState(language="en-IN")
+        s._dispatch_info = {"ambulance": {"name": "108 Post — X", "etaMinutes": 10, "distanceKm": 5}}
+        s._dispatch_ready = asyncio.Event()
+        s._dispatch_ready.set()
+        s._call_over = False
+        s._briefing_sent = False
+        s._model_last_spoke = 0.0
+        fake_live = _FakeLive()
+
+        async def simulate_20s_of_speech():
+            for _ in range(66):  # ~20s of chunks arriving every 0.3s
+                await asyncio.sleep(0.3)
+                s._model_last_spoke = _time.monotonic()
+            s._call_over = True  # normal completion, as the real pump would set it
+
+        await asyncio.gather(s._brief_and_close(fake_live), simulate_20s_of_speech())
+        return len(fake_live.turns) == 1 and {"type": "call_complete"} not in s.websocket.sent
+
+    finally:
+        dl._BRIEFING_STALL_TIMEOUT_S = old_timeout
+        _logging.disable(_logging.NOTSET)
+
+async def _briefing_still_ends_on_genuine_stall():
+    from severity_engine import dispatcher_live as dl
+    old_timeout = dl._BRIEFING_STALL_TIMEOUT_S
+    dl._BRIEFING_STALL_TIMEOUT_S = 0.5
+    _logging.disable(_logging.CRITICAL)
+    try:
+        s = DispatcherSession.__new__(DispatcherSession)
+        s.websocket = _RecordingWS()
+        s.state = DispatcherState(language="en-IN")
+        s._dispatch_info = None
+        s._dispatch_ready = asyncio.Event()
+        s._dispatch_ready.set()
+        s._call_over = False
+        s._briefing_sent = False
+        s._model_last_spoke = 0.0
+        await s._brief_and_close(_FakeLive())
+        return {"type": "call_complete"} in s.websocket.sent
+    finally:
+        dl._BRIEFING_STALL_TIMEOUT_S = old_timeout
+        _logging.disable(_logging.NOTSET)
+
+check("closing briefing survives ~20s of continuously-active speech without a premature cutoff",
+      asyncio.run(_briefing_survives_a_long_active_reply()))
+check("closing briefing still force-ends the call on genuine silence (no hang)",
+      asyncio.run(_briefing_still_ends_on_genuine_stall()))
+
 print("\nALL TESTS PASSED")

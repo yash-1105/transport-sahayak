@@ -89,8 +89,14 @@ _MAX_OUTPUT_TOKENS = 300
 # safety instructions + follow-up script — see dispatch_briefing.py) is a
 # genuinely long single turn; 300 tokens would truncate it mid-sentence. This
 # higher ceiling applies ONLY to that turn, so every normal turn keeps the
-# tight latency budget above.
-_BRIEFING_MAX_OUTPUT_TOKENS = 800
+# tight latency budget above. Raised from an earlier 800 as a precaution
+# after a confirmed English-side bug in the same feature (dispatcher_live.py)
+# where a too-tight budget for this content (up to 5 responder ETAs + 4 SOP
+# lines + a 6-line closing script) cut the reply off mid-sentence -- Devanagari
+# tokenizes less efficiently than Latin text, so this path is if anything more
+# exposed to the same risk. A higher ceiling only ever prevents truncation,
+# it can't cause a regression, so there's no downside to the margin.
+_BRIEFING_MAX_OUTPUT_TOKENS = 1200
 
 # After Saaras finalizes an utterance, wait this long for the caller to keep
 # going (a natural mid-answer pause produces two segments) before treating the

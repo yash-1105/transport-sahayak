@@ -85,7 +85,18 @@ _MAX_RECONNECTS = int(os.environ.get("GEMINI_MAX_RECONNECTS", "2"))
 # the call (the watchdog is parked after submission, so the briefing needs its
 # own failsafe).
 _DISPATCH_WAIT_S = float(os.environ.get("DISPATCH_BRIEFING_WAIT_S", "30"))
-_BRIEFING_TURN_TIMEOUT_S = float(os.environ.get("DISPATCH_BRIEFING_TURN_TIMEOUT_S", "45"))
+# Failsafe for the closing briefing turn -- see _brief_and_close. This is a
+# STALL timeout (time since the last audio chunk), not a total-length budget:
+# the full briefing (multiple responder ETAs + up to 4 SOP lines + a 6-line
+# closing script) can legitimately run well past a minute of continuous
+# speech, and an earlier flat "wait N seconds total, then force-end" version
+# of this timer was cutting real replies off mid-sentence (confirmed live:
+# caller heard the ambulance ETA, then got cut off partway into the fire
+# service ETA, because 45s total wasn't enough for that much content and the
+# forced call_complete raced ahead of audio the backend was still sending).
+# Only genuine silence for this long -- no new audio chunk arriving at all --
+# should ever force the call to end early.
+_BRIEFING_STALL_TIMEOUT_S = float(os.environ.get("DISPATCH_BRIEFING_STALL_TIMEOUT_S", "15"))
 
 _RECONNECT_APOLOGY = {
     "hi-IN": "मुझे क्षमा कीजिए, तकनीकी समस्या आ गई है। कृपया दोबारा बोलें।",
@@ -1185,7 +1196,7 @@ class DispatcherSession:
         succeeds: wait for the browser's dispatch_update (the SAME responder
         ETAs the dashboard is already displaying), then hand the model one
         final synthetic turn — responder briefing, SOP safety guidance, and
-        closing script (see dispatch_briefing.py). Every stage has a timeout
+        closing script (see dispatch_briefing.py). Every stage has a failsafe
         so the call always closes, even if the dashboard data never arrives
         or the session wedges (the watchdog is parked after submission)."""
         try:
@@ -1194,6 +1205,7 @@ class DispatcherSession:
             logger.warning("No dispatch_update within %.0fs -- closing without responder ETAs",
                            _DISPATCH_WAIT_S)
         instruction = build_briefing_instruction(self.state, self._dispatch_info, self.state.language)
+        briefing_sent_at = time.monotonic()
         try:
             self._briefing_sent = True
             await live_session.send_client_content(
@@ -1205,11 +1217,21 @@ class DispatcherSession:
             self._call_over = True
             await self._safe_send_json({"type": "call_complete"})
             return
-        await asyncio.sleep(_BRIEFING_TURN_TIMEOUT_S)
-        if not self._call_over:
-            logger.warning("Closing briefing turn never completed -- forcing call end")
-            self._call_over = True
-            await self._safe_send_json({"type": "call_complete"})
+        # Poll for genuine STALLING rather than sleeping once for a flat total
+        # budget (see _BRIEFING_STALL_TIMEOUT_S comment for why) -- as long as
+        # _model_last_spoke (updated on every audio chunk in
+        # _pump_gemini_to_client, including throughout this reply) keeps
+        # advancing, keep waiting no matter how long the reply naturally
+        # runs; only force-end after real silence since either the briefing
+        # was sent or the last chunk played, whichever is more recent.
+        while not self._call_over:
+            await asyncio.sleep(1.0)
+            since_activity = time.monotonic() - max(self._model_last_spoke, briefing_sent_at)
+            if since_activity > _BRIEFING_STALL_TIMEOUT_S:
+                logger.warning("No briefing audio for %.0fs -- forcing call end", since_activity)
+                self._call_over = True
+                await self._safe_send_json({"type": "call_complete"})
+                return
 
     async def _pump_gemini_to_client(self) -> None:
         live_session = self._live_session
