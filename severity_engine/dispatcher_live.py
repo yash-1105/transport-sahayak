@@ -51,6 +51,7 @@ from google.genai import types
 from google.oauth2 import service_account
 
 from . import classifier, local_extract
+from .dispatch_briefing import build_briefing_instruction
 from .google_credentials import load_service_account_info
 
 logger = logging.getLogger("dispatcher_live")
@@ -73,6 +74,18 @@ _LOCATION_TIMEOUT_S = 8.0
 _RESPONSE_TIMEOUT_S = float(os.environ.get("GEMINI_RESPONSE_TIMEOUT_S", "12"))
 _GREETING_TIMEOUT_S = float(os.environ.get("GEMINI_GREETING_TIMEOUT_S", "15"))
 _MAX_RECONNECTS = int(os.environ.get("GEMINI_MAX_RECONNECTS", "2"))
+
+# ── Post-submission closing briefing (see dispatch_briefing.py) ───────────────
+# After submit_incident the browser dashboard runs its existing matching flow
+# and sends the SAME responder ETAs it displays back as one "dispatch_update"
+# frame. How long to wait for that frame before closing without ETAs (the
+# matching flow normally takes ~5-10s; a duplicate-confirmation dialog can
+# stall it, hence the generous but finite window), and how long to give the
+# model to actually finish speaking the closing briefing before force-ending
+# the call (the watchdog is parked after submission, so the briefing needs its
+# own failsafe).
+_DISPATCH_WAIT_S = float(os.environ.get("DISPATCH_BRIEFING_WAIT_S", "30"))
+_BRIEFING_TURN_TIMEOUT_S = float(os.environ.get("DISPATCH_BRIEFING_TURN_TIMEOUT_S", "45"))
 
 _RECONNECT_APOLOGY = {
     "hi-IN": "मुझे क्षमा कीजिए, तकनीकी समस्या आ गई है। कृपया दोबारा बोलें।",
@@ -464,6 +477,8 @@ FOLLOW-UP QUESTIONS -- THIS IS A HARD RULE, NOT A SUGGESTION: every tool respons
 SPEAK ONCE PER CALLER TURN -- exactly once, never zero times and never twice: when one statement from the caller gives you several pieces of information, make ALL of your tool calls for it first (update_form_field for each piece, search_incident_type if needed), and only THEN speak -- one single spoken response covering your acknowledgment and the one next question. Never speak in between your own tool calls, and never speak twice in a row for the same caller statement. If you receive a tool result after you have already spoken your acknowledgment and question for this caller turn, say NOTHING further -- just wait for the caller's answer. But the other direction is equally important: every caller statement MUST get exactly one spoken response from you -- if you have not yet responded to the caller's latest statement, you MUST speak; never leave the caller waiting in silence. Only your greeting at the start of the call does not count as a response to anything.
 
 FINAL CONFIRMATION: Before calling submit_incident, verbally summarize everything collected (incident type, key facts, location) and ask "Would you like me to submit this report?" Only call submit_incident after the caller clearly confirms. If it comes back still missing something, ask for it and try again.
+
+AFTER SUBMISSION: when submit_incident succeeds, follow its "next_step": tell the caller their report has been registered and that you are checking which emergency services are responding -- ask them to stay on the line for a moment, and do NOT say goodbye yet. Shortly afterwards you will receive a SYSTEM UPDATE message (not from the caller) containing the responding services with their estimated times, safety instructions to give, and a closing script -- deliver everything in it as one natural, warm, continuous reply, using its exact names and numbers (always as estimates, never as tracked facts -- we do not track any vehicle), then say nothing more; the call ends there.
 """
 
 
@@ -480,6 +495,17 @@ class DispatcherSession:
         self._caller_last_spoke: float = 0.0
         self._model_last_spoke: float = 0.0
         self._nudge_sent_at: float = 0.0
+        # Post-submission closing briefing (see dispatch_briefing.py): the
+        # browser's dispatch_update payload (the SAME responder ETAs the
+        # dashboard displays), the event that fires when it arrives, and the
+        # bookkeeping that lets the pump recognize when the final briefing
+        # turn has been spoken so the call can end cleanly.
+        self._dispatch_info: Optional[dict] = None
+        self._dispatch_ready: "asyncio.Event" = asyncio.Event()
+        self._briefing_task: Optional["asyncio.Task"] = None
+        self._briefing_sent = False
+        self._spoke_after_briefing = False
+        self._call_over = False
 
     async def _safe_send_json(self, payload: dict) -> None:
         try:
@@ -756,7 +782,20 @@ class DispatcherSession:
         }
         self.state.submitted = True
         await self._safe_send_json({"type": "submitted", "incident": payload})
-        return {"ok": True}
+        # The call does NOT end here anymore: the browser now runs its
+        # matching flow and sends back the responder ETAs it displays, which
+        # this session delivers as a final closing briefing (ETAs → safety
+        # instructions → follow-up-call script) — see dispatch_briefing.py.
+        return {
+            "ok": True,
+            "next_step": (
+                "Report submitted successfully. Tell the caller their incident has been "
+                "registered and that you are now checking which emergency services are "
+                "responding -- ask them to stay on the line for just a moment. Do NOT say "
+                "goodbye or end the call yet; you will shortly receive the responder details "
+                "to read out."
+            ),
+        }
 
     async def _dispatch_tool(self, name: str, args: dict) -> dict:
         handlers = {
@@ -893,11 +932,14 @@ class DispatcherSession:
                 kickoff = self._reconnect_kickoff()
                 await asyncio.sleep(1.0)
         finally:
-            self._client_task.cancel()
-            try:
-                await self._client_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            for task in (self._client_task, self._briefing_task):
+                if task is None:
+                    continue
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     async def _run_live_session(self, client: "genai.Client", kickoff_text: str) -> str:
         """One Gemini Live session within the browser call. Returns "ended"
@@ -1049,14 +1091,52 @@ class DispatcherSession:
                     fut = self._pending_location.pop(msg.get("requestId"), None)
                     if fut and not fut.done():
                         fut.set_result({"status": "unavailable", "error": msg.get("message", "denied"), **self._state_block()})
+                elif mtype == "dispatch_update":
+                    # The browser's matching flow finished: these are the SAME
+                    # responder ETAs the dashboard is displaying (see
+                    # MatchingPanel.tsx / ReportPanel.tsx) — never recomputed
+                    # here, only spoken. Wakes _brief_and_close.
+                    self._dispatch_info = msg.get("services") or None
+                    self._dispatch_ready.set()
         except Exception:
             logger.debug("Client->Gemini pump ended", exc_info=True)
+
+    async def _brief_and_close(self, live_session) -> None:
+        """Runs once, spawned at the first turn_complete after submit_incident
+        succeeds: wait for the browser's dispatch_update (the SAME responder
+        ETAs the dashboard is already displaying), then hand the model one
+        final synthetic turn — responder briefing, SOP safety guidance, and
+        closing script (see dispatch_briefing.py). Every stage has a timeout
+        so the call always closes, even if the dashboard data never arrives
+        or the session wedges (the watchdog is parked after submission)."""
+        try:
+            await asyncio.wait_for(self._dispatch_ready.wait(), timeout=_DISPATCH_WAIT_S)
+        except asyncio.TimeoutError:
+            logger.warning("No dispatch_update within %.0fs -- closing without responder ETAs",
+                           _DISPATCH_WAIT_S)
+        instruction = build_briefing_instruction(self.state, self._dispatch_info, self.state.language)
+        try:
+            self._briefing_sent = True
+            await live_session.send_client_content(
+                turns=types.Content(role="user", parts=[types.Part(text=instruction)]),
+                turn_complete=True,
+            )
+        except Exception:
+            logger.exception("Could not send the closing briefing -- ending the call")
+            self._call_over = True
+            await self._safe_send_json({"type": "call_complete"})
+            return
+        await asyncio.sleep(_BRIEFING_TURN_TIMEOUT_S)
+        if not self._call_over:
+            logger.warning("Closing briefing turn never completed -- forcing call end")
+            self._call_over = True
+            await self._safe_send_json({"type": "call_complete"})
 
     async def _pump_gemini_to_client(self) -> None:
         live_session = self._live_session
         assert live_session is not None
         try:
-            while not self.state.submitted:
+            while not self._call_over:
                 async for response in live_session.receive():
                     if response.tool_call:
                         # Deliberately NOT counted as the model "speaking" --
@@ -1085,6 +1165,13 @@ class DispatcherSession:
                         for part in sc.model_turn.parts:
                             if part.inline_data and part.inline_data.data:
                                 self._model_last_spoke = time.monotonic()
+                                if self._briefing_sent:
+                                    # Audio produced after the closing briefing
+                                    # was injected — the turn_complete that
+                                    # follows it genuinely ends the call (and
+                                    # not a stray turn_complete from a reply
+                                    # that was already in flight).
+                                    self._spoke_after_briefing = True
                                 await self._safe_send_json({"type": "status", "state": "speaking"})
                                 try:
                                     await self.websocket.send_bytes(part.inline_data.data)
@@ -1097,6 +1184,19 @@ class DispatcherSession:
                         # audio) is not a reply, and must still trip the
                         # watchdog if the caller is waiting on one.
                         await self._safe_send_json({"type": "turn_complete"})
+                        if self.state.submitted:
+                            if self._briefing_sent and self._spoke_after_briefing:
+                                # Closing briefing delivered — the call is over.
+                                self._call_over = True
+                                await self._safe_send_json({"type": "call_complete"})
+                                return
+                            if self._briefing_task is None:
+                                # First turn_complete after submission (the
+                                # "stay on the line" acknowledgment): start
+                                # waiting for the dashboard's responder data.
+                                self._briefing_task = asyncio.create_task(
+                                    self._brief_and_close(live_session)
+                                )
                         await self._safe_send_json({"type": "status", "state": "listening"})
                         break
                 else:

@@ -2,7 +2,11 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useVoiceInput, type VoiceLocale } from "@/hooks/useVoiceInput";
-import { useVoiceDispatcher, type DispatcherSubmitPayload } from "@/hooks/useVoiceDispatcher";
+import {
+  useVoiceDispatcher,
+  type DispatcherSubmitPayload,
+  type DispatchBriefingServices,
+} from "@/hooks/useVoiceDispatcher";
 import { DispatcherSection } from "@/components/report/DispatcherSection";
 import { useEventLog } from "@/store/eventLog";
 import { reverseGeocode } from "@/lib/geocode";
@@ -26,6 +30,8 @@ import type {
   FireStation,
   TowingStation,
   UserReportedPothole,
+  RouteEstimatedPayload,
+  HospitalMatchedPayload,
 } from "@/lib/types";
 
 const HOSPITALS = hospitalsRaw.hospitals as unknown as Hospital[];
@@ -1292,6 +1298,70 @@ export default function ReportPanel({
   const appendDuplicateFlagged = useEventLog((s) => s.appendDuplicateFlagged);
   const entries = useEventLog((s) => s.entries);
   const clearRoutes = useRoutingStore((s) => s.clearRoutes);
+
+  // After a voice-dispatcher submission, feed the agent the SAME responder
+  // ETAs the dashboard is displaying so it can announce them and close the
+  // call — MatchingPanel already logs every one of them as a ROUTE_ESTIMATED
+  // event (and the hospital/police match as HOSPITAL_MATCHED), so this only
+  // reads the event log; nothing is recomputed and no extra API call is made.
+  // Debounced: the route entries land in bursts as MatchingPanel's phases
+  // complete, so wait for a quiet window before sending exactly once per
+  // incident. If matching fails entirely and nothing is ever logged, the
+  // backend's own timeout closes the call without ETAs — never with invented
+  // ones.
+  const briefingSentForRef = useRef<string | null>(null);
+  const sendDispatchBriefing = dispatcher.sendDispatchBriefing;
+  useEffect(() => {
+    if (!createdIncident || createdIncident.reportMode !== "DISPATCHER") return;
+    if (briefingSentForRef.current === createdIncident.id) return;
+    const incidentId = createdIncident.id;
+    const routeEntries = entries.filter(
+      (e) => e.type === "ROUTE_ESTIMATED" && (e.payload as RouteEstimatedPayload).incidentId === incidentId
+    );
+    const matched = entries.find(
+      (e) => e.type === "HOSPITAL_MATCHED" && (e.payload as HospitalMatchedPayload).incidentId === incidentId
+    );
+    if (routeEntries.length === 0 && !matched) return;
+
+    const t = setTimeout(() => {
+      briefingSentForRef.current = incidentId;
+      const services: DispatchBriefingServices = {};
+      for (const e of routeEntries) {
+        const p = e.payload as RouteEstimatedPayload;
+        const key = p.entityType.toLowerCase() as keyof DispatchBriefingServices;
+        if (!services[key]) {
+          services[key] = {
+            name: p.entityName,
+            etaMinutes: Math.round(p.roadDurationMin),
+            distanceKm: p.roadDistanceKm,
+          };
+        }
+      }
+      // Route polylines can fail while the matrix-based match still
+      // succeeded — fall back to the HOSPITAL_MATCHED payload so the agent
+      // can at least name the facility (with its traffic ETA when known).
+      if (matched) {
+        const p = matched.payload as HospitalMatchedPayload;
+        const top = p.rankedHospitals[0];
+        if (top && !services.hospital) {
+          services.hospital = {
+            name: top.hospital.name,
+            etaMinutes: top.roadDurationMin != null ? Math.round(top.roadDurationMin) : null,
+            distanceKm: top.roadDistanceKm,
+          };
+        }
+        if (p.nearestPolice && !services.police) {
+          services.police = {
+            name: p.nearestPolice.station.name,
+            etaMinutes: p.nearestPolice.roadDurationMin != null ? Math.round(p.nearestPolice.roadDurationMin) : null,
+            distanceKm: p.nearestPolice.roadDistanceKm,
+          };
+        }
+      }
+      sendDispatchBriefing(services);
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [entries, createdIncident, sendDispatchBriefing]);
 
   function resetForm() {
     setPanelStatus("IDLE");

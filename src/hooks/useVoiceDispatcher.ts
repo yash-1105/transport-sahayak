@@ -51,6 +51,23 @@ export interface UseVoiceDispatcherCallbacks {
   onSubmitReady: (payload: DispatcherSubmitPayload) => void;
 }
 
+/** One responder entry for the post-submission voice briefing — the SAME
+ * values the dashboard is already displaying (sourced from the event log's
+ * ROUTE_ESTIMATED / HOSPITAL_MATCHED entries), never recomputed. */
+export interface DispatchBriefingService {
+  name: string;
+  etaMinutes: number | null;
+  distanceKm: number | null;
+}
+
+export interface DispatchBriefingServices {
+  ambulance?: DispatchBriefingService;
+  fire?: DispatchBriefingService;
+  towing?: DispatchBriefingService;
+  hospital?: DispatchBriefingService;
+  police?: DispatchBriefingService;
+}
+
 export interface UseVoiceDispatcher {
   supported: boolean;
   status: DispatcherStatus;
@@ -61,6 +78,10 @@ export interface UseVoiceDispatcher {
   agentText: string | null;
   start: (locale: VoiceLocale) => void;
   stop: () => void;
+  /** After submission, hand the backend the responder ETAs the dashboard is
+   * displaying so the agent can announce them and close the call. No-op if
+   * the call already ended. */
+  sendDispatchBriefing: (services: DispatchBriefingServices) => void;
 }
 
 const ERROR_MSGS: Record<string, string> = {
@@ -133,10 +154,13 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
   // Mirrors `status` for the worklet's onmessage closure, which is created
   // once in startCapture() and can't see fresh React state without this.
   const statusRef = useRef<DispatcherStatus>("idle");
-  // Set once submit_incident has fired — the call should end after the
-  // model's current turn (e.g. a closing remark) finishes, not immediately
-  // mid-sentence, and not carry on any further after that.
-  const pendingEndAfterTurnRef = useRef(false);
+  // Set once submit_incident has fired. The call no longer ends here — the
+  // backend keeps the session open to deliver the closing briefing (responder
+  // ETAs + safety guidance) and sends "call_complete" when it's truly over.
+  // This ref makes a post-submission socket close read as a normal call end
+  // (old backend, or backend finished and closed) instead of a reconnectable
+  // network error.
+  const submittedRef = useRef(false);
 
   // Playback scheduling state
   const playbackCtxRef = useRef<AudioContext | null>(null);
@@ -277,15 +301,22 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           }
           break;
         case "turn_complete":
-          if (pendingEndAfterTurnRef.current) {
-            // The report was submitted during (or just before) this turn —
-            // let the model's closing remark finish playing, then end the
-            // call outright rather than reopening the mic for more input.
-            stop();
-          } else {
-            setStatus("listening");
-          }
+          setStatus("listening");
           break;
+        case "call_complete": {
+          // The closing briefing has been fully delivered server-side. Any
+          // remaining audio may still be scheduled in the playback queue —
+          // wait for it to drain before tearing down, so the goodbye is
+          // never clipped.
+          const ctx = playbackCtxRef.current;
+          const remainingS = ctx && ctx.state !== "closed"
+            ? Math.max(0, nextStartTimeRef.current - ctx.currentTime)
+            : 0;
+          setTimeout(() => {
+            if (!isStale()) stop();
+          }, remainingS * 1000 + 300);
+          break;
+        }
         case "interrupted":
           flushPlayback();
           break;
@@ -336,13 +367,12 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           break;
         }
         case "submitted":
-          // Do not reconnect once this call's job is done -- without this,
-          // the backend closing the session after submission looked to the
-          // reconnect logic like an unexpected drop, so it silently opened a
-          // brand new session (including a fresh opening greeting), which
-          // is why the agent appeared to "start speaking again" well after
-          // the report had already been submitted and assessed.
-          pendingEndAfterTurnRef.current = true;
+          // The call is NOT over yet: the backend now waits for the
+          // dashboard's responder ETAs (sent back via sendDispatchBriefing)
+          // and delivers the closing briefing, then sends "call_complete".
+          // submittedRef only marks that a socket close from here on is a
+          // normal call end, never a reconnectable drop (see ws.onclose).
+          submittedRef.current = true;
           if (event.incident) cb.onSubmitReady(event.incident);
           break;
         case "error":
@@ -477,6 +507,14 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
       ws.onclose = () => {
         if (wsRef.current === ws) wsRef.current = null;
         if (isStale() || intentionalStopRef.current) return;
+        if (submittedRef.current) {
+          // The report went through — the backend closing the socket after
+          // (or instead of) the closing briefing is a normal call end, not a
+          // drop to reconnect from. Reconnecting here would start a brand new
+          // session with a fresh opening greeting.
+          stop();
+          return;
+        }
         if (reconnectAttemptRef.current < MAX_RECONNECT_ATTEMPTS) {
           const delay = RECONNECT_DELAYS_MS[reconnectAttemptRef.current] ?? 4000;
           reconnectAttemptRef.current += 1;
@@ -495,8 +533,18 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
         void startCapture(sessionId, isStale);
       };
     },
-    [playChunk, handleServerEvent, startCapture]
+    [playChunk, handleServerEvent, startCapture, stop]
   );
+
+  const sendDispatchBriefing = useCallback((services: DispatchBriefingServices) => {
+    const ws = wsRef.current;
+    if (ws?.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ type: "dispatch_update", services }));
+    } catch {
+      /* socket already going away — backend closes via its own timeout */
+    }
+  }, []);
 
   const start = useCallback(
     (locale: VoiceLocale) => {
@@ -506,7 +554,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
         return;
       }
       intentionalStopRef.current = false;
-      pendingEndAfterTurnRef.current = false;
+      submittedRef.current = false;
       reconnectAttemptRef.current = 0;
       localeRef.current = locale;
       const sessionId = ++sessionIdRef.current;
@@ -519,5 +567,5 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
 
   useEffect(() => () => teardown(), [teardown]);
 
-  return { supported, status, error, offline, agentText, start, stop };
+  return { supported, status, error, offline, agentText, start, stop, sendDispatchBriefing };
 }
