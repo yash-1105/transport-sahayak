@@ -286,4 +286,76 @@ check("closing briefing survives ~20s of continuously-active speech without a pr
 check("closing briefing still force-ends the call on genuine silence (no hang)",
       asyncio.run(_briefing_still_ends_on_genuine_stall()))
 
+# The mic must NOT reopen after the post-submission "stay on the line"
+# acknowledgment turn (real reported bug: the English agent started speaking
+# automatically and repeatedly, asking the same thing over and over without
+# waiting for a real reply). Root cause: _pump_gemini_to_client sent
+# {"status":"listening"} unconditionally after every turn_complete, including
+# the acknowledgment turn right after submit_incident -- reopening the
+# frontend mic gate (useVoiceDispatcher.ts only opens the mic on "listening"
+# for en-IN) for the entire up-to-30s dispatch_update wait in
+# _brief_and_close, even though the caller has nothing left to say at that
+# point in the call. Any caller utterance or background noise picked up
+# during that window was treated by Gemini Live (which is reactive -- it
+# only speaks in response to input) as a fresh turn, and with no new
+# information to report yet, the model just repeated its "please hold on"
+# line every time it heard anything at all.
+from types import SimpleNamespace
+
+class _FakeLiveSession:
+    def __init__(self, events):
+        self._events = events
+    async def receive(self):
+        for e in self._events:
+            yield e
+    async def send_client_content(self, turns=None, turn_complete=True):
+        pass
+
+def _make_turn_complete_event():
+    model_turn = SimpleNamespace(parts=[SimpleNamespace(inline_data=SimpleNamespace(data=b"\x00\x00"))])
+    sc = SimpleNamespace(
+        input_transcription=None, output_transcription=None,
+        model_turn=model_turn, interrupted=False, turn_complete=True,
+    )
+    return SimpleNamespace(tool_call=None, server_content=sc)
+
+async def _mic_stays_closed_after_submission_ack_turn():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _RecordingWS()
+    s.state = DispatcherState(language="en-IN")
+    s.state.submitted = True
+    s._call_over = False
+    s._briefing_sent = False
+    s._spoke_after_briefing = False
+    s._briefing_task = None
+    s._model_last_spoke = 0.0
+    s._caller_last_spoke = 0.0
+
+    live = _FakeLiveSession([_make_turn_complete_event()])
+    s._live_session = live
+
+    async def fake_brief_and_close(live_session):
+        await asyncio.sleep(3600)  # not under test here -- see the briefing tests above
+    s._brief_and_close = fake_brief_and_close
+
+    call_count = {"n": 0}
+    orig_receive = live.receive
+    def receive_wrapper():
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return orig_receive()
+        async def empty():
+            return
+            yield  # pragma: no cover
+        s._call_over = True  # let the pump's outer loop exit instead of re-blocking on receive()
+        return empty()
+    live.receive = receive_wrapper
+
+    await s._pump_gemini_to_client()
+    statuses = [m.get("state") for m in s.websocket.sent if m.get("type") == "status"]
+    return "listening" not in statuses and "thinking" in statuses and s._briefing_task is not None
+
+check("mic does not reopen (no 'listening' status) after the post-submission acknowledgment turn",
+      asyncio.run(_mic_stays_closed_after_submission_ack_turn()))
+
 print("\nALL TESTS PASSED")

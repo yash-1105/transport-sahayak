@@ -1298,6 +1298,30 @@ class DispatcherSession:
                                 self._briefing_task = asyncio.create_task(
                                     self._brief_and_close(live_session)
                                 )
+                            # Do NOT reopen the mic here (real reported bug:
+                            # the agent kept speaking automatically, repeating
+                            # itself, without waiting for a real reply).
+                            # Gemini Live is reactive -- it stays silent until
+                            # it receives caller audio -- but sending
+                            # "listening" reopens the frontend mic gate
+                            # (useVoiceDispatcher.ts) for the ENTIRE
+                            # up-to-30s dispatch_update wait in _brief_and_close,
+                            # so any caller utterance or background noise
+                            # during that limbo window (the caller has
+                            # nothing new to say -- the report is already
+                            # submitted) got treated as a fresh turn, and with
+                            # no new information to report yet, the model just
+                            # repeated its "please hold on" line, over and
+                            # over, every time it heard anything at all.
+                            # "thinking" keeps the client-side mic gate closed
+                            # (micOpen only opens on "listening" for en-IN)
+                            # without needing a new status the frontend
+                            # doesn't already recognize -- the caller has
+                            # nothing left to say at this point in the call
+                            # regardless, so there is no real listening to do
+                            # until the one-shot closing briefing turn below.
+                            await self._safe_send_json({"type": "status", "state": "thinking"})
+                            break
                         await self._safe_send_json({"type": "status", "state": "listening"})
                         break
                 else:
