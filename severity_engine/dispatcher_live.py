@@ -135,6 +135,68 @@ def _find_vehicle_pair_subtype(mentioned: set) -> Optional[str]:
             return rec["subType"]
     return None
 
+
+# ── Same-vehicle-type collision override (Issue: "मेरी कार दूसरी कार से टकरा
+# गई" -> agent asks the caller to confirm instead of recording Car vs. Car
+# immediately) ──────────────────────────────────────────────────────────────
+# _mentioned_vehicle_types above dedupes into a SET, so "car ... car" (the
+# same type named twice, e.g. "my car" and "another car") collapses to
+# {"car"} -- indistinguishable from a single passing mention of "car" (e.g.
+# "my car broke down", not a collision at all). That single-element set can
+# never trigger the two-distinct-type override above, so it fell through
+# entirely to classify()'s fuzzy keyword/TF-IDF scoring -- which, even after
+# fixing the हिंदी_glossary.json gap that dropped "कार" tokens outright
+# (2026-07 fix), remains sensitive to phrasing the glossary/corpus doesn't
+# happen to weight strongly, and produced a lowConfidence result for some
+# real Hindi phrasings, sending the caller a clarifying question for what is
+# unambiguous input ("my car collided with another car" IS Car vs. Car,
+# deterministically, no LLM judgment needed). Fixed the same way as the
+# two-distinct-type case: when the caller's OWN words name one vehicle type
+# TWICE (not deduped) alongside a collision verb, and the taxonomy has an
+# "X vs. X" record for that type (today: only Car vs. Car and Two-Wheeler
+# vs. Two-Wheeler -- most types have no same-type record, so this correctly
+# no-ops for them and classify() remains the only path), that record wins
+# outright. Never fires on a single passing mention with no collision
+# language ("my car broke down" stays with classify()'s own scoring).
+_COLLISION_SIGNAL_RE = re.compile(
+    r"\b(collision|collided|collide|crash(?:ed)?|struck|strike|rammed|smashed|slammed|hit)\b"
+    r"|टक्कर|टकरा|भिड़ंत|भिड़|ठोकर|ठोक"
+)
+
+
+def _mentions_collision(text: str) -> bool:
+    return bool(_COLLISION_SIGNAL_RE.search((text or "").lower()))
+
+
+def _vehicle_type_mention_counts(text: str) -> dict:
+    """Canonical vehicle type -> how many times ANY of its aliases appear in
+    the caller's raw words, NOT deduped -- lets "कार ... कार" (the same type
+    named twice) be told apart from a single passing mention. Same exact
+    whole-token matching as _mentioned_vehicle_types (never a substring)."""
+    lower = (text or "").lower()
+    tokens = _DEVANAGARI_TOKEN_RE.findall(lower) + _LATIN_TOKEN_RE.findall(lower)
+    counts: dict = {}
+    for canon, spec in _VEHICLE_TYPES.items():
+        say_set = set(spec["say"])
+        n = sum(1 for t in tokens if t in say_set)
+        if n:
+            counts[canon] = n
+    return counts
+
+
+def _find_same_type_subtype(vehicle_type: str) -> Optional[str]:
+    """The taxonomy's "<Type> vs. <Type>" record for this vehicle type, if
+    one exists -- checked by the type's own subtype pattern matching TWICE
+    within a single subType string, so this needs no hardcoded record names
+    and correctly returns None for types with no same-type record."""
+    pattern = _VEHICLE_TYPES[vehicle_type]["subtype"][0]
+    for rec in classifier.INDEX:
+        st = rec["subType"].lower()
+        if len(re.findall(pattern, st)) >= 2:
+            return rec["subType"]
+    return None
+
+
 _FLAG_NAMES = ["Conscious", "Breathing", "Trapped", "Heavy bleeding", "Fire", "Hazardous material"]
 
 # Maps severity_engine.local_extract's signal keys (its lexicon already
@@ -666,6 +728,23 @@ class DispatcherSession:
                 result["category"] = classifier._CATEGORY_MAP.get(pair_subtype, "Other")
                 result["confidence"] = 0.9
                 result["lowConfidence"] = False
+        elif len(mentioned) == 1:
+            # Same-vehicle-type-twice override (see _find_same_type_subtype's
+            # comment): "my car collided with another car" names "car" TWICE
+            # in the caller's raw words with collision language, not once --
+            # _mentioned_vehicle_types alone can't see that (it dedupes into
+            # a set), so count raw mentions separately.
+            only_type = next(iter(mentioned))
+            counts = _vehicle_type_mention_counts(description)
+            if counts.get(only_type, 0) >= 2 and _mentions_collision(description):
+                same_subtype = _find_same_type_subtype(only_type)
+                if same_subtype and same_subtype != result.get("subType"):
+                    logger.info("Same-type-collision override: %s -> %s (type: %s, mentions: %d)",
+                                result.get("subType"), same_subtype, only_type, counts[only_type])
+                    result["subType"] = same_subtype
+                    result["category"] = classifier._CATEGORY_MAP.get(same_subtype, "Other")
+                    result["confidence"] = 0.9
+                    result["lowConfidence"] = False
         # Hindi conversations were unreliable at the model completing a
         # SEPARATE update_form_field(field="incidentType", ...) call right
         # after this search -- confirmed live: the model would sometimes move

@@ -153,4 +153,51 @@ check("'सरकार' (government) never false-matches 'कार'",
 check("'cargo' never false-matches 'car'",
       _mentioned_vehicle_types("cargo truck accident") == {"truck"})
 
+# Same-vehicle-type-twice override (real reported bug: a Hindi caller saying
+# "मेरी कार दूसरी कार से टकरा गई" -- car collided with ANOTHER car, same type
+# both times -- got asked to confirm the incident type instead of it being
+# recorded immediately, because _mentioned_vehicle_types dedupes "car"+"car"
+# into a single-element set that the two-distinct-type override above can
+# never fire on, so it fell through entirely to classify()'s fuzzy scoring).
+from severity_engine.dispatcher_live import (
+    _vehicle_type_mention_counts, _mentions_collision, _find_same_type_subtype,
+)
+check("same type named twice is counted, not deduped",
+      _vehicle_type_mention_counts("मेरी कार किसी दूसरी कार से टकरा गई") == {"car": 2})
+check("a single passing mention is NOT counted as twice",
+      _vehicle_type_mention_counts("मेरी कार खराब हो गई").get("car", 0) == 1)
+check("Hindi collision verb (टकरा) detected", _mentions_collision("मेरी कार टकरा गई"))
+check("a non-collision phrase (breakdown) has no collision signal",
+      not _mentions_collision("मेरी कार खराब हो गई"))
+check("taxonomy has a same-type record for car", _find_same_type_subtype("car") == "Car vs. Car Collision")
+check("taxonomy has no same-type record for auto-rickshaw (must not invent one)",
+      _find_same_type_subtype("auto-rickshaw") is None)
+
+import asyncio
+from severity_engine.dispatcher_live import DispatcherSession, DispatcherState
+
+class _FakeWS:
+    async def send_json(self, payload):
+        pass
+
+async def _search(desc):
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    result = await s._tool_search_incident_type(desc)
+    return result, s.state.sub_type
+
+for desc in [
+    "मेरी कार किसी दूसरी कार से टकरा गई",
+    "एक कार ने मेरी कार को टक्कर मार दी",
+    "my car collided with another car",
+]:
+    result, applied = asyncio.run(_search(desc))
+    check(f"Hindi/English same-type override auto-applies Car vs. Car for {desc!r}",
+          applied == "Car vs. Car Collision" and result.get("lowConfidence") is False)
+
+result, applied = asyncio.run(_search("मेरी कार की ट्रक से टक्कर हो गई।"))
+check("two-distinct-type override (car+truck) still resolves and is unaffected by the same-type override",
+      "Truck vs. Car" in applied)
+
 print("\nALL TESTS PASSED")
