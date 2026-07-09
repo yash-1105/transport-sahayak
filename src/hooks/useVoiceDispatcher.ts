@@ -161,6 +161,10 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
   // (old backend, or backend finished and closed) instead of a reconnectable
   // network error.
   const submittedRef = useRef(false);
+  // Incremented on every "status" event of any kind — lets a delayed
+  // "listening" transition (see the "status" handler) detect that a newer
+  // status has since superseded it and skip applying a now-stale mic-open.
+  const statusSeqRef = useRef(0);
 
   // Playback scheduling state
   const playbackCtxRef = useRef<AudioContext | null>(null);
@@ -295,14 +299,42 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           reconnectAttemptRef.current = 0;
           setStatus("connecting");
           break;
-        case "status":
-          if (event.state === "listening" || event.state === "thinking" || event.state === "speaking" || event.state === "reconnecting") {
-            setStatus(event.state);
+        case "status": {
+          if (event.state !== "listening" && event.state !== "thinking" && event.state !== "speaking" && event.state !== "reconnecting") {
+            break;
           }
+          statusSeqRef.current += 1;
+          const seq = statusSeqRef.current;
+          if (event.state !== "listening") {
+            setStatus(event.state);
+            break;
+          }
+          // Do NOT open the mic the instant the server says "listening" --
+          // that only means Gemini Live finished GENERATING this turn's
+          // audio, not that the browser has finished PLAYING it (chunks are
+          // queued ahead on the Web Audio timeline, see playChunk). Real
+          // reported bug (no headphones): the mic reopened while the tail of
+          // the agent's own opening line was still audibly playing through
+          // the laptop speaker, got picked up by the mic, and Gemini Live --
+          // reactive, so it responds to whatever it hears -- treated that
+          // self-audio bleed as the caller describing an incident and
+          // classified one without the caller ever having spoken. Wait for
+          // whatever's still scheduled in the playback queue (plus a small
+          // margin for the tail of the last chunk's natural decay) before
+          // actually flipping to "listening", which is what gates the
+          // worklet's micOpen check below. The seq guard drops this if a
+          // newer status (e.g. a fresh "speaking" for the very next turn)
+          // has since superseded it -- never force a stale mic-open.
+          const ctx = playbackCtxRef.current;
+          const remainingS = ctx && ctx.state !== "closed"
+            ? Math.max(0, nextStartTimeRef.current - ctx.currentTime)
+            : 0;
+          setTimeout(() => {
+            if (isStale() || statusSeqRef.current !== seq) return;
+            setStatus("listening");
+          }, remainingS * 1000 + 250);
           break;
-        case "turn_complete":
-          setStatus("listening");
-          break;
+        }
         case "call_complete": {
           // The closing briefing has been fully delivered server-side. Any
           // remaining audio may still be scheduled in the playback queue —
