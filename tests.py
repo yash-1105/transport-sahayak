@@ -293,14 +293,19 @@ check("closing briefing still force-ends the call on genuine silence (no hang)",
       asyncio.run(_briefing_still_ends_on_genuine_stall()))
 
 # ── Segmented closing-briefing delivery (English/Gemini Live) ─────────────────
-# Real reported bug: the agent spoke the ambulance ETA and then just stopped
-# -- fire, towing, hospital, police, SOPs, and the closing script were never
-# reached. A single ~40+ second continuous Gemini Live turn is inherently
-# more fragile than several short ones; the fix sends the SAME content as 3
-# sequential turns (build_briefing_segments), with the pump -- the session's
-# sole reader -- sending each next segment as the previous one's turn_complete
-# arrives (_send_next_briefing_segment), so a problem with any one segment
-# can never silently swallow everything after it.
+# Real reported bug, in three rounds: agent stopped after ambulance; after a
+# first fix (3 segments: facts/SOPs/closing) it got through fire before
+# stopping; after strengthening the facts segment it got through towing
+# before stopping. Each fix bought a little more content, never a full fix --
+# confirmed live this isn't a fixed length threshold (a single 5-sentence
+# facts turn worked 6/6 times in isolated short-context test sessions, even
+# with a real ~25s idle gap injected matching production's dispatch_update
+# wait), so generation reliability must be degrading with how much a REAL
+# call has already accumulated in a way isolated testing can't reproduce.
+# The only defensible fix at that point is maximum granularity: build_briefing
+# _segments now returns ONE micro-turn per fact/SOP-line/closing-line -- never
+# more than a single short sentence asked of the model in any one turn, so
+# there is nothing left within a turn that COULD be dropped or cut short.
 from severity_engine.dispatch_briefing import build_briefing_segments
 
 def _segments_for_test():
@@ -311,26 +316,25 @@ def _segments_for_test():
     return build_briefing_segments(st, services, "en-IN")
 
 _segs = _segments_for_test()
-check("build_briefing_segments returns exactly 3 turns", len(_segs) == 3)
-check("segment 1 carries the responder facts", "26 minutes" in _segs[0] and "Baraut" in _segs[0])
-check("segment 2 carries the SOP safety guidance", "bleeding" in _segs[1].lower())
-check("segment 3 carries the closing script", "disconnect" in _segs[2].lower())
-check("only segment 3 is marked as the final turn",
-      "the FINAL turn" not in _segs[0] and "the FINAL turn" not in _segs[1] and "the FINAL turn" in _segs[2])
-check("only segment 3 tells the model the call ends here",
-      "the call ends here" not in _segs[0] and "the call ends here" not in _segs[1]
-      and "the call ends here" in _segs[2])
+# 1 fact + 3 SOPs (bleeding, trapped, general) + 6 closing lines = 10 turns
+check("build_briefing_segments returns one micro-turn per fact/SOP-line/closing-line",
+      len(_segs) == 10)
+check("the fact segment carries the responder fact", "26 minutes" in _segs[0] and "Baraut" in _segs[0])
+check("a SOP segment carries the bleeding instruction",
+      any("bleeding" in s.lower() for s in _segs[1:4]))
+check("the last segment carries the final closing line",
+      "disconnect" not in _segs[-1].lower() and "safe" in _segs[-1].lower())
+check("only the LAST segment is marked as the final turn",
+      all("the FINAL turn" not in s for s in _segs[:-1]) and "the FINAL turn" in _segs[-1])
+check("only the LAST segment tells the model the call ends here",
+      all("the call ends here" not in s for s in _segs[:-1]) and "the call ends here" in _segs[-1])
+check("every non-final segment tells the model not to add anything from later in the sequence",
+      all("more is coming right after this" in s for s in _segs[:-1]))
+check("every segment says it is the ONLY point in that turn",
+      all("ONLY point in this turn" in s for s in _segs))
 
-# Anti-omission instructions (real reported bug found while live-testing the
-# segments above: without an explicit "you MUST mention every one of the N
-# items, none skipped" instruction, Gemini Live reliably under-delivered each
-# segment -- e.g. mentioning ambulance+fire but silently dropping towing,
-# hospital, and police from the very same facts list on every run, and
-# dropping the "call back if you don't hear from us" closing line on most
-# runs. Confirmed live, 4/4 clean runs after adding these instructions -- see
-# CLAUDE.md). These checks don't call the live API; they lock in that the
-# instruction text itself still contains the anti-omission language so a
-# future edit to build_briefing_segments can't silently drop it again.
+# Multi-service case: exactly one micro-turn per service, in order, each with
+# its own exact name and number -- nothing pre-emptively trimmed or merged.
 _multi_services = {
     "ambulance": {"name": "108 Post — Baraut", "etaMinutes": 26, "distanceKm": 18.2},
     "fire": {"name": "Fire Post — Muzaffarnagar Bypass", "etaMinutes": 36, "distanceKm": 22.0},
@@ -339,42 +343,45 @@ _multi_services = {
     "police": {"name": "Jorabat PS", "etaMinutes": 12, "distanceKm": 7.0},
 }
 _multi_segs = build_briefing_segments(DispatcherState(language="en-IN"), _multi_services, "en-IN")
-check("segment 1 states the exact count of services and demands all be named",
-      "ALL 5" in _multi_segs[0] and "double check" in _multi_segs[0].lower())
-check("segment 1 explicitly forbids silently dropping services",
-      "silently drop" in _multi_segs[0].lower())
-check("segment 1 overrides the base prompt's usual short-reply habit for this turn",
-      "exception to your usual habit" in _multi_segs[0])
-check("segment 3 explicitly calls out the easy-to-drop callback line",
-      "easy to accidentally leave" in _multi_segs[2].lower() or "easy to accidentally" in _multi_segs[2].lower())
-check("all 5 real service locations appear in segment 1 (nothing pre-emptively trimmed)",
+# 5 facts + 1 general SOP (no flags set) + 6 closing lines = 12 turns
+check("multi-service case still yields exactly one segment per fact (5) + SOPs + closing",
+      len(_multi_segs) == 12)
+check("the 5 fact segments each carry exactly one service's real name/location, in order",
       # _facility_location() strips everything before "—" (station names
       # follow "<Label> — <Location>"), so only the location half is spoken.
-      all(loc in _multi_segs[0] for loc in
-          ["Baraut", "Muzaffarnagar Bypass", "Shamli", "Ganga Amrit Hospital", "Jorabat PS"]))
+      [loc in _multi_segs[i] for i, loc in enumerate(
+          ["Baraut", "Muzaffarnagar Bypass", "Shamli", "Ganga Amrit Hospital", "Jorabat PS"])] == [True] * 5)
+check("a fact segment does not also contain a DIFFERENT service's name (true one-per-turn)",
+      "Muzaffarnagar Bypass" not in _multi_segs[0] and "Baraut" not in _multi_segs[1])
+
+# dispatch_update never arrived / matching failed -- must never invent a
+# number, but must still produce a valid (non-empty) segment sequence.
+_no_data_segs = build_briefing_segments(DispatcherState(language="en-IN"), None, "en-IN")
+check("no-dispatch-data case still produces a valid, non-empty segment sequence",
+      len(_no_data_segs) >= 1 and "notified" in _no_data_segs[0].lower())
+check("no-dispatch-data fact segment invents no specific ETA minute count",
+      not any(f" {n} minute" in _no_data_segs[0] for n in range(1, 200)))
 
 async def _send_next_segment_sequence_ends_only_after_all_sent():
     s = DispatcherSession.__new__(DispatcherSession)
     s.websocket = _RecordingWS()
     s.state = DispatcherState(language="en-IN")
     s._call_over = False
-    s._briefing_segments = _segments_for_test()
+    segments = _segments_for_test()
+    n = len(segments)
+    s._briefing_segments = segments
     s._briefing_segment_started_at = 0.0
     live = _FakeLive()
 
     results = []
-    for _ in range(4):  # 3 real segments + 1 call after they're exhausted
+    for _ in range(n + 1):  # every real segment + 1 call after they're exhausted
         await s._send_next_briefing_segment(live)
         results.append((len(live.turns), s._call_over))
 
-    return results == [
-        (1, False),  # segment 1 sent, call still going
-        (2, False),  # segment 2 sent, call still going
-        (3, False),  # segment 3 sent, call still going
-        (3, True),   # nothing left to send -- call ends, no 4th send
-    ] and {"type": "call_complete"} in s.websocket.sent
+    expected = [(i, False) for i in range(1, n + 1)] + [(n, True)]
+    return results == expected and {"type": "call_complete"} in s.websocket.sent
 
-check("segments are sent one at a time in order, call ends only once all 3 are exhausted",
+check("segments are sent one at a time in order, call ends only once all are exhausted",
       asyncio.run(_send_next_segment_sequence_ends_only_after_all_sent()))
 
 # The mic must NOT reopen after the post-submission "stay on the line"
