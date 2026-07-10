@@ -73,7 +73,23 @@ _LOCATION_TIMEOUT_S = 8.0
 # call left off instead of starting over). Env-overridable for testing.
 _RESPONSE_TIMEOUT_S = float(os.environ.get("GEMINI_RESPONSE_TIMEOUT_S", "12"))
 _GREETING_TIMEOUT_S = float(os.environ.get("GEMINI_GREETING_TIMEOUT_S", "15"))
-_MAX_RECONNECTS = int(os.environ.get("GEMINI_MAX_RECONNECTS", "2"))
+# Real reported bug: a call hit "The voice service hit a technical problem"
+# after exhausting reconnects. Investigated live against this project's real
+# Vertex credentials (2026-07): the Gemini Live session itself connects and
+# responds reliably (5/5 rapid-fire sessions succeeded), and extensive
+# fuzzing of every code path touching a live session (the transcript
+# backstop, the classifier, the post-submission briefing state machine)
+# turned up no exception on any input tried -- no reproducible code
+# regression found. This matches the pre-existing, already-documented
+# Gemini Live reliability class this reconnect loop exists for ("Google-side
+# session limits, transient stream failures" -- see the reliability-loop
+# comment in run()), not a new one. Raised from 2 reconnects (3 total
+# attempts) to 4 (5 total) with exponential backoff (was a flat 1.0s sleep)
+# so a transient multi-second hiccup has more real time to clear before the
+# call gives up -- the same backoff shape the frontend already uses for its
+# own reconnects (see RECONNECT_DELAYS_MS in useVoiceDispatcher.ts).
+_MAX_RECONNECTS = int(os.environ.get("GEMINI_MAX_RECONNECTS", "4"))
+_RECONNECT_BACKOFF_S = (1.0, 2.0, 4.0, 8.0)
 
 # ── Post-submission closing briefing (see dispatch_briefing.py) ───────────────
 # After submit_incident the browser dashboard runs its existing matching flow
@@ -1071,11 +1087,13 @@ class DispatcherSession:
                         "message": "The voice service hit a technical problem. Please end the call and try again.",
                     })
                     return
+                delay = _RECONNECT_BACKOFF_S[min(reconnects, len(_RECONNECT_BACKOFF_S) - 1)]
                 reconnects += 1
-                logger.warning("Reconnecting Gemini Live session (attempt %d/%d)", reconnects, _MAX_RECONNECTS)
+                logger.warning("Reconnecting Gemini Live session (attempt %d/%d, waiting %.0fs)",
+                                reconnects, _MAX_RECONNECTS, delay)
                 await self._safe_send_json({"type": "status", "state": "reconnecting"})
                 kickoff = self._reconnect_kickoff()
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(delay)
         finally:
             for task in (self._client_task, self._briefing_task):
                 if task is None:

@@ -559,4 +559,16 @@ check("fast path answers in ONE Gemini round and mirrors the reply into history"
 check("missing ack text still falls back to the normal second round",
       asyncio.run(_reason_falls_back_without_ack_text()))
 
+# Reconnect resilience (real reported bug: a call hit "The voice service hit
+# a technical problem" after exhausting reconnects; no code-level regression
+# was found on investigation, but reconnect budget/backoff was hardened
+# regardless -- see the comment above _MAX_RECONNECTS in dispatcher_live.py).
+from severity_engine.dispatcher_live import _MAX_RECONNECTS, _RECONNECT_BACKOFF_S
+
+check("at least 4 reconnect attempts before giving up",
+      _MAX_RECONNECTS >= 4)
+_delays = [_RECONNECT_BACKOFF_S[min(i, len(_RECONNECT_BACKOFF_S) - 1)] for i in range(_MAX_RECONNECTS)]
+check("reconnect backoff strictly increases then holds (never flat from the first retry)",
+      _delays == sorted(_delays) and _delays[0] < _delays[-1])
+
 print("\nALL TESTS PASSED")
