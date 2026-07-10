@@ -29,6 +29,19 @@ _STOP = {
     "the", "a", "an", "of", "on", "to", "in", "by", "or", "and", "with", "at", "for",
     "collision", "crash", "strike", "accident", "situations", "vehicle", "road", "expressway",
     "highway", "vs", "from", "into", "off", "no", "of.", "-", "high", "speed", "high-speed",
+    # Symptom/consequence words describe the AFTERMATH of any incident, never
+    # which incident it was -- every incident type can have injured people, so
+    # they carry zero discriminative signal for TYPE and must not score.
+    # Real reported bug: a caller answering "चार लोग घायल हैं" (four people
+    # injured -- घायल/चोट/जख्मी all glossary-map to "injured") got the
+    # incident classified as "Injured Wild Animal on Road – Active Rescue" at
+    # confidence 0.87, because "injured" was the only token and that record is
+    # the only subType containing it. Casualty COUNTS are extracted separately
+    # (local_extract / the dispatcher's update_form_field) and drive severity,
+    # not type. All 5 records containing these words keep strong distinctive
+    # tokens without them (wild/animal/rescue, mass/event, school/bus/child,
+    # fog/visibility) -- verified against the corpus when adding this.
+    "injured", "injury", "injuries", "casualty", "casualties", "hurt", "wounded",
 }
 _word_re = re.compile(r"[a-z0-9]+")
 

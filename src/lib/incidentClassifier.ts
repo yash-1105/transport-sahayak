@@ -22,6 +22,10 @@ const STOP = new Set([
   "the", "a", "an", "of", "on", "to", "in", "by", "or", "and", "with", "at", "for",
   "collision", "crash", "strike", "accident", "situations", "vehicle", "road", "expressway",
   "highway", "vs", "from", "into", "off", "no", "high", "speed",
+  // Symptom/consequence words never discriminate incident TYPE (any incident
+  // can have injured people) — mirrored from classifier.py's _STOP; see the
+  // comment there for the real misclassification this fixed.
+  "injured", "injury", "injuries", "casualty", "casualties", "hurt", "wounded",
 ]);
 
 const HINDI_STOP = new Set([

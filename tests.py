@@ -405,6 +405,48 @@ check("transcript backstop sets incident type + implied vehicle count without an
       asyncio.run(_backstop_sets_type_and_vehicles()))
 check("transcript backstop stays silent on non-incident chatter",
       asyncio.run(_backstop_ignores_gibberish()))
+
+# Symptom words must never determine incident TYPE (real reported bug: the
+# caller answering "चार लोग घायल हैं" -- four people injured -- got the
+# incident classified as "Injured Wild Animal on Road – Active Rescue" at
+# confidence 0.87, because घायल→"injured" was the only scoring token and that
+# record is the only subType containing it; symptoms describe the aftermath
+# of ANY incident, so they carry zero type signal and are now stopwords).
+for injury_only in ["चार लोग घायल हैं", "4 people injured", "हताहत हुए हैं"]:
+    r = classifier.guess(injury_only)
+    check(f"injury-only answer {injury_only!r} never classifies confidently",
+          r.get("subType") is None or r.get("lowConfidence") is True)
+# ...but the records that contained symptom words are still findable by
+# their real distinguishing words.
+check("wild-animal rescue still classifies from a real animal description",
+      classifier.guess("a wild animal is injured on the road and needs rescue")["subType"]
+      == "Injured Wild Animal on Road – Active Rescue")
+check("dense fog still classifies",
+      classifier.guess("dense fog zero visibility on the highway")["subType"]
+      == "Dense Fog / Zero Visibility")
+
+async def _symptom_only_tool_call_applies_nothing():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    result = await s._tool_search_incident_type("चार लोग घायल हैं")
+    return s.state.sub_type is None and result.get("lowConfidence") is True
+
+async def _backstop_recovers_type_from_full_transcript_after_injury_answer():
+    # The exact reported sequence: injury answer classifies nothing, but the
+    # full transcript (which contains the actual collision description) does.
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    await s._tool_search_incident_type("चार लोग घायल हैं")
+    s.state.caller_transcript = " मेरी कार दूसरी कार से टकरा गई है। हाँ, चार लोग घायल हैं।"
+    await s._apply_local_signals_from_transcript()
+    return s.state.sub_type == "Car vs. Car Collision" and s.state.vehicles_involved == 2
+
+check("search_incident_type on a symptom-only answer applies no type",
+      asyncio.run(_symptom_only_tool_call_applies_nothing()))
+check("backstop recovers the correct type from the full transcript after an injury answer",
+      asyncio.run(_backstop_recovers_type_from_full_transcript_after_injury_answer()))
 check("transcript backstop never overrides an already-recorded incident type",
       asyncio.run(_backstop_never_overrides_existing_type()))
 check("implied vehicle count never overwrites the caller's own number",
