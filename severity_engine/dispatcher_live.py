@@ -51,7 +51,7 @@ from google.genai import types
 from google.oauth2 import service_account
 
 from . import classifier, local_extract
-from .dispatch_briefing import build_briefing_instruction
+from .dispatch_briefing import build_briefing_segments
 from .google_credentials import load_service_account_info
 
 logger = logging.getLogger("dispatcher_live")
@@ -587,13 +587,23 @@ class DispatcherSession:
         # Post-submission closing briefing (see dispatch_briefing.py): the
         # browser's dispatch_update payload (the SAME responder ETAs the
         # dashboard displays), the event that fires when it arrives, and the
-        # bookkeeping that lets the pump recognize when the final briefing
-        # turn has been spoken so the call can end cleanly.
+        # bookkeeping that lets the pump drive the SEGMENTED delivery (see
+        # build_briefing_segments -- real reported bug: a single giant turn
+        # covering all responders + SOPs + closing sometimes stopped partway
+        # through, e.g. right after the ambulance ETA, with everything after
+        # it never spoken). _briefing_segments is None until _brief_and_close
+        # sends the first segment; once set, it holds the REMAINING segments
+        # still to be sent -- the pump (the sole reader of this Gemini Live
+        # session, per the single-reader rule the Hindi SaarasStream also
+        # follows) sends each next segment itself as the previous one's
+        # turn_complete arrives, so the call only ends once the list is
+        # empty. _briefing_segment_started_at lets the stall failsafe measure
+        # time since the CURRENT segment began, not the whole briefing.
         self._dispatch_info: Optional[dict] = None
         self._dispatch_ready: "asyncio.Event" = asyncio.Event()
         self._briefing_task: Optional["asyncio.Task"] = None
-        self._briefing_sent = False
-        self._spoke_after_briefing = False
+        self._briefing_segments: Optional[list] = None
+        self._briefing_segment_started_at: float = 0.0
         self._call_over = False
 
     async def _safe_send_json(self, payload: dict) -> None:
@@ -1264,42 +1274,62 @@ class DispatcherSession:
         except Exception:
             logger.debug("Client->Gemini pump ended", exc_info=True)
 
+    async def _send_next_briefing_segment(self, live_session) -> None:
+        """Send the next queued closing-briefing segment (see
+        build_briefing_segments), or end the call if none remain. Called by
+        _brief_and_close for the FIRST segment, and by the pump itself
+        (_pump_gemini_to_client, the session's sole reader) for every segment
+        after that, as each one's own turn_complete arrives -- keeping a
+        single sender/reader of this live_session throughout, same
+        single-reader discipline the Hindi SaarasStream also follows."""
+        if not self._briefing_segments:
+            self._call_over = True
+            await self._safe_send_json({"type": "call_complete"})
+            return
+        segment = self._briefing_segments.pop(0)
+        self._briefing_segment_started_at = time.monotonic()
+        try:
+            await live_session.send_client_content(
+                turns=types.Content(role="user", parts=[types.Part(text=segment)]),
+                turn_complete=True,
+            )
+        except Exception:
+            logger.exception("Could not send a closing-briefing segment -- ending the call")
+            self._call_over = True
+            await self._safe_send_json({"type": "call_complete"})
+
     async def _brief_and_close(self, live_session) -> None:
         """Runs once, spawned at the first turn_complete after submit_incident
         succeeds: wait for the browser's dispatch_update (the SAME responder
-        ETAs the dashboard is already displaying), then hand the model one
-        final synthetic turn — responder briefing, SOP safety guidance, and
-        closing script (see dispatch_briefing.py). Every stage has a failsafe
-        so the call always closes, even if the dashboard data never arrives
-        or the session wedges (the watchdog is parked after submission)."""
+        ETAs the dashboard is already displaying), then hand the model the
+        closing sequence as several SHORT sequential turns rather than one
+        long one (see build_briefing_segments — real reported bug: a single
+        giant turn covering all responders + SOPs + closing sometimes stopped
+        partway through, e.g. right after the ambulance ETA, with everything
+        after it never spoken; shorter turns are structurally less likely to
+        hit whatever caused that, and if one segment IS ever cut short, the
+        remaining segments still get their own independent chance). Every
+        stage has a failsafe so the call always closes, even if the dashboard
+        data never arrives or the session wedges (the watchdog is parked
+        after submission)."""
         try:
             await asyncio.wait_for(self._dispatch_ready.wait(), timeout=_DISPATCH_WAIT_S)
         except asyncio.TimeoutError:
             logger.warning("No dispatch_update within %.0fs -- closing without responder ETAs",
                            _DISPATCH_WAIT_S)
-        instruction = build_briefing_instruction(self.state, self._dispatch_info, self.state.language)
-        briefing_sent_at = time.monotonic()
-        try:
-            self._briefing_sent = True
-            await live_session.send_client_content(
-                turns=types.Content(role="user", parts=[types.Part(text=instruction)]),
-                turn_complete=True,
-            )
-        except Exception:
-            logger.exception("Could not send the closing briefing -- ending the call")
-            self._call_over = True
-            await self._safe_send_json({"type": "call_complete"})
-            return
+        self._briefing_segments = build_briefing_segments(self.state, self._dispatch_info, self.state.language)
+        await self._send_next_briefing_segment(live_session)
         # Poll for genuine STALLING rather than sleeping once for a flat total
         # budget (see _BRIEFING_STALL_TIMEOUT_S comment for why) -- as long as
         # _model_last_spoke (updated on every audio chunk in
-        # _pump_gemini_to_client, including throughout this reply) keeps
-        # advancing, keep waiting no matter how long the reply naturally
-        # runs; only force-end after real silence since either the briefing
-        # was sent or the last chunk played, whichever is more recent.
+        # _pump_gemini_to_client, including throughout every segment) keeps
+        # advancing, keep waiting no matter how long any given segment or the
+        # whole sequence naturally runs; only force-end after real silence
+        # since the CURRENT segment was sent (_briefing_segment_started_at,
+        # refreshed by the pump each time it sends the next one).
         while not self._call_over:
             await asyncio.sleep(1.0)
-            since_activity = time.monotonic() - max(self._model_last_spoke, briefing_sent_at)
+            since_activity = time.monotonic() - max(self._model_last_spoke, self._briefing_segment_started_at)
             if since_activity > _BRIEFING_STALL_TIMEOUT_S:
                 logger.warning("No briefing audio for %.0fs -- forcing call end", since_activity)
                 self._call_over = True
@@ -1339,13 +1369,6 @@ class DispatcherSession:
                         for part in sc.model_turn.parts:
                             if part.inline_data and part.inline_data.data:
                                 self._model_last_spoke = time.monotonic()
-                                if self._briefing_sent:
-                                    # Audio produced after the closing briefing
-                                    # was injected — the turn_complete that
-                                    # follows it genuinely ends the call (and
-                                    # not a stray turn_complete from a reply
-                                    # that was already in flight).
-                                    self._spoke_after_briefing = True
                                 await self._safe_send_json({"type": "status", "state": "speaking"})
                                 try:
                                     await self.websocket.send_bytes(part.inline_data.data)
@@ -1359,11 +1382,6 @@ class DispatcherSession:
                         # watchdog if the caller is waiting on one.
                         await self._safe_send_json({"type": "turn_complete"})
                         if self.state.submitted:
-                            if self._briefing_sent and self._spoke_after_briefing:
-                                # Closing briefing delivered — the call is over.
-                                self._call_over = True
-                                await self._safe_send_json({"type": "call_complete"})
-                                return
                             if self._briefing_task is None:
                                 # First turn_complete after submission (the
                                 # "stay on the line" acknowledgment): start
@@ -1371,6 +1389,17 @@ class DispatcherSession:
                                 self._briefing_task = asyncio.create_task(
                                     self._brief_and_close(live_session)
                                 )
+                            elif self._briefing_segments is not None:
+                                # A closing-briefing SEGMENT just finished --
+                                # send the next one (or end the call if that
+                                # was the last). This pump is the session's
+                                # sole reader, so it -- not the concurrently-
+                                # running _brief_and_close task -- is what
+                                # must drive the sequence forward; see
+                                # _send_next_briefing_segment.
+                                await self._send_next_briefing_segment(live_session)
+                                if self._call_over:
+                                    return
                             # Do NOT reopen the mic here (real reported bug:
                             # the agent kept speaking automatically, repeating
                             # itself, without waiting for a real reply).

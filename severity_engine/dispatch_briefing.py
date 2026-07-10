@@ -246,7 +246,125 @@ _CLOSING_HI = [
 ]
 
 
-# ── The final synthetic turn ───────────────────────────────────────────────────
+# ── Segmented delivery (English / Gemini Live only) ────────────────────────────
+# Real reported bug: the English agent spoke the ambulance ETA and then just
+# stopped -- never reaching fire, hospital, police, SOPs, or the closing
+# script. The single combined instruction below worked reliably in isolated
+# testing (a fresh session, short history, 6/6 live runs completed the full
+# ~40s monologue), but a REAL call reaches this point only after a full
+# multi-turn conversation's worth of accumulated context, which isolated
+# testing can't perfectly replicate -- and asking Gemini Live's native-audio
+# model for one continuous ~40+ second turn is inherently more fragile than
+# asking for several shorter ones, regardless of the exact mechanism. Hindi
+# has no equivalent risk (build_briefing_instruction, used unchanged below):
+# its text is fully generated up front by plain generate_content, then handed
+# to Bulbul TTS as one already-complete string with its own internal chunked
+# streaming -- there is no live per-turn audio-generation step that could
+# stop partway. English has no such separation (Gemini Live generates audio
+# directly, turn by turn), so the safety measure here is to keep every
+# individual turn short: split the SAME content into 3 sequential turns along
+# the natural 1/2/3 boundaries already present in the single-instruction
+# design (responders -> SOPs -> closing), sent back-to-back by the caller
+# (dispatcher_live._brief_and_close / _pump_gemini_to_client), each with its
+# own stall failsafe. If one segment is ever cut short, the remaining
+# segments still get their own independent chance to be delivered in full --
+# strictly more robust than a single giant turn where any interruption loses
+# everything after it.
+def build_briefing_segments(state, services: Optional[dict], language_code: str) -> list:
+    """Same content as build_briefing_instruction, as 3 separate synthetic
+    turns instead of one. Each is self-contained (states it may not be the
+    final turn) so the model doesn't try to also produce the other segments'
+    content or say goodbye early."""
+    hindi = language_code == "hi-IN"
+    facts = _responder_facts_hi(services) if hindi else _responder_facts_en(services)
+    sops = select_sops(state)
+    sop_lines = [s["hi"] if hindi else s["en"] for s in sops]
+    closing = _CLOSING_HI if hindi else _CLOSING_EN
+
+    lang_note = (
+        "Speak in simple, natural spoken Hindi as before (the material below is already in Hindi — "
+        "deliver it faithfully; any facility or hospital name written in English letters must be "
+        "spoken with natural Hindi pronunciation, and numbers are already written out as words). "
+        if hindi
+        else "Speak in natural, warm English as before. "
+    )
+    def preface(n: int, final: bool) -> str:
+        position = f"turn {n} of 3 — the FINAL turn" if final else f"turn {n} of 3"
+        return (
+            "(SYSTEM UPDATE — not the caller speaking. The incident report was submitted successfully "
+            "and the response dashboard has now matched the responding services. You are delivering the "
+            "closing of this call in a FEW SHORT BACK-TO-BACK TURNS instead of one long one — this is "
+            f"{position}. " + lang_note
+        )
+    # NOTE on "MUST mention all N" / "do not summarize or shorten": added
+    # after live-testing the segments above -- confirmed on real Gemini Live
+    # (2026-07) that without this, the model reliably UNDER-delivered each
+    # segment (e.g. mentioning ambulance+fire but silently dropping towing,
+    # hospital, and police from the SAME facts list every single run; dropping
+    # the "call back if you don't hear from us" closing line most runs). Root
+    # cause: this project's base system prompt (dispatcher_live._system_
+    # instruction) elsewhere trains the model hard to keep every reply to 1-2
+    # short sentences for natural conversation -- exactly the right instinct
+    # for the rest of the call, but it was winning out over "say everything
+    # in this list" once framed as "turn N of 3" (a short, lighter-feeling
+    # conversational beat) instead of "the one shot to say it all". This is
+    # NOT a repeat of the earlier premature-cutoff bug (that was the pump
+    # forcing the call to end mid-generation; this is the model choosing, on
+    # its own, to speak a shorter reply than asked) -- so the fix is a
+    # stronger instruction, not a timing change. Re-verify live if this list
+    # is ever restructured.
+    common_rules = (
+        "Speak naturally and conversationally, like a caring human operator, never a robot reading a "
+        "checklist — BUT this specific turn is an exception to your usual habit of keeping replies to "
+        "1-2 short sentences: this turn must be as long as it needs to be to include EVERY item listed "
+        "below, by name, none skipped, none summarized away, none merged into a vague generic phrase. "
+        "Do not ask the caller any question, do not call any tool, and do not say goodbye yet unless "
+        "this is explicitly the final turn (see below) — more information is coming right after this. "
+        "After speaking, say nothing further and wait.)"
+    )
+
+    if facts:
+        facts_block = (
+            f"Announce ALL {len(facts)} of these responding services to the caller now — every single "
+            f"one below, by name, in one continuous reply; do not stop after the first one or two and do "
+            f"not silently drop any of the rest. Use these exact names and numbers, word for word — NEVER "
+            "invent, round differently, or change any time or name. Every time is an estimate and must "
+            "sound like one (\"estimated\", \"approximately\" / \"अनुमानित\", \"लगभग\"):\n"
+            + "\n".join(f"   - {f}" for f in facts)
+            + f"\n\nBefore moving on, double check silently: did you name all {len(facts)} of the "
+            "services above? If not, go back and include the ones you missed."
+        )
+    else:
+        facts_block = (
+            "No estimated times are available right now. Simply tell the caller the emergency services "
+            "have been notified and are being arranged. Do NOT invent any arrival time, facility name, "
+            "or number."
+        )
+    turn1 = preface(1, final=False) + "\n\n" + facts_block + "\n\n" + common_rules
+
+    turn2 = (
+        preface(2, final=False)
+        + f"\n\nGive the caller ALL {len(sop_lines)} of these safety instructions while help is on the "
+        "way — exactly these, briefly and clearly, in this order, none skipped:\n"
+        + "\n".join(f"   - {line}" for line in sop_lines)
+        + "\n\n" + common_rules
+    )
+
+    turn3 = (
+        preface(3, final=True)
+        + f"\n\nThis IS the final turn: finish the call with ALL {len(closing)} of these points, in this "
+        "exact order, none skipped or merged together — this includes the instruction about calling "
+        "back if the caller does NOT receive the follow-up call, which is easy to accidentally leave "
+        "out but must be said:\n"
+        + "\n".join(f"   - {line}" for line in closing)
+        + "\n\nDo not ask the caller any further question, do not call any tool, and after this reply "
+        "say nothing more — the call ends here.)"
+    )
+    return [turn1, turn2, turn3]
+
+
+# ── The single combined turn (Hindi only — see build_briefing_segments above
+# for why English uses the segmented version instead) ──────────────────────────
 
 def build_briefing_instruction(state, services: Optional[dict], language_code: str) -> str:
     """One synthetic model turn (same parenthesized-system-note convention as
