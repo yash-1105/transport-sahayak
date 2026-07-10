@@ -702,6 +702,25 @@ class DispatcherSession:
             await self._safe_send_json({
                 "type": "form_update", "field": "casualties", "value": self.state.casualties,
             })
+        # Incident-type backstop, same rule-first pattern as the flag/count
+        # backstops above (real reported bug this closes: the caller described
+        # a car-on-car collision, the model recorded the DESCRIPTION but never
+        # called search_incident_type, then asked "what kind of incident was
+        # it?" -- flags and counts were protected against exactly this
+        # forgetting, incident type was not). Runs the caller's own
+        # accumulated words through the SAME deterministic classification
+        # path the search tool uses (vehicle-pair + same-type-collision
+        # overrides + keyword classifier) and applies only a CONFIDENT match,
+        # only while no type has been recorded yet -- the model can still
+        # correct it later via search_incident_categories + update_form_field.
+        if self.state.sub_type is None:
+            cleaned = _strip_transcript_artifacts(self.state.caller_transcript)
+            if cleaned:
+                result = self._classify_incident_text(cleaned)
+                if result.get("subType") and not result.get("lowConfidence"):
+                    logger.info("Incident-type backstop applied from transcript: %s",
+                                result["subType"])
+                await self._apply_classification(result)
 
     # ── Tools ──────────────────────────────────────────────────────────────
 
@@ -720,7 +739,11 @@ class DispatcherSession:
         })
         return True
 
-    async def _tool_search_incident_type(self, description: str = "") -> dict:
+    def _classify_incident_text(self, description: str) -> dict:
+        """The deterministic classification path shared by the
+        search_incident_type tool AND the transcript backstop in
+        _apply_local_signals_from_transcript: keyword/TF-IDF classifier,
+        upgraded by the vehicle-pair and same-type-collision overrides."""
         result = classifier.guess(description or "")
         logger.info("Incident search: %r -> %s (conf %s)",
                     (description or "")[:200], result.get("subType"), result.get("confidence"))
@@ -732,13 +755,23 @@ class DispatcherSession:
         mentioned = _mentioned_vehicle_types(description)
         if len(mentioned) == 2:
             pair_subtype = _find_vehicle_pair_subtype(mentioned)
-            if pair_subtype and pair_subtype != result.get("subType"):
-                logger.info("Vehicle-pair override: %s -> %s (mentioned: %s)",
-                            result.get("subType"), pair_subtype, sorted(mentioned))
+            if pair_subtype:
+                if pair_subtype != result.get("subType"):
+                    logger.info("Vehicle-pair override: %s -> %s (mentioned: %s)",
+                                result.get("subType"), pair_subtype, sorted(mentioned))
                 result["subType"] = pair_subtype
                 result["category"] = classifier._CATEGORY_MAP.get(pair_subtype, "Other")
                 result["confidence"] = 0.9
                 result["lowConfidence"] = False
+                # The caller named exactly two vehicles -- the count is known,
+                # don't make the agent ask "how many vehicles?" right after
+                # the caller just said "my car hit a truck". Minimum bound;
+                # update_form_field can still overwrite with a caller
+                # correction. Set whenever the deterministic evidence holds,
+                # NOT only when the subtype needed changing -- the classifier
+                # often already picks the right record on its own, and the
+                # implied count is just as known in that case.
+                result["impliedVehicleCount"] = 2
         elif len(mentioned) == 1:
             # Same-vehicle-type-twice override (see _find_same_type_subtype's
             # comment): "my car collided with another car" names "car" TWICE
@@ -749,13 +782,37 @@ class DispatcherSession:
             counts = _vehicle_type_mention_counts(description)
             if counts.get(only_type, 0) >= 2 and _mentions_collision(description):
                 same_subtype = _find_same_type_subtype(only_type)
-                if same_subtype and same_subtype != result.get("subType"):
-                    logger.info("Same-type-collision override: %s -> %s (type: %s, mentions: %d)",
-                                result.get("subType"), same_subtype, only_type, counts[only_type])
+                if same_subtype:
+                    if same_subtype != result.get("subType"):
+                        logger.info("Same-type-collision override: %s -> %s (type: %s, mentions: %d)",
+                                    result.get("subType"), same_subtype, only_type, counts[only_type])
                     result["subType"] = same_subtype
                     result["category"] = classifier._CATEGORY_MAP.get(same_subtype, "Other")
                     result["confidence"] = 0.9
                     result["lowConfidence"] = False
+                    # Same reasoning as the pair override: "car collided with
+                    # another car" names two vehicles.
+                    result["impliedVehicleCount"] = 2
+        return result
+
+    async def _apply_classification(self, result: dict) -> None:
+        """Apply a confident _classify_incident_text result to state: the
+        incident type itself, plus the deterministically-implied vehicle
+        count when one of the vehicle overrides established it (only if the
+        count isn't already known -- never overwrites the caller's own
+        number)."""
+        sub_type = result.get("subType")
+        if sub_type and not result.get("lowConfidence"):
+            await self._apply_incident_type(sub_type, result.get("category"))
+        implied = result.get("impliedVehicleCount")
+        if implied and self.state.vehicles_involved is None:
+            self.state.vehicles_involved = int(implied)
+            await self._safe_send_json({
+                "type": "form_update", "field": "vehiclesInvolved", "value": int(implied),
+            })
+
+    async def _tool_search_incident_type(self, description: str = "") -> dict:
+        result = self._classify_incident_text(description)
         # Hindi conversations were unreliable at the model completing a
         # SEPARATE update_form_field(field="incidentType", ...) call right
         # after this search -- confirmed live: the model would sometimes move
@@ -766,9 +823,7 @@ class DispatcherSession:
         # second precise round-trip. The model can still correct this later
         # via search_incident_categories + update_form_field if the caller
         # says this match is wrong.
-        sub_type = result.get("subType")
-        if sub_type and not result.get("lowConfidence"):
-            await self._apply_incident_type(sub_type, result.get("category"))
+        await self._apply_classification(result)
         result.update(self._state_block())
         return result
 

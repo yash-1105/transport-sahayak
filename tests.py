@@ -358,4 +358,163 @@ async def _mic_stays_closed_after_submission_ack_turn():
 check("mic does not reopen (no 'listening' status) after the post-submission acknowledgment turn",
       asyncio.run(_mic_stays_closed_after_submission_ack_turn()))
 
+# ── Incident-type transcript backstop + implied vehicle count ─────────────────
+# Real reported bug: the caller described a car-on-car collision, the model
+# recorded the DESCRIPTION but never called search_incident_type, then asked
+# "what kind of incident was it?". Flags and counts already had a rule-first
+# transcript backstop for exactly this model-forgetting; incident type now
+# has the same one. And when the vehicle overrides fire, the caller has by
+# definition named two vehicles -- so the count is recorded too, instead of
+# the agent asking "how many vehicles?" right after being told.
+
+async def _backstop_sets_type_and_vehicles():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    s.state.caller_transcript = " मेरी कार दूसरी कार से टकरा गई है।"
+    await s._apply_local_signals_from_transcript()
+    return s.state.sub_type == "Car vs. Car Collision" and s.state.vehicles_involved == 2
+
+async def _backstop_ignores_gibberish():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    s.state.caller_transcript = " हैलो, सुनिए"
+    await s._apply_local_signals_from_transcript()
+    return s.state.sub_type is None
+
+async def _backstop_never_overrides_existing_type():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    s.state.sub_type = "Head-On Collision"
+    s.state.category = "Vehicle Collisions"
+    s.state.caller_transcript = " मेरी कार दूसरी कार से टकरा गई है।"
+    await s._apply_local_signals_from_transcript()
+    return s.state.sub_type == "Head-On Collision"
+
+async def _implied_count_never_overwrites_caller_number():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    s.state.vehicles_involved = 3
+    await s._tool_search_incident_type("कार की ट्रक से टक्कर हो गई")
+    return s.state.vehicles_involved == 3
+
+check("transcript backstop sets incident type + implied vehicle count without any tool call",
+      asyncio.run(_backstop_sets_type_and_vehicles()))
+check("transcript backstop stays silent on non-incident chatter",
+      asyncio.run(_backstop_ignores_gibberish()))
+check("transcript backstop never overrides an already-recorded incident type",
+      asyncio.run(_backstop_never_overrides_existing_type()))
+check("implied vehicle count never overwrites the caller's own number",
+      asyncio.run(_implied_count_never_overwrites_caller_number()))
+
+# ── Hindi single-round fast path ──────────────────────────────────────────────
+# Latency: a tool-using Hindi turn used to cost TWO sequential Gemini round
+# trips; the fast path composes "model's acknowledgment + code-appended
+# canonical question" and skips the second one. The question is appended by
+# CODE from the deterministic next_question, so it structurally cannot wander
+# off-list -- but only when every guard holds; anything unprovable falls back
+# to the second round (see _compose_single_round_reply).
+from severity_engine.dispatcher_hindi import (
+    _CANONICAL_QUESTIONS,
+    HindiDispatcherSession,
+)
+from severity_engine.dispatcher_live import (
+    DEFAULT_REQUIRED_FIELDS,
+    REQUIRED_FIELDS,
+)
+
+_all_hints = [item for fields in REQUIRED_FIELDS.values() for item in fields] + DEFAULT_REQUIRED_FIELDS
+_uncovered = [
+    item["hint"] for item in _all_hints
+    if item["hint"] not in _CANONICAL_QUESTIONS
+]
+check(f"every REQUIRED_FIELDS hint has a canonical Hindi question (uncovered: {_uncovered})",
+      not _uncovered)
+
+def _fresh_hindi_session():
+    s = HindiDispatcherSession.__new__(HindiDispatcherSession)
+    HindiDispatcherSession.__init__(s, _FakeWS())
+    s.state.sub_type = "Car vs. Car Collision"
+    s.state.category = "Vehicle Collisions"
+    s.state.description = "Car collided with another car"
+    s.state.vehicles_involved = 2
+    s.state.location = {"lat": 28.5, "lng": 77.3, "label": "Noida"}
+    return s
+
+s = _fresh_hindi_session()
+composed = s._compose_single_round_reply("अच्छा... दो लोग घायल हैं", {"update_form_field"})
+check("fast path composes ack + canonical question with punctuation added",
+      composed == "अच्छा... दो लोग घायल हैं। क्या किसी को चोट लगी है?")
+check("fast path refuses when the ack contains its own question",
+      s._compose_single_round_reply("ठीक है। क्या कोई फँसा है?", {"update_form_field"}) is None)
+check("fast path refuses for tools whose results the model must read (submit/browse/location)",
+      s._compose_single_round_reply("ठीक है।", {"update_form_field", "submit_incident"}) is None)
+check("fast path refuses with no tool calls at all",
+      s._compose_single_round_reply("ठीक है।", set()) is None)
+s_done = _fresh_hindi_session()
+s_done.state.casualties = 0
+s_done.state.flags_discussed = {"Trapped", "Fire"}
+check("fast path refuses at the summarize-and-confirm stage (nothing missing)",
+      s_done._compose_single_round_reply("ठीक है।", {"update_form_field"}) is None)
+
+class _FakeGeminiClient:
+    """Minimal stand-in for the google-genai client: returns canned responses
+    and counts calls, so the fast path's one-round-vs-two behavior is
+    testable offline."""
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = 0
+        outer = self
+        class _Models:
+            async def generate_content(self, model=None, contents=None, config=None):
+                outer.calls += 1
+                return outer._responses.pop(0)
+        class _Aio:
+            models = _Models()
+        self.aio = _Aio()
+
+def _model_response(parts):
+    from google.genai import types as gtypes
+    return SimpleNamespace(candidates=[SimpleNamespace(content=gtypes.Content(role="model", parts=parts))])
+
+async def _reason_uses_single_round():
+    from google.genai import types as gtypes
+    s = _fresh_hindi_session()
+    fake = _FakeGeminiClient([
+        _model_response([
+            gtypes.Part(text="अच्छा... दो लोग घायल हैं"),
+            gtypes.Part(function_call=gtypes.FunctionCall(
+                name="update_form_field", args={"field": "casualties", "number_value": 2})),
+        ]),
+    ])
+    reply = await s._reason(fake, "दो लोग घायल हैं")
+    last = s._history[-1]
+    return (
+        fake.calls == 1
+        and reply == "अच्छा... दो लोग घायल हैं। क्या कोई गाड़ी के अंदर फँसा हुआ है?"
+        and s.state.casualties == 2
+        and last.role == "model" and last.parts[0].text == reply
+    )
+
+async def _reason_falls_back_without_ack_text():
+    from google.genai import types as gtypes
+    s = _fresh_hindi_session()
+    fake = _FakeGeminiClient([
+        _model_response([  # round 0: tool call but NO ack text -> must do round 1
+            gtypes.Part(function_call=gtypes.FunctionCall(
+                name="update_form_field", args={"field": "casualties", "number_value": 2})),
+        ]),
+        _model_response([gtypes.Part(text="समझ गया... क्या कोई फँसा हुआ है?")]),
+    ])
+    reply = await s._reason(fake, "दो लोग घायल हैं")
+    return fake.calls == 2 and reply == "समझ गया... क्या कोई फँसा हुआ है?"
+
+check("fast path answers in ONE Gemini round and mirrors the reply into history",
+      asyncio.run(_reason_uses_single_round()))
+check("missing ack text still falls back to the normal second round",
+      asyncio.run(_reason_falls_back_without_ack_text()))
+
 print("\nALL TESTS PASSED")

@@ -293,11 +293,28 @@ class BulbulStream:
         self._ws = None
         self._ping_task: Optional[asyncio.Task] = None
         self._closed = False
+        # Guards concurrent connect attempts: the dispatcher pre-connects in
+        # parallel with Gemini reasoning (see dispatcher_hindi._agent_turn),
+        # and speak() may race it -- without the lock both would open a socket
+        # and one would leak.
+        self._connect_lock = asyncio.Lock()
 
     def _url(self) -> str:
         return _TTS_WS_URL + "?" + urllib.parse.urlencode(
             {"model": TTS_MODEL, "send_completion_event": "true"}
         )
+
+    async def ensure_open(self) -> None:
+        """Idempotent connect. Called lazily by speak(), and eagerly by the
+        dispatcher while Gemini is still reasoning, so the TLS+config
+        handshake overlaps thinking time instead of adding to time-to-first-
+        audio on the turn's critical path (matters on the first turn of a
+        call and after cancel_current() tore the socket down on a barge-in)."""
+        if self._closed:
+            raise SarvamTTSError("BulbulStream is closed")
+        async with self._connect_lock:
+            if self._ws is None:
+                await self._connect()
 
     async def _connect(self) -> None:
         self._ws = await _ws_connect(self._url())
@@ -338,8 +355,7 @@ class BulbulStream:
         last_error: Optional[Exception] = None
         for attempt in range(2):  # existing socket, then one fresh connection
             try:
-                if self._ws is None:
-                    await self._connect()
+                await self.ensure_open()
                 await self._ws.send(json.dumps({"type": "text", "data": {"text": text}}))
                 await self._ws.send(json.dumps({"type": "flush"}))
                 break
