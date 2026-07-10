@@ -661,4 +661,48 @@ _delays = [_RECONNECT_BACKOFF_S[min(i, len(_RECONNECT_BACKOFF_S) - 1)] for i in 
 check("reconnect backoff strictly increases then holds (never flat from the first retry)",
       _delays == sorted(_delays) and _delays[0] < _delays[-1])
 
+# WebSocket keepalive (real reported bug, persisting even after the 3-segment
+# split: the call would sometimes go silent mid-briefing with no error shown
+# at all -- not a spoken cutoff, a hard connection drop). Root cause: this
+# WebSocket had no application-level keepalive, and the post-submission phase
+# has genuinely idle stretches (waiting on dispatch_update, and between
+# briefing segments while Gemini generates the next one) that a proxy's idle-
+# connection timeout could close out from under the call -- which the
+# frontend then treats as a normal, silent call end once submitted=True (see
+# submittedRef in useVoiceDispatcher.ts). Fixed with a periodic lightweight
+# frame sent for the whole call. Shared by both dispatchers (Hindi's own
+# dispatch_update wait has the identical risk, even though only English was
+# reported so far).
+import logging as _logging2
+
+class _KeepaliveWS:
+    def __init__(self):
+        self.sent = []
+    async def send_json(self, payload):
+        self.sent.append(payload)
+
+async def _keepalive_fires_periodically_and_cancels_cleanly():
+    from severity_engine import dispatcher_live as dl
+    old = dl._KEEPALIVE_INTERVAL_S
+    dl._KEEPALIVE_INTERVAL_S = 0.2
+    _logging2.disable(_logging2.CRITICAL)
+    try:
+        s = DispatcherSession.__new__(DispatcherSession)
+        s.websocket = _KeepaliveWS()
+        task = asyncio.create_task(s._keepalive())
+        await asyncio.sleep(0.65)  # should fire at least twice
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        keepalives = [m for m in s.websocket.sent if m.get("type") == "keepalive"]
+        return len(keepalives) >= 2
+    finally:
+        dl._KEEPALIVE_INTERVAL_S = old
+        _logging2.disable(_logging2.NOTSET)
+
+check("keepalive task sends periodic frames and cancels cleanly (no hang, no exception)",
+      asyncio.run(_keepalive_fires_periodically_and_cancels_cleanly()))
+
 print("\nALL TESTS PASSED")

@@ -91,6 +91,31 @@ _GREETING_TIMEOUT_S = float(os.environ.get("GEMINI_GREETING_TIMEOUT_S", "15"))
 _MAX_RECONNECTS = int(os.environ.get("GEMINI_MAX_RECONNECTS", "4"))
 _RECONNECT_BACKOFF_S = (1.0, 2.0, 4.0, 8.0)
 
+# Real reported bug, persisting even after the 3-segment split fixed the
+# audio-generation-length risk: the call would still sometimes go silent
+# mid-briefing with no error shown at all -- not a spoken cutoff, a hard
+# connection drop. Root cause: this WebSocket had NO application-level
+# keepalive of any kind. The post-submission phase can legitimately have
+# multi-second stretches with zero bytes on the wire in either direction --
+# waiting on the browser's dispatch_update (up to DISPATCH_BRIEFING_WAIT_S),
+# and between each of the 3 briefing segments while Gemini generates the
+# next one's audio (nothing streams during that generation latency) --
+# and segmenting made this WORSE by turning one continuous audio stream
+# into 3, with 2 new gaps in between where the connection is briefly idle.
+# If Railway (or any proxy between it and the browser) has an idle-
+# connection timeout, a long enough silent gap gets the socket closed out
+# from under the call -- which the frontend's ws.onclose handler treats,
+# once submitted=True, as a normal call end (no reconnect, no error;
+# see submittedRef in useVoiceDispatcher.ts) -- i.e. exactly "the agent
+# just stops talking" with nothing on screen to explain why. Fixed with a
+# periodic lightweight JSON frame sent for the WHOLE call (not just
+# post-submission -- normal conversational pauses can be silent too), often
+# enough that no idle gap this call can ever produce gets close to a
+# plausible proxy timeout. The frontend already safely no-ops any
+# unrecognized event type (see the `default` case in handleServerEvent),
+# so this needed no frontend change to be effective.
+_KEEPALIVE_INTERVAL_S = float(os.environ.get("DISPATCHER_KEEPALIVE_INTERVAL_S", "10"))
+
 # ── Post-submission closing briefing (see dispatch_briefing.py) ───────────────
 # After submit_incident the browser dashboard runs its existing matching flow
 # and sends the SAME responder ETAs it displays back as one "dispatch_update"
@@ -578,6 +603,7 @@ class DispatcherSession:
         self._pending_location: dict[str, "asyncio.Future"] = {}
         self._live_session = None
         self._client_task: Optional["asyncio.Task"] = None
+        self._keepalive_task: Optional["asyncio.Task"] = None
         # Watchdog bookkeeping (see _watchdog): monotonic timestamps of the
         # last caller speech and last model activity in the CURRENT session.
         self._session_started: float = 0.0
@@ -1051,6 +1077,20 @@ class DispatcherSession:
             ),
         )
 
+    async def _keepalive(self) -> None:
+        """Sends a lightweight JSON frame every _KEEPALIVE_INTERVAL_S for the
+        whole call, so no idle stretch on this WebSocket (waiting on
+        dispatch_update, between briefing segments, or just a normal
+        conversational pause) can plausibly trip a proxy's idle-connection
+        timeout -- see _KEEPALIVE_INTERVAL_S comment for the real bug this
+        fixes. The frontend safely ignores this event type already."""
+        try:
+            while True:
+                await asyncio.sleep(_KEEPALIVE_INTERVAL_S)
+                await self._safe_send_json({"type": "keepalive"})
+        except asyncio.CancelledError:
+            pass
+
     async def run(self) -> None:
         client = _get_client()
         await self._safe_send_json({"type": "ready"})
@@ -1061,6 +1101,7 @@ class DispatcherSession:
         # WHOLE call, across Gemini session reconnects -- the browser-facing
         # socket never restarts just because the Gemini side had to.
         self._client_task = asyncio.create_task(self._pump_client_to_gemini())
+        self._keepalive_task = asyncio.create_task(self._keepalive())
         try:
             # Resolve GPS location BEFORE the model says anything, and hand
             # it directly to the kickoff turn as plain text, rather than
@@ -1105,7 +1146,7 @@ class DispatcherSession:
                 kickoff = self._reconnect_kickoff()
                 await asyncio.sleep(delay)
         finally:
-            for task in (self._client_task, self._briefing_task):
+            for task in (self._client_task, self._keepalive_task, self._briefing_task):
                 if task is None:
                     continue
                 task.cancel()

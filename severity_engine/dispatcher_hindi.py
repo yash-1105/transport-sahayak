@@ -329,6 +329,15 @@ class HindiDispatcherSession(DispatcherSession):
 
         pump_task = asyncio.create_task(self._pump_client())
         stt_feed_task = asyncio.create_task(self._feed_stt())
+        # Same infra-level risk as English (see _keepalive's comment in
+        # dispatcher_live.py): the up-to-30s wait for the browser's
+        # dispatch_update after submission is a silent stretch on this
+        # WebSocket with zero bytes in either direction, which a proxy idle-
+        # timeout could close out from under the call. Inherited unchanged
+        # from DispatcherSession -- keeps both languages' post-submission
+        # phase equally protected even though this was only reported on the
+        # English side so far.
+        keepalive_task = asyncio.create_task(self._keepalive())
         try:
             # Resolve GPS upfront, exactly like the Live path — the pump is
             # already running, so the browser's location_result can arrive.
@@ -362,7 +371,7 @@ class HindiDispatcherSession(DispatcherSession):
             if self.state.submitted and not self._ended.is_set():
                 await self._deliver_dispatch_briefing(gemini_client)
         finally:
-            for task in (pump_task, stt_feed_task):
+            for task in (pump_task, stt_feed_task, keepalive_task):
                 task.cancel()
                 try:
                     await task
