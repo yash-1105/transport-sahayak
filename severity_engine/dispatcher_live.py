@@ -79,11 +79,20 @@ _DEFAULT_LANGUAGE = "en-IN"
 # tone (calm, warm, serious, NEVER upbeat/chipper -- see the system
 # instruction's TONE section) -- ruled out Puck/Fenrir (explicitly
 # upbeat/excitable) and Kore/Orus (firm/commanding rather than calm-warm).
-# english_briefing.py's ENGLISH_TTS_VOICE_NAME defaults to the
-# identically-named `en-IN-Chirp3-HD-Charon` specifically because Chirp 3
-# HD and Gemini Live's native-audio voices are the SAME underlying named
-# voice models -- using the same name on both sides is the closest
-# achievable cross-engine match, not just a same-gender guess.
+# This pin is a DIFFERENT API surface from english_briefing.py's Google
+# Cloud TTS voice (below) and is unaffected by that module's own voice
+# availability -- confirmed live: a real call completed its conversation
+# successfully with this pin in place. english_briefing.py's
+# ENGLISH_TTS_VOICE_NAME was ORIGINALLY also set to the identically-named
+# `en-IN-Chirp3-HD-Charon` (Chirp 3 HD and Gemini Live's native-audio
+# voices are the same underlying named voice models, so same-name would
+# have been the closest achievable cross-engine match) -- but that broke
+# the closing briefing entirely (silent, no audio) because Chirp3-HD's
+# availability was never independently verified live for this project and
+# turned out not to be enabled. Reverted to a verified-available Neural2
+# voice there; see that module's own comment for the current default and
+# why. Do not re-introduce an unverified voice ID as either module's
+# DEFAULT without confirming live availability first.
 _ENGLISH_VOICE_NAME = os.environ.get("GEMINI_LIVE_VOICE_NAME", "Charon")
 
 _LOCATION_TIMEOUT_S = 8.0

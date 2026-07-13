@@ -61,20 +61,36 @@ _FLASH_MAX_OUTPUT_TOKENS = int(os.environ.get("ENGLISH_BRIEFING_FLASH_MAX_TOKENS
 _TTS_VOICE_LANGUAGE = os.environ.get("ENGLISH_TTS_LANGUAGE_CODE", "en-IN")
 # Voice matching (real user request): the live conversation (Gemini Live,
 # dispatcher_live.py) and this closing briefing used to sound like two
-# different people. Gemini Live is now explicitly pinned to the
-# native-audio voice "Charon" (see dispatcher_live.py's _ENGLISH_VOICE_NAME
-# comment for the full reasoning) instead of an unset, undocumented, can-
-# change-anytime default. `en-IN-Chirp3-HD-Charon` is the closest achievable
-# match FOR THIS SPECIFIC PROJECT: Chirp 3 HD and Gemini Live's native-audio
-# voices are the SAME underlying named voice models, so using the identical
-# name on both sides matches gender and character, not just a same-gender
-# guess across two unrelated voice catalogs. (The previous default,
-# `en-IN-Neural2-D`, was FEMALE -- confirmed a gender mismatch on top of not
-# being voice-matched to Gemini Live at all.) If this project's Google Cloud
-# console does NOT have Chirp3-HD enabled, fall back to a Neural2 voice of
-# the correct gender (`en-IN-Neural2-B` or `-C`, both MALE) rather than
-# reverting to `-D`.
-_TTS_VOICE_NAME = os.environ.get("ENGLISH_TTS_VOICE_NAME", "en-IN-Chirp3-HD-Charon")
+# different people. Gemini Live is pinned to the native-audio voice "Charon"
+# (see dispatcher_live.py's _ENGLISH_VOICE_NAME comment) -- that pin is a
+# DIFFERENT API surface (Gemini Live) and is unaffected by anything below.
+#
+# For the TTS side, `en-IN-Chirp3-HD-Charon` (the identically-named voice in
+# Google Cloud TTS's Chirp3-HD family -- the closest achievable cross-engine
+# match, same underlying named voice model as Gemini Live's) was tried as
+# the default here FIRST, and was a real reported bug: it made the entire
+# closing briefing go silent (no audio played at all) on this project.
+# Root cause: Chirp3-HD is a newer/preview voice tier that isn't guaranteed
+# enabled for every Google Cloud project, and this project's own research
+# explicitly flagged the voice's availability as "not independently
+# verified... confirm before shipping" -- it wasn't confirmed live before
+# being made the default, and it failed. synthesize_speech's own error
+# handling worked correctly (falls back to the tts_text on-screen-text
+# event rather than crashing), but from the caller's perspective "no audio
+# played" is exactly the symptom whether the code is broken or the voice
+# is simply unavailable -- so an unverified voice ID must never be the
+# DEFAULT for a feature this central.
+#
+# Reverted to `en-IN-Neural2-B` -- MALE (matching Charon's gender, so the
+# voice-matching intent is still honored as far as gender/register), and
+# Neural2 is a long-established, universally-available GA family (this
+# project's very first successful live TTS test used Neural2-D -- wrong
+# gender, but it WORKED, proving Neural2 availability isn't in question).
+# If Chirp3-HD's availability is later confirmed live for this project
+# (e.g. via `gcloud ... texttospeech voices list` or a real synthesis
+# call), `en-IN-Chirp3-HD-Charon` can be tried again via
+# ENGLISH_TTS_VOICE_NAME -- but never as the unverified default again.
+_TTS_VOICE_NAME = os.environ.get("ENGLISH_TTS_VOICE_NAME", "en-IN-Neural2-B")
 _TTS_SPEAKING_RATE = float(os.environ.get("ENGLISH_TTS_SPEAKING_RATE", "1.0"))
 _TTS_PITCH = float(os.environ.get("ENGLISH_TTS_PITCH", "0.0"))
 # Matches useVoiceDispatcher.ts's PLAYBACK_SAMPLE_RATE exactly -- do not change
