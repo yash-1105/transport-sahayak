@@ -136,7 +136,10 @@ _DISPATCH_WAIT_S = float(os.environ.get("DISPATCH_BRIEFING_WAIT_S", "30"))
 # service ETA, because 45s total wasn't enough for that much content and the
 # forced call_complete raced ahead of audio the backend was still sending).
 # Only genuine silence for this long -- no new audio chunk arriving at all --
-# should ever force the call to end early.
+# trips it, and tripping it no longer force-ends the call: it closes the
+# wedged Gemini session so the reconnect loop can resume the briefing from
+# the in-flight segment (see _brief_and_close); run()'s _MAX_RECONNECTS
+# budget still guarantees the call terminates.
 _BRIEFING_STALL_TIMEOUT_S = float(os.environ.get("DISPATCH_BRIEFING_STALL_TIMEOUT_S", "15"))
 
 _RECONNECT_APOLOGY = {
@@ -630,6 +633,13 @@ class DispatcherSession:
         self._briefing_task: Optional["asyncio.Task"] = None
         self._briefing_segments: Optional[list] = None
         self._briefing_segment_started_at: float = 0.0
+        # The segment currently in flight: set when sent, cleared only when
+        # its own turn_complete arrives. If the Gemini session dies while a
+        # segment is in flight, the reconnect path pushes it back onto
+        # _briefing_segments so the fresh session re-delivers it in full --
+        # repeating one short line beats silently losing it.
+        self._current_briefing_segment: Optional[str] = None
+        self._briefing_total: int = 0
         self._call_over = False
 
     async def _safe_send_json(self, payload: dict) -> None:
@@ -1132,7 +1142,10 @@ class DispatcherSession:
                 if outcome == "ended":
                     return
                 if reconnects >= _MAX_RECONNECTS:
-                    logger.error("Gemini Live session failed after %d reconnect(s) -- giving up", reconnects)
+                    logger.error("Gemini Live session failed after %d reconnect(s) -- giving up "
+                                 "(submitted=%s, briefing segments undelivered=%d)",
+                                 reconnects, self.state.submitted,
+                                 len(self._briefing_segments or []) + (1 if self._current_briefing_segment else 0))
                     await self._safe_send_json({
                         "type": "error",
                         "message": "The voice service hit a technical problem. Please end the call and try again.",
@@ -1172,6 +1185,12 @@ class DispatcherSession:
                     turns=types.Content(role="user", parts=[types.Part(text=kickoff_text)]),
                     turn_complete=True,
                 )
+                if self.state.submitted:
+                    # Post-submission reconnect: the kickoff IS a briefing
+                    # segment (or the holding line) -- restart the stall clock
+                    # from now, not from before the backoff sleep, so the
+                    # reconnect gap itself can't trip the stall failsafe.
+                    self._briefing_segment_started_at = time.monotonic()
                 gemini_task = asyncio.create_task(self._pump_gemini_to_client())
                 watchdog_task = asyncio.create_task(self._watchdog())
                 done, _ = await asyncio.wait(
@@ -1185,8 +1204,35 @@ class DispatcherSession:
                             await task
                         except asyncio.CancelledError:
                             pass
-                if self._client_task in done or self.state.submitted:
+                if self._client_task in done or self._call_over:
                     return "ended"
+                if self.state.submitted:
+                    # ROOT-CAUSE FIX (4th report of "the agent stops partway
+                    # through the closing briefing"): this branch used to be
+                    # `... or self.state.submitted: return "ended"` -- which
+                    # made the ENTIRE reconnect machinery unreachable for the
+                    # whole post-submission phase. Any Gemini Live session
+                    # death mid-briefing (connection lifetime limits / GoAway
+                    # / transient stream failures -- the exact class the
+                    # reconnect loop exists for, and MOST likely at the end
+                    # of a long call, which is precisely where the briefing
+                    # sits) silently ended the call: run() returned, app.py
+                    # closed the browser socket, and the frontend's onclose
+                    # treats any post-submission close as a normal call end
+                    # (submittedRef in useVoiceDispatcher.ts) -- i.e. "the
+                    # agent just stops talking" with nothing on screen.
+                    # "ended" is now ONLY returned when the call is genuinely
+                    # over (_call_over: every briefing segment delivered and
+                    # call_complete sent, or the browser hung up). A session
+                    # death with the briefing still undelivered reconnects
+                    # and RESUMES it -- see _reconnect_kickoff.
+                    remaining = len(self._briefing_segments or []) + (1 if self._current_briefing_segment else 0)
+                    logger.warning(
+                        "Gemini Live session ended mid-briefing (briefing started=%s, "
+                        "%d segment(s) undelivered) -- reconnecting to resume",
+                        self._briefing_task is not None, remaining,
+                    )
+                    return "reconnect"
                 if watchdog_task in done and not watchdog_task.cancelled():
                     logger.warning("Watchdog requested reconnect")
                     return "reconnect"
@@ -1241,7 +1287,40 @@ class DispatcherSession:
     def _reconnect_kickoff(self) -> str:
         """Kickoff turn for a fresh Gemini session mid-call: the model has no
         memory of the conversation (state lives here, not in its context), so
-        hand it everything collected so far plus the exact apology to say."""
+        hand it everything collected so far plus the exact apology to say.
+
+        Post-submission, the kickoff instead RESUMES the closing briefing:
+        the segment that was in flight when the session died is re-delivered
+        in full, and the pump then drives the remaining queue exactly as it
+        would have (its turn_complete handler doesn't care which session the
+        previous segment went to). If the briefing hadn't started delivering
+        yet (died during the dispatch_update wait, or before the post-submit
+        acknowledgment completed), a short holding line keeps the caller
+        informed while the existing machinery picks up where it left off."""
+        if self.state.submitted:
+            if self._current_briefing_segment is not None:
+                if self._briefing_segments is None:
+                    self._briefing_segments = []
+                self._briefing_segments.insert(0, self._current_briefing_segment)
+                self._current_briefing_segment = None
+            if self._briefing_segments:
+                segment = self._briefing_segments.pop(0)
+                self._current_briefing_segment = segment
+                sent = self._briefing_total - len(self._briefing_segments)
+                logger.info("Resuming closing briefing after reconnect at segment %d/%d",
+                            sent, self._briefing_total)
+                return segment
+            logger.info("Reconnected post-submission before briefing delivery started -- "
+                        "sending holding line")
+            return (
+                "(The call reconnected after a brief technical problem, just after the "
+                "caller's incident report was submitted successfully. Do NOT say the "
+                "welcome line and do NOT re-ask anything about the incident. Briefly "
+                "reassure the caller in one short sentence: their report is registered, "
+                "you are still checking which emergency services are responding, and "
+                "they should stay on the line for a moment. Then say nothing more and "
+                "wait.)"
+            )
         apology = _RECONNECT_APOLOGY.get(self.state.language, _RECONNECT_APOLOGY["en-IN"])
         recorded = []
         if self.state.sub_type:
@@ -1311,35 +1390,51 @@ class DispatcherSession:
                     # MatchingPanel.tsx / ReportPanel.tsx) — never recomputed
                     # here, only spoken. Wakes _brief_and_close.
                     self._dispatch_info = msg.get("services") or None
+                    logger.info("dispatch_update received from browser (services: %s)",
+                                sorted((msg.get("services") or {}).keys()))
                     self._dispatch_ready.set()
         except Exception:
             logger.debug("Client->Gemini pump ended", exc_info=True)
 
-    async def _send_next_briefing_segment(self, live_session) -> None:
+    async def _send_next_briefing_segment(self) -> None:
         """Send the next queued closing-briefing segment (see
         build_briefing_segments), or end the call if none remain. Called by
         _brief_and_close for the FIRST segment, and by the pump itself
         (_pump_gemini_to_client, the session's sole reader) for every segment
         after that, as each one's own turn_complete arrives -- keeping a
-        single sender/reader of this live_session throughout, same
-        single-reader discipline the Hindi SaarasStream also follows."""
+        single sender/reader of the live session throughout, same
+        single-reader discipline the Hindi SaarasStream also follows.
+
+        Always targets self._live_session (the CURRENT session), never a
+        session captured at spawn time -- the briefing must survive a Gemini
+        reconnect, and a captured reference would send into the dead one."""
         if not self._briefing_segments:
+            self._current_briefing_segment = None
             self._call_over = True
+            logger.info("All %d closing-briefing segment(s) delivered -- sending call_complete",
+                        self._briefing_total)
             await self._safe_send_json({"type": "call_complete"})
             return
         segment = self._briefing_segments.pop(0)
+        self._current_briefing_segment = segment
         self._briefing_segment_started_at = time.monotonic()
+        sent = self._briefing_total - len(self._briefing_segments)
+        logger.info("Sending closing-briefing segment %d/%d", sent, self._briefing_total)
         try:
-            await live_session.send_client_content(
+            await self._live_session.send_client_content(
                 turns=types.Content(role="user", parts=[types.Part(text=segment)]),
                 turn_complete=True,
             )
         except Exception:
-            logger.exception("Could not send a closing-briefing segment -- ending the call")
-            self._call_over = True
-            await self._safe_send_json({"type": "call_complete"})
+            # The session died mid-briefing. Do NOT end the call (an earlier
+            # version did, silently dropping every remaining segment): the
+            # segment stays in _current_briefing_segment, the pump/stall
+            # failsafe notices the dead session, and run()'s reconnect loop
+            # resumes the briefing from exactly this segment on a fresh one.
+            logger.exception("Could not send briefing segment %d/%d -- "
+                             "the reconnect loop will resume it", sent, self._briefing_total)
 
-    async def _brief_and_close(self, live_session) -> None:
+    async def _brief_and_close(self) -> None:
         """Runs once, spawned at the first turn_complete after submit_incident
         succeeds: wait for the browser's dispatch_update (the SAME responder
         ETAs the dashboard is already displaying), then hand the model the
@@ -1355,27 +1450,43 @@ class DispatcherSession:
         after submission)."""
         try:
             await asyncio.wait_for(self._dispatch_ready.wait(), timeout=_DISPATCH_WAIT_S)
+            logger.info("dispatch_update in hand -- building the closing briefing")
         except asyncio.TimeoutError:
             logger.warning("No dispatch_update within %.0fs -- closing without responder ETAs",
                            _DISPATCH_WAIT_S)
         self._briefing_segments = build_briefing_segments(self.state, self._dispatch_info, self.state.language)
-        await self._send_next_briefing_segment(live_session)
+        self._briefing_total = len(self._briefing_segments)
+        logger.info("Closing briefing built: %d segment(s)", self._briefing_total)
+        await self._send_next_briefing_segment()
         # Poll for genuine STALLING rather than sleeping once for a flat total
         # budget (see _BRIEFING_STALL_TIMEOUT_S comment for why) -- as long as
         # _model_last_spoke (updated on every audio chunk in
         # _pump_gemini_to_client, including throughout every segment) keeps
         # advancing, keep waiting no matter how long any given segment or the
-        # whole sequence naturally runs; only force-end after real silence
-        # since the CURRENT segment was sent (_briefing_segment_started_at,
-        # refreshed by the pump each time it sends the next one).
+        # whole sequence naturally runs. On real silence since the CURRENT
+        # segment was sent (_briefing_segment_started_at, refreshed by the
+        # pump each time it sends the next one), do NOT force-end the call
+        # (an earlier version did, silently dropping every undelivered
+        # segment -- the same symptom as a session death): close the wedged
+        # Gemini session instead, which ends the pump and lets run()'s
+        # reconnect loop resume the briefing from the in-flight segment on a
+        # fresh session. Termination stays guaranteed: each stall burns one
+        # reconnect, and when _MAX_RECONNECTS is exhausted run() gives up,
+        # surfaces an error to the browser, and this task is cancelled in
+        # run()'s finally -- no hang, but no more silent early goodbyes.
         while not self._call_over:
             await asyncio.sleep(1.0)
             since_activity = time.monotonic() - max(self._model_last_spoke, self._briefing_segment_started_at)
             if since_activity > _BRIEFING_STALL_TIMEOUT_S:
-                logger.warning("No briefing audio for %.0fs -- forcing call end", since_activity)
-                self._call_over = True
-                await self._safe_send_json({"type": "call_complete"})
-                return
+                logger.warning("No briefing audio for %.0fs -- closing the Gemini session "
+                               "so the reconnect loop can resume the briefing", since_activity)
+                self._briefing_segment_started_at = time.monotonic()
+                try:
+                    if self._live_session is not None:
+                        await self._live_session.close()
+                except Exception:
+                    logger.debug("Closing the stalled Gemini session failed (already dead?)",
+                                 exc_info=True)
 
     async def _pump_gemini_to_client(self) -> None:
         live_session = self._live_session
@@ -1383,6 +1494,17 @@ class DispatcherSession:
         try:
             while not self._call_over:
                 async for response in live_session.receive():
+                    # Gemini Live announces an imminent server-side connection
+                    # termination (connection lifetime limits) with a GoAway
+                    # message shortly before closing. Previously unread and
+                    # invisible -- log it so Railway logs show exactly why a
+                    # session ended. The death itself is handled: the receive
+                    # stream ends and run()'s reconnect loop resumes the call
+                    # (including mid-briefing -- see _reconnect_kickoff).
+                    if getattr(response, "go_away", None) is not None:
+                        logger.warning("Gemini Live sent GoAway (time_left=%s) -- "
+                                       "server will close this connection soon",
+                                       getattr(response.go_away, "time_left", None))
                     if response.tool_call:
                         # Deliberately NOT counted as the model "speaking" --
                         # the watchdog tracks audible replies only, so a
@@ -1427,18 +1549,27 @@ class DispatcherSession:
                                 # First turn_complete after submission (the
                                 # "stay on the line" acknowledgment): start
                                 # waiting for the dashboard's responder data.
+                                logger.info("Post-submission acknowledgment turn complete -- "
+                                            "waiting for the dashboard's dispatch_update")
                                 self._briefing_task = asyncio.create_task(
-                                    self._brief_and_close(live_session)
+                                    self._brief_and_close()
                                 )
                             elif self._briefing_segments is not None:
-                                # A closing-briefing SEGMENT just finished --
-                                # send the next one (or end the call if that
-                                # was the last). This pump is the session's
-                                # sole reader, so it -- not the concurrently-
-                                # running _brief_and_close task -- is what
-                                # must drive the sequence forward; see
+                                # A closing-briefing SEGMENT just finished
+                                # (fully generated AND its turn completed) --
+                                # mark it delivered, then send the next one
+                                # (or end the call if that was the last).
+                                # This pump is the session's sole reader, so
+                                # it -- not the concurrently-running
+                                # _brief_and_close task -- is what must drive
+                                # the sequence forward; see
                                 # _send_next_briefing_segment.
-                                await self._send_next_briefing_segment(live_session)
+                                if self._current_briefing_segment is not None:
+                                    logger.info("Briefing segment %d/%d turn complete",
+                                                self._briefing_total - len(self._briefing_segments),
+                                                self._briefing_total)
+                                    self._current_briefing_segment = None
+                                await self._send_next_briefing_segment()
                                 if self._call_over:
                                     return
                             # Do NOT reopen the mic here (real reported bug:
@@ -1468,7 +1599,13 @@ class DispatcherSession:
                         await self._safe_send_json({"type": "status", "state": "listening"})
                         break
                 else:
-                    break  # receive() generator ended (session closed) with no turn_complete
+                    # receive() generator ended (session closed server-side)
+                    # with no turn_complete.
+                    logger.warning("Gemini Live receive() stream ended server-side "
+                                   "(submitted=%s, call_over=%s)",
+                                   self.state.submitted, self._call_over)
+                    break
         except Exception:
             # Treated by _run_live_session as "session died" -> reconnect.
-            logger.exception("Gemini->client pump errored")
+            logger.exception("Gemini->client pump errored (submitted=%s, call_over=%s)",
+                             self.state.submitted, self._call_over)

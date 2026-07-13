@@ -219,8 +219,11 @@ import logging as _logging
 class _FakeLive:
     def __init__(self):
         self.turns = []
+        self.closed = False
     async def send_client_content(self, turns=None, turn_complete=True):
         self.turns.append(turns.parts[0].text)
+    async def close(self):
+        self.closed = True
 
 class _RecordingWS:
     def __init__(self):
@@ -251,6 +254,7 @@ async def _briefing_survives_a_long_active_reply():
         s._briefing_segment_started_at = 0.0
         s._model_last_spoke = 0.0
         fake_live = _FakeLive()
+        s._live_session = fake_live
 
         async def simulate_20s_of_speech():
             for _ in range(66):  # ~20s of chunks arriving every 0.3s
@@ -258,14 +262,22 @@ async def _briefing_survives_a_long_active_reply():
                 s._model_last_spoke = _time.monotonic()
             s._call_over = True  # normal completion, as the real pump would set it
 
-        await asyncio.gather(s._brief_and_close(fake_live), simulate_20s_of_speech())
+        await asyncio.gather(s._brief_and_close(), simulate_20s_of_speech())
         return len(fake_live.turns) == 1 and {"type": "call_complete"} not in s.websocket.sent
 
     finally:
         dl._BRIEFING_STALL_TIMEOUT_S = old_timeout
         _logging.disable(_logging.NOTSET)
 
-async def _briefing_still_ends_on_genuine_stall():
+# A genuine stall no longer force-ends the call (an earlier version did,
+# silently dropping every undelivered segment -- the same caller-facing
+# symptom as the mid-briefing session death this round's fix addresses).
+# Instead it must CLOSE the wedged Gemini session -- which ends the pump and
+# hands control to run()'s reconnect loop, which resumes the briefing from
+# the in-flight segment -- and must never send call_complete itself.
+# Termination is still guaranteed by run()'s _MAX_RECONNECTS budget plus its
+# finally-block cancelling this task.
+async def _briefing_stall_closes_session_for_reconnect_resume():
     from severity_engine import dispatcher_live as dl
     old_timeout = dl._BRIEFING_STALL_TIMEOUT_S
     dl._BRIEFING_STALL_TIMEOUT_S = 0.5
@@ -281,16 +293,24 @@ async def _briefing_still_ends_on_genuine_stall():
         s._briefing_segments = None
         s._briefing_segment_started_at = 0.0
         s._model_last_spoke = 0.0
-        await s._brief_and_close(_FakeLive())
-        return {"type": "call_complete"} in s.websocket.sent
+        fake_live = _FakeLive()
+        s._live_session = fake_live
+
+        task = asyncio.create_task(s._brief_and_close())
+        await asyncio.sleep(2.5)  # long enough for the 0.5s stall to trip
+        closed_on_stall = fake_live.closed
+        premature_end = {"type": "call_complete"} in s.websocket.sent
+        s._call_over = True  # as run()'s reconnect/give-up path would resolve it
+        await task
+        return closed_on_stall and not premature_end
     finally:
         dl._BRIEFING_STALL_TIMEOUT_S = old_timeout
         _logging.disable(_logging.NOTSET)
 
 check("closing briefing survives ~20s of continuously-active speech without a premature cutoff",
       asyncio.run(_briefing_survives_a_long_active_reply()))
-check("closing briefing still force-ends the call on genuine silence (no hang)",
-      asyncio.run(_briefing_still_ends_on_genuine_stall()))
+check("a genuine briefing stall closes the Gemini session for reconnect-resume, never call_complete",
+      asyncio.run(_briefing_stall_closes_session_for_reconnect_resume()))
 
 # ── Segmented closing-briefing delivery (English/Gemini Live) ─────────────────
 # Real reported bug, in three rounds: agent stopped after ambulance; after a
@@ -370,12 +390,14 @@ async def _send_next_segment_sequence_ends_only_after_all_sent():
     segments = _segments_for_test()
     n = len(segments)
     s._briefing_segments = segments
+    s._briefing_total = n
     s._briefing_segment_started_at = 0.0
     live = _FakeLive()
+    s._live_session = live
 
     results = []
     for _ in range(n + 1):  # every real segment + 1 call after they're exhausted
-        await s._send_next_briefing_segment(live)
+        await s._send_next_briefing_segment()
         results.append((len(live.turns), s._call_over))
 
     expected = [(i, False) for i in range(1, n + 1)] + [(n, True)]
@@ -383,6 +405,109 @@ async def _send_next_segment_sequence_ends_only_after_all_sent():
 
 check("segments are sent one at a time in order, call ends only once all are exhausted",
       asyncio.run(_send_next_segment_sequence_ends_only_after_all_sent()))
+
+# ── Mid-briefing reconnect-and-resume (English/Gemini Live) ───────────────────
+# 4th report of "the agent stops partway through the closing briefing", and
+# the actual root cause of the whole saga: _run_live_session used to return
+# "ended" whenever state.submitted was True -- making the reconnect loop
+# structurally unreachable for the entire post-submission phase, so ANY
+# Gemini Live session death mid-briefing (connection lifetime limits /
+# GoAway / transient failures -- likeliest at the END of a long call, which
+# is exactly where the briefing sits) silently hung up on the caller: run()
+# returned, app.py closed the socket, and the frontend treats any
+# post-submission close as a normal call end. The segment-granularity work
+# of earlier rounds only ever changed WHERE the death landed. Now a session
+# death with the briefing undelivered returns "reconnect", and
+# _reconnect_kickoff resumes from the exact in-flight segment.
+from contextlib import asynccontextmanager as _acm
+from types import SimpleNamespace
+
+class _EmptyReceiveLive(_FakeLive):
+    # receive() ends immediately -- exactly what the pump sees when the
+    # Gemini connection is closed server-side.
+    async def receive(self):
+        return
+        yield  # pragma: no cover
+
+def _fake_client(session):
+    @_acm
+    async def _connect(model=None, config=None):
+        yield session
+    return SimpleNamespace(aio=SimpleNamespace(live=SimpleNamespace(connect=_connect)))
+
+def _session_for_lifecycle_test(call_over):
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _RecordingWS()
+    s.state = DispatcherState(language="en-IN")
+    s.state.submitted = True
+    s._call_over = call_over
+    s._briefing_task = None
+    s._briefing_segments = ["SEG-B", "SEG-C"]
+    s._current_briefing_segment = "SEG-A"
+    s._briefing_total = 3
+    s._briefing_segment_started_at = 0.0
+    s._model_last_spoke = 0.0
+    s._caller_last_spoke = 0.0
+    s._session_started = 0.0
+    s._nudge_sent_at = 0.0
+    return s
+
+async def _session_death_mid_briefing_requests_reconnect():
+    _logging.disable(_logging.CRITICAL)
+    try:
+        s = _session_for_lifecycle_test(call_over=False)
+        s._client_task = asyncio.create_task(asyncio.sleep(60))
+        try:
+            outcome = await s._run_live_session(_fake_client(_EmptyReceiveLive()), "(kickoff)")
+        finally:
+            s._client_task.cancel()
+        return outcome == "reconnect"
+    finally:
+        _logging.disable(_logging.NOTSET)
+
+async def _session_end_after_briefing_complete_is_ended():
+    _logging.disable(_logging.CRITICAL)
+    try:
+        s = _session_for_lifecycle_test(call_over=True)
+        s._client_task = asyncio.create_task(asyncio.sleep(60))
+        try:
+            outcome = await s._run_live_session(_fake_client(_EmptyReceiveLive()), "(kickoff)")
+        finally:
+            s._client_task.cancel()
+        return outcome == "ended"
+    finally:
+        _logging.disable(_logging.NOTSET)
+
+check("a Gemini session death mid-briefing now requests reconnect, never a silent call end",
+      asyncio.run(_session_death_mid_briefing_requests_reconnect()))
+check("a session end after the briefing fully delivered (call_over) still ends the call",
+      asyncio.run(_session_end_after_briefing_complete_is_ended()))
+
+# _reconnect_kickoff must resume the briefing from the exact in-flight
+# segment: the one sent but never turn-completed is re-delivered in full
+# (repeating one short line beats silently losing it), and calling it again
+# (a second death before the resume ever got sent) is idempotent.
+def _resume_kickoff_replays_in_flight_segment():
+    s = _session_for_lifecycle_test(call_over=False)
+    k1 = s._reconnect_kickoff()
+    first = (k1, list(s._briefing_segments), s._current_briefing_segment)
+    k2 = s._reconnect_kickoff()  # died again before the resume was delivered
+    second = (k2, list(s._briefing_segments), s._current_briefing_segment)
+    expected = ("SEG-A", ["SEG-B", "SEG-C"], "SEG-A")
+    return first == expected and second == expected
+
+check("reconnect kickoff resumes the briefing from the in-flight segment, idempotently",
+      _resume_kickoff_replays_in_flight_segment())
+
+def _resume_kickoff_before_briefing_holds_the_line():
+    s = _session_for_lifecycle_test(call_over=False)
+    s._briefing_segments = None
+    s._current_briefing_segment = None
+    k = s._reconnect_kickoff()
+    return "stay on the line" in k and "welcome" in k.lower() and "Do NOT say the welcome line" in k
+
+check("reconnect kickoff before briefing delivery sends the holding line, never the greeting",
+      _resume_kickoff_before_briefing_holds_the_line())
 
 # The mic must NOT reopen after the post-submission "stay on the line"
 # acknowledgment turn (real reported bug: the English agent started speaking
@@ -431,7 +556,7 @@ async def _mic_stays_closed_after_submission_ack_turn():
     live = _FakeLiveSession([_make_turn_complete_event()])
     s._live_session = live
 
-    async def fake_brief_and_close(live_session):
+    async def fake_brief_and_close():
         await asyncio.sleep(3600)  # not under test here -- see the briefing tests above
     s._brief_and_close = fake_brief_and_close
 

@@ -344,6 +344,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           const remainingS = ctx && ctx.state !== "closed"
             ? Math.max(0, nextStartTimeRef.current - ctx.currentTime)
             : 0;
+          console.info(`[dispatcher] call_complete received — draining ${remainingS.toFixed(1)}s of queued audio, then ending`);
           setTimeout(() => {
             if (!isStale()) stop();
           }, remainingS * 1000 + 300);
@@ -408,6 +409,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           if (event.incident) cb.onSubmitReady(event.incident);
           break;
         case "error":
+          console.error(`[dispatcher] backend error: ${event.message ?? "(no message)"}`);
           setError(event.message ?? "Voice dispatcher error.");
           setStatus("error");
           break;
@@ -536,7 +538,12 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
         setError(ERROR_MSGS["network"]);
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
+        // Diagnostic: a close with submitted=true and no prior call_complete
+        // means the backend hung up mid-briefing (see dispatcher_live.py's
+        // reconnect-resume fix) — this log is what distinguishes that from a
+        // normal post-briefing close in the browser console.
+        console.info(`[dispatcher] websocket closed (code=${ev.code}, submitted=${submittedRef.current}, intentional=${intentionalStopRef.current})`);
         if (wsRef.current === ws) wsRef.current = null;
         if (isStale() || intentionalStopRef.current) return;
         if (submittedRef.current) {
