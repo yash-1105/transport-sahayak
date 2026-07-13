@@ -146,6 +146,19 @@ def _eta_min(entry: dict) -> Optional[int]:
 
 
 def _responder_facts_en(services: Optional[dict]) -> list:
+    """One fact line per responder section -- ambulance, fire, towing,
+    nearest trauma centre, nearest police station -- ALWAYS, in that exact
+    order, five lines every single time regardless of what data arrived.
+
+    Real reported bug: a service missing from the dispatch_update payload
+    (matching failed for just that one service, or it genuinely wasn't
+    relevant) used to silently OMIT that entire section from the briefing
+    -- the caller never heard anything about it at all, not even that it
+    was unavailable. Every section is now mandatory: if a service's data
+    is missing, its line explicitly says so ("currently unavailable")
+    instead of vanishing. This also means the returned list is never empty
+    or partial, so callers (english_briefing.py) no longer need an
+    "if no facts at all" fallback branch."""
     facts = []
     amb = _service(services, "ambulance")
     if amb:
@@ -154,6 +167,9 @@ def _responder_facts_en(services: Optional[dict]) -> list:
             f"The nearest ambulance service has been notified — it responds from {_facility_location(amb['name'])}"
             + (f", estimated arrival at the caller's location in approximately {eta} minutes." if eta else ".")
         )
+    else:
+        facts.append("Ambulance dispatch details are currently unavailable.")
+
     fire = _service(services, "fire")
     if fire:
         eta = _eta_min(fire)
@@ -161,6 +177,9 @@ def _responder_facts_en(services: Optional[dict]) -> list:
             f"The fire service has been notified — it responds from {_facility_location(fire['name'])}"
             + (f", estimated arrival in approximately {eta} minutes." if eta else ".")
         )
+    else:
+        facts.append("Fire service dispatch details are currently unavailable.")
+
     tow = _service(services, "towing")
     if tow:
         eta = _eta_min(tow)
@@ -168,13 +187,19 @@ def _responder_facts_en(services: Optional[dict]) -> list:
             f"A towing and recovery service has been notified — it responds from {_facility_location(tow['name'])}"
             + (f", estimated to reach the caller in approximately {eta} minutes." if eta else ".")
         )
+    else:
+        facts.append("Towing and recovery service dispatch details are currently unavailable.")
+
     hos = _service(services, "hospital")
     if hos:
         eta = _eta_min(hos)
         facts.append(
-            f"The nearest suitable hospital is {hos['name']}"
+            f"The nearest trauma centre is {hos['name']}"
             + (f", an estimated {eta} minutes away by road." if eta else ".")
         )
+    else:
+        facts.append("Details of the nearest trauma centre are currently unavailable.")
+
     pol = _service(services, "police")
     if pol:
         eta = _eta_min(pol)
@@ -182,6 +207,9 @@ def _responder_facts_en(services: Optional[dict]) -> list:
             f"The nearest police station, {pol['name']}, has also been notified"
             + (f" — an estimated {eta} minutes away." if eta else ".")
         )
+    else:
+        facts.append("Details of the nearest police station are currently unavailable.")
+
     return facts
 
 
@@ -226,14 +254,21 @@ def _responder_facts_hi(services: Optional[dict]) -> list:
 
 
 # ── Closing script (follow-up call information) ────────────────────────────────
-
+# _CLOSING_EN is used ONLY by english_briefing.py (confirmed: no Hindi code
+# path ever passes language_code != "hi-IN" to build_briefing_instruction),
+# so restructuring it here cannot affect Hindi -- _CLOSING_HI, directly
+# below, is untouched. Trimmed from an earlier 6-line form: the leading
+# "your incident has been registered" / "all teams informed" lines were
+# redundant with (a) the dedicated opening confirmation sentence
+# english_briefing.py's prompt now explicitly asks for, and (b) the five
+# individual per-service notification facts (_responder_facts_en) that
+# already say each service was notified — and they placed "you may now
+# disconnect" BEFORE the follow-up-call/callback instructions, which reads
+# backwards (telling the caller to hang up, then continuing to talk).
 _CLOSING_EN = [
-    "Your incident has been successfully registered.",
-    "All the necessary emergency teams have been informed.",
-    "You may now safely disconnect this call.",
     "Our team will contact you within the next two hours to confirm that help has reached you and to check on the situation.",
     "If for any reason you do not receive that follow-up call, please call this helpline again after emergency services have arrived, or after a few hours, so that we can close the incident.",
-    "Take care, and we hope everyone remains safe.",
+    "You may now safely disconnect this call. Take care, and we hope everyone remains safe.",
 ]
 
 _CLOSING_HI = [

@@ -35,17 +35,19 @@ delivery (Sarvam Bulbul TTS, build_briefing_instruction) does not import
 anything from this module and is untouched by this change.
 """
 import asyncio
+import io
 import logging
 import os
 import re
 import time
+import wave
 from typing import Optional
 
 from google.cloud import texttospeech
 from google.genai import types
 from google.oauth2 import service_account
 
-from .dispatch_briefing import _CLOSING_EN, _responder_facts_en, select_sops
+from .dispatch_briefing import _CLOSING_EN, _facility_location, _responder_facts_en, _service, select_sops
 from .google_credentials import load_service_account_info
 
 logger = logging.getLogger("english_briefing")
@@ -108,57 +110,142 @@ def _get_tts_client() -> "texttospeech.TextToSpeechAsyncClient":
     return _tts_client
 
 
+# The 10 mandatory sections, in the exact required order:
+#   1. Report submission confirmation
+#   2-6. Ambulance / fire / towing / trauma centre / police (each ALWAYS
+#        present -- see _responder_facts_en, which now says "currently
+#        unavailable" per-service rather than ever omitting one)
+#   7. SOP instructions
+#   8. Two-hour follow-up call promise
+#   9. Callback-if-not-received instruction
+#   10. Polite close
+# _CONFIRMATION_EN is section 1; _responder_facts_en is 2-6; select_sops is
+# 7; _CLOSING_EN is 8-9-10 (see that constant's own comment for why it was
+# trimmed to exactly these three lines).
+_CONFIRMATION_EN = "Your report has been registered successfully."
+
+
 def _fallback_script(state, services: Optional[dict]) -> str:
-    """Deterministic, plain-language fallback if Gemini Flash fails, times
-    out, or returns nothing usable -- reuses the EXACT SAME facts/SOPs/
-    closing content the prompt below asks Flash to narrate, just
-    concatenated directly instead of handed to a model. Never leaves the
-    caller with silence merely because Flash was unavailable."""
-    facts = _responder_facts_en(services) or [
-        "The emergency services have been notified and are being arranged — "
-        "no estimated times are available right now."
-    ]
-    sops = select_sops(state)
-    sop_lines = [s["en"] for s in sops]
-    lines = ["Your report has been registered successfully."] + facts + sop_lines + _CLOSING_EN
+    """Deterministic, plain-language fallback -- used both when Gemini
+    Flash fails/times out/returns nothing usable, AND when Flash's output
+    is missing a required section (see _script_covers_all_sections).
+    Concatenates the SAME facts/SOPs/closing content the prompt below asks
+    Flash to narrate, in the mandatory 10-section order, guaranteeing every
+    section is present verbatim -- never partially patched, always either
+    this exact deterministic script or a Flash version verified to cover
+    everything."""
+    facts = _responder_facts_en(services)  # always exactly 5 lines, never empty -- see its own docstring
+    sop_lines = [s["en"] for s in select_sops(state)]
+    lines = [_CONFIRMATION_EN] + facts + sop_lines + _CLOSING_EN
     return " ".join(lines)
+
+
+_SOP_ANCHORS = {
+    "bleeding": "pressure",
+    "fire": "away from the vehicle",
+    "unconscious": "head and neck",
+    "trapped": "crushed doors",
+    "hazmat": "chemicals",
+    "general": "safe distance",
+}
+
+
+def _required_anchors(state, services: Optional[dict]) -> list:
+    """Required-substring GROUPS -- one group per mandatory section, in the
+    same order as _fallback_script. A section counts as covered only if
+    EVERY substring in its own group appears somewhere in the script
+    (case-insensitive). Used by _script_covers_all_sections to verify
+    Gemini Flash actually kept every section rather than silently dropping
+    one; see generate_dispatch_script for what happens if any is missing.
+    Deliberately checks content PRESENCE, not exact wording -- Flash is
+    allowed (expected) to rephrase, just never to omit.
+
+    Groups, not flat strings, specifically because of the unavailable-
+    service case: a single generic "unavailable" substring, used as one
+    FLAT anchor per missing service, would be satisfied by Flash mentioning
+    it just ONCE across the whole script even if 4 of 5 services were
+    unavailable and only 1 was actually named -- the substring "unavailable"
+    doesn't care how many times it needs to match. Pairing it with each
+    service's own label (["ambulance", "unavailable"], ["fire",
+    "unavailable"], ...) means every unavailable service must be named
+    AND called out as unavailable, not just any one of them."""
+    groups = [["regist"]]  # section 1: "registered"/"registration"
+    service_labels = {
+        "ambulance": "ambulance", "fire": "fire", "towing": "towing",
+        "hospital": "trauma", "police": "police",
+    }
+    for key, label in service_labels.items():
+        entry = _service(services, key)
+        if entry:
+            # The facility location is the one thing Flash is explicitly
+            # told to keep verbatim, so it's a reliable single-string
+            # anchor for "this section wasn't dropped".
+            groups.append([_facility_location(entry["name"]).lower()])
+        else:
+            groups.append([label, "unavailable"])
+    for sop in select_sops(state):
+        groups.append([_SOP_ANCHORS.get(sop["key"], sop["en"][:20].lower())])
+    groups.append(["two hours"])   # section 8
+    groups.append(["helpline"])    # section 9 (callback-if-missed mentions calling this helpline again)
+    return groups
+
+
+def _script_covers_all_sections(script: str, anchor_groups: list) -> tuple:
+    """(True, []) if every anchor group is fully covered (every substring
+    in that group appears, case-insensitive) in script; otherwise
+    (False, [uncovered groups]) -- the caller discards Flash's entire
+    output on ANY miss rather than trying to patch it (a partially-AI-
+    edited, partially-code-patched script risks an awkward or duplicated
+    result; the fully deterministic fallback is always complete and
+    already vetted, so there is never a reason to mix)."""
+    lowered = script.lower()
+    missing = [group for group in anchor_groups if not all(s in lowered for s in group if s)]
+    return (not missing, missing)
 
 
 def _build_flash_prompt(state, services: Optional[dict]) -> str:
     """Reuses the exact same deterministic facts/SOPs/closing content this
     project already trusts (dispatch_briefing.py) -- Flash's only job is to
     turn it into ONE natural-sounding spoken script, never to decide WHAT to
-    say or invent a number/name of its own (same rule-first, LLM-phrases-
-    never-decides pattern as the rest of this project)."""
-    facts = _responder_facts_en(services) or [
-        "The emergency services have been notified and are being arranged — "
-        "no estimated times are available right now."
-    ]
-    sops = select_sops(state)
-    sop_lines = [s["en"] for s in sops]
-    closing = _CLOSING_EN
+    say, WHETHER to include a section, or invent a number/name of its own
+    (same rule-first, LLM-phrases-never-decides pattern as the rest of this
+    project). generate_dispatch_script additionally VERIFIES the output
+    actually kept every section (see _script_covers_all_sections) rather
+    than trusting this prompt alone -- prompts are a strong nudge, not a
+    guarantee, so Flash is never the sole enforcement mechanism here."""
+    facts = _responder_facts_en(services)  # always exactly 5 lines, never empty
+    sop_lines = [s["en"] for s in select_sops(state)]
 
     return (
         "You are writing the closing script for an emergency dispatcher phone call, to be read aloud "
-        "by a text-to-speech voice. The caller's incident report was just submitted successfully. "
-        "Write ONE calm, warm, natural-sounding spoken script -- like a real, caring human emergency "
-        "dispatcher, never an upbeat customer-service tone -- as plain prose sentences. No markdown, "
-        "no headings, no bullet points, no numbered lists: just the words the voice should say, in "
-        "order, in natural paragraphs.\n\n"
-        "You MUST include every one of these facts, using these exact names and numbers, word for "
-        "word -- never invent, round differently, omit, or change any name or number. Every time is "
-        "an estimate and must sound like one (\"estimated\", \"approximately\"), and every service is "
-        "described as NOTIFIED / responding from its location — never as \"dispatched and tracked\" "
-        "(this system tracks no vehicle):\n"
+        "by a text-to-speech voice. Write ONE calm, warm, natural-sounding spoken script -- like a "
+        "real, caring human emergency dispatcher, never an upbeat customer-service tone -- as plain "
+        "prose sentences. No markdown, no headings, no bullet points, no numbered lists: just the "
+        "words the voice should say, in order, in natural paragraphs.\n\n"
+        "The script has FOUR mandatory parts, ALL of them required, in this exact order:\n\n"
+        "PART 1 -- Begin with ONE short sentence confirming the report was submitted successfully. "
+        "Use this exact idea (your own natural words are fine, but do not skip this part):\n"
+        f"- {_CONFIRMATION_EN}\n\n"
+        "PART 2 -- Then announce ALL 5 of these responding-service facts, every single one below, "
+        "using these exact names and numbers, word for word -- never invent, round differently, "
+        "omit, or change any name or number, and never skip one even if it says details are "
+        "currently unavailable (say that plainly if so -- never invent a name or time instead). "
+        "Every time is an estimate and must sound like one (\"estimated\", \"approximately\"), and "
+        "every service is described as NOTIFIED / responding from its location — never as "
+        "\"dispatched and tracked\" (this system tracks no vehicle):\n"
         + "\n".join(f"- {f}" for f in facts)
-        + "\n\nThen give the caller these safety instructions, in this order, in your own natural "
-        "words while keeping the exact meaning of each one — do not skip any:\n"
+        + "\n\nPART 3 -- Then give the caller ALL of these safety instructions, in this order, in "
+        "your own natural words while keeping the exact meaning of each one — do not skip any:\n"
         + "\n".join(f"- {line}" for line in sop_lines)
-        + "\n\nThen close the call with these exact points, in this order, none skipped or merged "
-        "away — this includes the instruction about calling back if the caller does NOT receive the "
-        "follow-up call, which is easy to accidentally leave out but must be said:\n"
-        + "\n".join(f"- {line}" for line in closing)
-        + "\n\nReturn ONLY the spoken script itself — no preamble, no explanation, no label like "
+        + "\n\nPART 4 -- Then close the call with ALL of these exact points, in this order, none "
+        "skipped or merged away — this includes the instruction about calling back if the caller "
+        "does NOT receive the follow-up call, which is easy to accidentally leave out but must be "
+        "said:\n"
+        + "\n".join(f"- {line}" for line in _CLOSING_EN)
+        + "\n\nBefore finishing, double-check silently: does your script include Part 1, all 5 items "
+        "from Part 2, every item from Part 3, and all of Part 4? If you find yourself about to skip "
+        "or merge away any one of them, go back and include it.\n\n"
+        "Return ONLY the spoken script itself — no preamble, no explanation, no label like "
         "'Script:', nothing before or after the words the voice should actually say."
     )
 
@@ -173,8 +260,12 @@ async def generate_dispatch_script(gemini_client, state, services: Optional[dict
     this module and dispatcher_live.py — mirrors the exact pattern
     dispatcher_hindi.py already uses for its own plain-generate_content
     calls. Falls back to a deterministic plain-language script (never
-    silence) if Flash fails, times out, or returns nothing usable. The
-    ENTIRE body (including building the prompt) is inside the try block --
+    silence) if Flash fails, times out, returns nothing usable, OR returns
+    text missing a required section (verified via
+    _script_covers_all_sections -- real reported bug: the spoken briefing
+    was sometimes incomplete because Flash was trusted to include every
+    section on its own judgment; it is now verified, never merely asked).
+    The ENTIRE body (including building the prompt) is inside the try block --
     an earlier version built the prompt outside it, so a bug there would
     have escaped this function's own fallback entirely and propagated to
     the caller, which does not expect this function to ever raise."""
@@ -217,9 +308,19 @@ async def generate_dispatch_script(gemini_client, state, services: Optional[dict
                         "Latency: %.2fs\n"
                         "Characters returned: %d\n"
                         "========================", time.monotonic() - t0, len(text))
-            return text
-        logger.warning("Gemini Flash returned no usable text after %.2fs -- "
-                       "using deterministic fallback script", time.monotonic() - t0)
+            anchors = _required_anchors(state, services)
+            covered, missing = _script_covers_all_sections(text, anchors)
+            if covered:
+                return text
+            # Do NOT patch/merge -- discard Flash's output entirely and use
+            # the fully deterministic script instead (see
+            # _script_covers_all_sections' docstring for why never mix).
+            logger.warning("Gemini Flash's script is missing required section(s) %s after "
+                           "%.2fs -- discarding it and using the deterministic fallback script "
+                           "instead of a partially-complete briefing", missing, time.monotonic() - t0)
+        else:
+            logger.warning("Gemini Flash returned no usable text after %.2fs -- "
+                           "using deterministic fallback script", time.monotonic() - t0)
     except Exception:
         # DO NOT swallow silently -- full traceback, then fall back to a
         # deterministic script rather than letting this propagate (the
@@ -246,32 +347,54 @@ def _to_ssml(text: str) -> str:
     return f"<speak>{body}</speak>"
 
 
+def _extract_pcm_from_wav(wav_bytes: bytes) -> bytes:
+    """Parses a WAV container via the stdlib `wave` module (robust to minor
+    header/chunk variations, unlike a hand-rolled fixed-offset strip) and
+    returns the raw sample bytes. Raises ValueError if the audio isn't the
+    exact mono/16-bit/24kHz shape the frontend's playback path expects --
+    better to fail loudly here (falling back to on-screen text) than to
+    hand the browser audio it will render as static/noise, which is
+    exactly the real reported bug this replaces."""
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        channels, sampwidth, framerate = wf.getnchannels(), wf.getsampwidth(), wf.getframerate()
+        if channels != 1 or sampwidth != 2 or framerate != _TTS_SAMPLE_RATE_HZ:
+            raise ValueError(
+                f"Unexpected WAV format from Google TTS: channels={channels}, "
+                f"sample_width_bytes={sampwidth}, frame_rate={framerate} "
+                f"(expected mono, 16-bit, {_TTS_SAMPLE_RATE_HZ}Hz)"
+            )
+        return wf.readframes(wf.getnframes())
+
+
 async def synthesize_speech(text: str) -> bytes:
     """Google Cloud Text-to-Speech — one batch synthesis call, returns raw
-    HEADERLESS PCM16/24kHz mono bytes. Uses AudioEncoding.PCM specifically
-    (confirmed from this project's installed google-cloud-texttospeech
-    source: "audio won't be wrapped in a WAV (or any other) header" — unlike
-    AudioEncoding.LINEAR16, which returns a WAV file and would need its
-    header stripped before the raw samples could be used). 24kHz exactly
-    matches useVoiceDispatcher.ts's PLAYBACK_SAMPLE_RATE, so the existing
-    frontend playback path (already built for Gemini Live's raw PCM16/24kHz
-    output) needs no new audio-decoding logic for this new audio source.
+    HEADERLESS PCM16/24kHz mono bytes ready for useVoiceDispatcher.ts's
+    existing Gemini-Live-built playback path (no new audio-decoding logic
+    needed there).
 
-    NOT independently verified against a live Google Cloud TTS API call in
-    this environment (no live credentials available here) — before relying
-    on this in production, verify live: the Cloud Text-to-Speech API is
-    enabled for this project's service account, the chosen voice name
-    exists, and AudioEncoding.PCM is accepted by the batch synthesize_speech
-    RPC (as opposed to being restricted to the newer streaming_synthesize
-    RPC only). If PCM is ever rejected, the documented fallback is
-    LINEAR16 + stripping its WAV header via the stdlib `wave` module.
+    Uses AudioEncoding.LINEAR16, not PCM. LINEAR16 is decades-established
+    and universally supported across every Google Cloud TTS API surface;
+    PCM is newer and was tried first here on the strength of its own proto
+    docstring's claim ("audio won't be wrapped in a WAV header"), but a
+    real live call produced loud static with no intelligible speech --
+    the classic symptom of the frontend's raw-Int16Array playback path
+    misinterpreting bytes that are NOT actually headerless 16-bit PCM
+    samples (a WAV-wrapped response, a different encoding entirely, or
+    some other mismatch — the docstring's claim did not hold up against
+    the real API for this project). LINEAR16's behavior (always WAV-
+    wrapped) is unambiguous and well documented, so its header is now
+    explicitly parsed and stripped via the stdlib `wave` module
+    (_extract_pcm_from_wav) rather than assumed away — parsing real chunk
+    boundaries is robust to minor header variations in a way a fixed
+    44-byte offset strip would not be.
 
-    Raises EnglishTTSError on ANY failure -- including client construction
-    and SSML building, which an earlier version left OUTSIDE the try block,
-    so a credentials/library exception there would have escaped as some
-    other exception type entirely, past both this function's own handling
-    and the caller's `except EnglishTTSError` -- so the caller MUST wrap
-    this call in its own broad exception handler too; do not assume this
+    Raises EnglishTTSError on ANY failure -- including client construction,
+    SSML building, and WAV parsing, which an earlier version left OUTSIDE
+    (or entirely without) their own error handling, so a credentials/
+    library/format exception there would have escaped as some other
+    exception type entirely, past both this function's own handling and
+    the caller's `except EnglishTTSError` -- so the caller MUST wrap this
+    call in its own broad exception handler too; do not assume this
     docstring's promise alone is sufficient defense in depth.
     """
     t0 = time.monotonic()
@@ -289,7 +412,7 @@ async def synthesize_speech(text: str) -> bytes:
                     language_code=_TTS_VOICE_LANGUAGE, name=_TTS_VOICE_NAME,
                 ),
                 audio_config=texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.PCM,
+                    audio_encoding=texttospeech.AudioEncoding.LINEAR16,
                     sample_rate_hertz=_TTS_SAMPLE_RATE_HZ,
                     speaking_rate=_TTS_SPEAKING_RATE,
                     pitch=_TTS_PITCH,
@@ -297,18 +420,24 @@ async def synthesize_speech(text: str) -> bytes:
             ),
             timeout=_TTS_TIMEOUT_S,
         )
+        wav_bytes = response.audio_content
+        if not wav_bytes:
+            raise ValueError("Google TTS returned no audio content")
+        audio = _extract_pcm_from_wav(wav_bytes)
     except EnglishTTSError:
         raise
     except Exception as e:
         # Full traceback, then convert to EnglishTTSError -- this is the
         # ONLY exception type the caller is allowed to assume it will ever
-        # see from this function.
-        logger.exception("Google TTS request failed after %.2fs", time.monotonic() - t0)
+        # see from this function. Covers the TTS request itself, an empty
+        # response, AND a malformed/unexpected WAV payload -- all three
+        # must fall back to on-screen text, never hand the browser bytes
+        # it can't safely play.
+        logger.exception("Google TTS request/parsing failed after %.2fs", time.monotonic() - t0)
         raise EnglishTTSError(str(e)) from e
-    audio = response.audio_content
     if not audio:
-        logger.error("Google TTS returned no audio content after %.2fs", time.monotonic() - t0)
-        raise EnglishTTSError("Google TTS returned no audio content")
+        logger.error("Google TTS's WAV contained no audio frames after %.2fs", time.monotonic() - t0)
+        raise EnglishTTSError("Google TTS returned a WAV file with no audio frames")
     duration_s = len(audio) / 2 / _TTS_SAMPLE_RATE_HZ  # 16-bit mono PCM -> 2 bytes/sample
     logger.info("========================\n"
                 "Stage 8\n"

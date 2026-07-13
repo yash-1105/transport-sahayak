@@ -222,6 +222,58 @@ class _RecordingWS:
     async def send_bytes(self, data):
         self.bytes_sent.append(data)
 
+# ── dispatch_briefing.py: every responder section is mandatory, never omitted ──
+# Real reported bug: the spoken English briefing was sometimes incomplete --
+# a service missing from the dispatch_update payload (one match failed, or
+# it just wasn't relevant) silently OMITTED that entire section instead of
+# saying it was unavailable. _responder_facts_en must now ALWAYS return
+# exactly 5 lines (ambulance, fire, towing, trauma centre, police, in that
+# order), real data or an explicit "currently unavailable" line, never a
+# gap. (Hindi's _responder_facts_hi is untouched and still has the old
+# omit-if-missing behavior -- this fix is English-only per instruction.)
+from severity_engine.dispatch_briefing import _CLOSING_EN, _responder_facts_en
+
+_full_services = {
+    "ambulance": {"name": "108 Post — Baraut", "etaMinutes": 26, "distanceKm": 18.2},
+    "fire": {"name": "Fire Post — Muzaffarnagar Bypass", "etaMinutes": 36, "distanceKm": 22.0},
+    "towing": {"name": "Recovery Post — Shamli", "etaMinutes": 23, "distanceKm": 15.1},
+    "hospital": {"name": "Ganga Amrit Hospital", "etaMinutes": 18, "distanceKm": 12.4},
+    "police": {"name": "Jorabat PS", "etaMinutes": 12, "distanceKm": 7.0},
+}
+_full_facts = _responder_facts_en(_full_services)
+check("_responder_facts_en returns exactly 5 lines when all services are present",
+      len(_full_facts) == 5)
+check("_responder_facts_en names every real service's location, in order (ambulance/fire/towing/trauma/police)",
+      [loc in _full_facts[i] for i, loc in enumerate(
+          ["Baraut", "Muzaffarnagar Bypass", "Shamli", "Ganga Amrit Hospital", "Jorabat PS"])] == [True] * 5)
+check("_responder_facts_en calls the hospital section 'trauma centre'",
+      "trauma centre" in _full_facts[3].lower())
+
+_partial_facts = _responder_facts_en({
+    "ambulance": {"name": "108 Post — Baraut", "etaMinutes": 26, "distanceKm": 18.2},
+    # fire, towing, hospital, police all missing
+})
+check("_responder_facts_en STILL returns exactly 5 lines when only 1 of 5 services is present",
+      len(_partial_facts) == 5)
+check("_responder_facts_en announces missing services as 'currently unavailable', never omitted",
+      [
+          "unavailable" in _partial_facts[1].lower(),  # fire
+          "unavailable" in _partial_facts[2].lower(),  # towing
+          "unavailable" in _partial_facts[3].lower(),  # trauma centre
+          "unavailable" in _partial_facts[4].lower(),  # police
+      ] == [True, True, True, True])
+
+_no_facts = _responder_facts_en(None)
+check("_responder_facts_en returns exactly 5 'currently unavailable' lines when NO dispatch data ever arrived",
+      len(_no_facts) == 5 and all("unavailable" in f.lower() for f in _no_facts))
+
+check("_CLOSING_EN (English-only) is trimmed to exactly the 3 mandatory closing sections "
+      "(2-hour follow-up, callback-if-missed, polite close)",
+      len(_CLOSING_EN) == 3
+      and "two hours" in _CLOSING_EN[0].lower()
+      and "call this helpline again" in _CLOSING_EN[1].lower()
+      and "disconnect" in _CLOSING_EN[2].lower() and "take care" in _CLOSING_EN[2].lower())
+
 # ── english_briefing.py: Gemini Flash script generation ───────────────────────
 # Architecture (2026-07): Gemini Live's job now ends at the post-submit
 # acknowledgment ("your report has been submitted successfully -- stay on
@@ -245,13 +297,80 @@ class _FakeGeminiClient:
             return _FakeGeminiResponse(text)
         self.aio = SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
 
-async def _flash_script_returns_stripped_text():
-    client = _FakeGeminiClient(text="  A calm dispatcher script.  ")
-    script = await eb.generate_dispatch_script(client, DispatcherState(language="en-IN"), None)
-    return script == "A calm dispatcher script."
+def _complete_fake_flash_script(services=None):
+    # A fully-compliant, naturally-REPHRASED script (not the deterministic
+    # wording verbatim) -- covers every anchor group for services=None with
+    # a default (no-flags) DispatcherState, so it should be ACCEPTED as-is.
+    return (
+        "  Great news — your registration for this report went through successfully. "
+        "Right now, ambulance details are unavailable, and fire response details are also "
+        "unavailable at this moment. Towing support details are unavailable too, along with "
+        "trauma centre information, which is unavailable, and police station details, "
+        "unavailable as well. Please stay a safe distance from traffic and remain calm. "
+        "Within the next two hours our team will follow up, and if you miss that call, ring "
+        "this helpline again later.  "
+    )
 
-check("generate_dispatch_script returns Gemini Flash's text, stripped",
-      asyncio.run(_flash_script_returns_stripped_text()))
+async def _flash_script_returns_stripped_text_when_complete():
+    client = _FakeGeminiClient(text=_complete_fake_flash_script())
+    script = await eb.generate_dispatch_script(client, DispatcherState(language="en-IN"), None)
+    return script == _complete_fake_flash_script().strip()
+
+check("generate_dispatch_script returns Gemini Flash's text, stripped, when it covers every section",
+      asyncio.run(_flash_script_returns_stripped_text_when_complete()))
+
+async def _flash_script_rejected_when_missing_a_section():
+    # Real reported bug: the spoken briefing was sometimes incomplete
+    # because Flash was trusted to include every section on its own
+    # judgment. Plausible-sounding but INCOMPLETE Flash output (drops fire/
+    # towing/trauma/police from the "unavailable" list) must be discarded
+    # entirely in favor of the deterministic fallback, not accepted as-is.
+    _logging.disable(_logging.CRITICAL)
+    try:
+        incomplete = (
+            "Your report has been registered successfully. Ambulance details are "
+            "currently unavailable. Please stay calm and keep a safe distance. Our "
+            "team will call within two hours, or call this helpline again."
+        )
+        client = _FakeGeminiClient(text=incomplete)
+        script = await eb.generate_dispatch_script(client, DispatcherState(language="en-IN"), None)
+        # Rejected Flash's text -> fell back to the deterministic script,
+        # which explicitly names EVERY unavailable service.
+        return (
+            script != incomplete
+            and "fire service dispatch details are currently unavailable" in script.lower()
+            and "towing and recovery service dispatch details are currently unavailable" in script.lower()
+            and "trauma centre are currently unavailable" in script.lower()
+            and "police station are currently unavailable" in script.lower()
+        )
+    finally:
+        _logging.disable(_logging.NOTSET)
+
+check("generate_dispatch_script discards Flash's output entirely if it omits any required section",
+      asyncio.run(_flash_script_rejected_when_missing_a_section()))
+
+# The deterministic fallback (also what the anti-omission Flash prompt is
+# built from) must follow the exact required 10-section order: submission
+# confirmation, then ambulance/fire/towing/trauma-centre/police, then SOPs,
+# then the 3 closing sections.
+_order_state = DispatcherState(language="en-IN")
+_order_state.flags = {"Heavy bleeding"}
+_order_state.flags_discussed = {"Heavy bleeding"}
+_order_script = eb._fallback_script(_order_state, _full_services)
+_order_positions = [
+    _order_script.find("registered successfully"),
+    _order_script.find("Baraut"),
+    _order_script.find("Muzaffarnagar Bypass"),
+    _order_script.find("Shamli"),
+    _order_script.find("Ganga Amrit Hospital"),
+    _order_script.find("Jorabat PS"),
+    _order_script.find("apply firm pressure"),  # bleeding SOP
+    _order_script.find("two hours"),
+    _order_script.find("call this helpline again"),
+    _order_script.find("Take care"),
+]
+check("_fallback_script's 10 sections appear in the exact required order",
+      all(p >= 0 for p in _order_positions) and _order_positions == sorted(_order_positions))
 
 async def _flash_script_falls_back_on_exception():
     _logging.disable(_logging.CRITICAL)
@@ -269,7 +388,9 @@ check("generate_dispatch_script falls back to a deterministic script if Flash ra
 async def _flash_script_falls_back_on_empty_response():
     client = _FakeGeminiClient(text="")
     script = await eb.generate_dispatch_script(client, DispatcherState(language="en-IN"), None)
-    return "registered successfully" in script and "notified" in script.lower()
+    # No services data at all -> every one of the 5 responder sections must
+    # explicitly say so (never silently omitted -- see _responder_facts_en).
+    return "registered successfully" in script and script.lower().count("currently unavailable") == 5
 
 check("generate_dispatch_script falls back to a deterministic script on an empty Flash response",
       asyncio.run(_flash_script_falls_back_on_empty_response()))
@@ -281,13 +402,36 @@ check("_to_ssml wraps the text in <speak> and inserts pauses between sentences",
 check("_to_ssml XML-escapes a literal ampersand", "&amp;" in eb._to_ssml("Fire & Rescue arrived."))
 
 # ── english_briefing.py: Google Cloud TTS (mocked client -- no live API call) ──
+# Real reported bug: a live call produced loud static with no intelligible
+# speech. Root cause: AudioEncoding.PCM's own proto docstring claims
+# headerless output, but the real API's batch synthesize_speech RPC didn't
+# honor that the way the frontend's raw-Int16Array playback path assumed --
+# switched to AudioEncoding.LINEAR16 (universally supported, always
+# WAV-wrapped) with explicit WAV parsing via the stdlib `wave` module
+# (_extract_pcm_from_wav), so these fakes must return REAL WAV bytes, not
+# arbitrary bytes, to exercise the actual code path.
+import io
+import struct
+import wave
+
+def _make_wav_bytes(pcm_frames: bytes, channels=1, sampwidth=2, framerate=24000) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sampwidth)
+        wf.setframerate(framerate)
+        wf.writeframes(pcm_frames)
+    return buf.getvalue()
+
+_SAMPLE_PCM_FRAMES = struct.pack("<8h", 100, -100, 200, -200, 300, -300, 400, -400)
+
 class _FakeTTSResponse:
     def __init__(self, audio):
         self.audio_content = audio
 
 class _FakeTTSClient:
-    def __init__(self, audio=b"\x01\x02", raise_exc=None):
-        self._audio = audio
+    def __init__(self, audio=None, raise_exc=None):
+        self._audio = _make_wav_bytes(_SAMPLE_PCM_FRAMES) if audio is None else audio
         self._raise = raise_exc
     async def synthesize_speech(self, input=None, voice=None, audio_config=None):
         if self._raise:
@@ -296,13 +440,13 @@ class _FakeTTSClient:
 
 async def _tts_returns_raw_audio_bytes():
     orig = eb._get_tts_client
-    eb._get_tts_client = lambda: _FakeTTSClient(audio=b"\x01\x02\x03\x04")
+    eb._get_tts_client = lambda: _FakeTTSClient(audio=_make_wav_bytes(_SAMPLE_PCM_FRAMES))
     try:
-        return await eb.synthesize_speech("Hello.") == b"\x01\x02\x03\x04"
+        return await eb.synthesize_speech("Hello.") == _SAMPLE_PCM_FRAMES
     finally:
         eb._get_tts_client = orig
 
-check("synthesize_speech returns the raw audio bytes Google TTS responds with",
+check("synthesize_speech extracts the raw PCM frames from Google TTS's WAV response",
       asyncio.run(_tts_returns_raw_audio_bytes()))
 
 async def _tts_failure_raises_english_tts_error():
@@ -322,6 +466,7 @@ check("synthesize_speech raises EnglishTTSError on any Google TTS failure",
       asyncio.run(_tts_failure_raises_english_tts_error()))
 
 async def _tts_empty_audio_raises():
+    _logging.disable(_logging.CRITICAL)
     orig = eb._get_tts_client
     eb._get_tts_client = lambda: _FakeTTSClient(audio=b"")
     try:
@@ -331,6 +476,44 @@ async def _tts_empty_audio_raises():
         return True
     finally:
         eb._get_tts_client = orig
+        _logging.disable(_logging.NOTSET)
+
+async def _tts_wrong_sample_rate_raises():
+    # The exact class of bug that caused the reported static: audio that
+    # doesn't match the mono/16-bit/24kHz shape the frontend expects must
+    # be REJECTED (falls back to on-screen text), never handed to the
+    # browser to render as noise.
+    _logging.disable(_logging.CRITICAL)
+    orig = eb._get_tts_client
+    wrong_rate_wav = _make_wav_bytes(_SAMPLE_PCM_FRAMES, framerate=16000)
+    eb._get_tts_client = lambda: _FakeTTSClient(audio=wrong_rate_wav)
+    try:
+        await eb.synthesize_speech("Hello.")
+        return False
+    except eb.EnglishTTSError:
+        return True
+    finally:
+        eb._get_tts_client = orig
+        _logging.disable(_logging.NOTSET)
+
+async def _tts_stereo_raises():
+    _logging.disable(_logging.CRITICAL)
+    orig = eb._get_tts_client
+    stereo_wav = _make_wav_bytes(_SAMPLE_PCM_FRAMES, channels=2)
+    eb._get_tts_client = lambda: _FakeTTSClient(audio=stereo_wav)
+    try:
+        await eb.synthesize_speech("Hello.")
+        return False
+    except eb.EnglishTTSError:
+        return True
+    finally:
+        eb._get_tts_client = orig
+        _logging.disable(_logging.NOTSET)
+
+check("synthesize_speech rejects a WAV response at the wrong sample rate instead of playing static",
+      asyncio.run(_tts_wrong_sample_rate_raises()))
+check("synthesize_speech rejects a stereo WAV response instead of playing static",
+      asyncio.run(_tts_stereo_raises()))
 
 check("synthesize_speech raises EnglishTTSError if Google TTS returns empty audio",
       asyncio.run(_tts_empty_audio_raises()))
