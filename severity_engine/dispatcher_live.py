@@ -686,6 +686,27 @@ class DispatcherSession:
         self._caller_last_spoke: float = 0.0
         self._model_last_spoke: float = 0.0
         self._nudge_sent_at: float = 0.0
+        # Real reported bug: the agent asked the same question twice /
+        # repeated itself. Root cause: _model_last_spoke only updates on
+        # actual AUDIO (deliberately -- a caller must never be left hanging
+        # behind silent tool churn with no spoken reply, see the tool_call
+        # handling below), so a caller statement that triggers SEVERAL
+        # sequential tool calls (e.g. search_incident_type then two
+        # update_form_field calls) plus real network/Vertex round-trip
+        # latency could take long enough to exceed _RESPONSE_TIMEOUT_S
+        # (12s) with _model_last_spoke still at its OLD value -- the
+        # watchdog would then inject a synthetic "the caller is still
+        # waiting, respond now" turn while the model's real response to
+        # the caller's actual statement was still in flight. Gemini Live
+        # is reactive to whatever turns it receives, so this can produce
+        # two overlapping responses to the SAME caller statement -- the
+        # nudge text itself ("respond ... now") naturally makes the model
+        # re-ask whatever it was already in the middle of asking. Tracks
+        # the most recent tool_call receipt SEPARATELY from
+        # _model_last_spoke (which must keep meaning "the model actually
+        # spoke", not just "did something") -- see _watchdog and the
+        # tool_call handling in _pump_gemini_to_client.
+        self._tool_activity_at: float = 0.0
         # Post-submission closing briefing (see english_briefing.py). Gemini
         # Live's OWN job now ends right after the post-submit acknowledgment
         # ("your report has been submitted successfully -- stay on the
@@ -1388,7 +1409,18 @@ class DispatcherSession:
                 waiting_since = self._session_started
                 timeout = _GREETING_TIMEOUT_S
             elif self._caller_last_spoke > self._model_last_spoke:
-                waiting_since = self._caller_last_spoke
+                # max(...) with _tool_activity_at is the actual fix for the
+                # repeated-question bug -- see _tool_activity_at's __init__
+                # comment. Without it, a caller statement needing several
+                # sequential tool calls (search_incident_type, more than one
+                # update_form_field) could take long enough that this branch
+                # alone would time out and nudge WHILE the model's real
+                # response was still in flight, producing a duplicate/
+                # overlapping reply. Each tool call moves this forward, so
+                # genuine ongoing progress keeps resetting the clock; only
+                # real silence (no tool activity AND no speech) since the
+                # LAST bit of progress still eventually nudges/reconnects.
+                waiting_since = max(self._caller_last_spoke, self._tool_activity_at)
                 timeout = _RESPONSE_TIMEOUT_S
             else:
                 continue
@@ -1667,15 +1699,29 @@ class DispatcherSession:
                                        "server will close this connection soon",
                                        getattr(response.go_away, "time_left", None))
                     if response.tool_call:
-                        # Deliberately NOT counted as the model "speaking" --
-                        # the watchdog tracks audible replies only, so a
-                        # caller left hanging behind silent tool churn or an
-                        # empty turn still gets nudged ("never leave the
-                        # user without a spoken reply").
+                        # Deliberately NOT counted as the model "speaking" in
+                        # _model_last_spoke -- the watchdog's SPOKEN-reply
+                        # tracking must stay audio-only, so a caller left
+                        # hanging behind silent tool churn or an empty turn
+                        # still eventually gets nudged ("never leave the user
+                        # without a spoken reply"). But tool-call receipt IS
+                        # still real, observable evidence the model is
+                        # actively working on responding RIGHT NOW -- tracked
+                        # separately in _tool_activity_at (see its __init__
+                        # comment for the real bug this fixes: without this,
+                        # a caller statement needing several sequential tool
+                        # calls could take long enough that the watchdog
+                        # nudged mid-flight, causing a duplicate response /
+                        # repeated question). Updated before AND after each
+                        # individual call so a slow multi-tool-call turn
+                        # keeps extending the grace window as it makes
+                        # genuine progress, not just once at the start.
                         function_responses = []
                         for fc in response.tool_call.function_calls:
+                            self._tool_activity_at = time.monotonic()
                             result = await self._dispatch_tool(fc.name, fc.args or {})
                             function_responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+                            self._tool_activity_at = time.monotonic()
                         await live_session.send_tool_response(function_responses=function_responses)
 
                     sc = response.server_content

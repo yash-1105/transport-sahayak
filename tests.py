@@ -1257,6 +1257,103 @@ _delays = [_RECONNECT_BACKOFF_S[min(i, len(_RECONNECT_BACKOFF_S) - 1)] for i in 
 check("reconnect backoff strictly increases then holds (never flat from the first retry)",
       _delays == sorted(_delays) and _delays[0] < _delays[-1])
 
+# Real reported bug: the agent asked the same question twice / repeated
+# itself. Root cause: _watchdog's RESPONSE_TIMEOUT branch only tracked
+# _model_last_spoke (audio-only, deliberately) and _caller_last_spoke --
+# a caller statement needing several sequential tool calls (search_
+# incident_type, more than one update_form_field) plus real network/Vertex
+# latency could exceed the timeout with neither of those having moved,
+# causing the watchdog to inject a synthetic "respond now" turn WHILE the
+# model's real response was still in flight -- Gemini Live is reactive, so
+# this produced a genuine duplicate/overlapping response to one caller
+# statement. Fixed with _tool_activity_at, updated on every individual
+# tool-call receipt, folded into the watchdog's waiting_since via max().
+import time as _wdtime
+
+class _FakeLiveSessionForWatchdog:
+    def __init__(self):
+        self.sent_turns = []
+    async def send_client_content(self, turns=None, turn_complete=True):
+        self.sent_turns.append(turns.parts[0].text)
+
+async def _watchdog_does_not_nudge_during_ongoing_tool_activity():
+    from severity_engine import dispatcher_live as dl
+    _logging.disable(_logging.CRITICAL)
+    old_timeout = dl._RESPONSE_TIMEOUT_S
+    dl._RESPONSE_TIMEOUT_S = 1.0  # shrunk only for test speed (poll interval is a fixed 2s)
+    try:
+        s = DispatcherSession.__new__(DispatcherSession)
+        s.state = DispatcherState(language="en-IN")
+        s._live_session = _FakeLiveSessionForWatchdog()
+        now = _wdtime.monotonic()
+        s._session_started = now
+        s._model_last_spoke = now  # model's last (previous) reply, e.g. the greeting
+        s._caller_last_spoke = now + 0.01  # caller then spoke, prompting a multi-tool-call turn
+        s._tool_activity_at = now + 0.01
+        s._nudge_sent_at = 0.0
+
+        watchdog_task = asyncio.create_task(s._watchdog())
+        try:
+            # Simulate a slow multi-tool-call turn: keep bumping
+            # tool_activity_at every 0.5s for 4s total -- well past the
+            # shrunk 1s timeout with no single bump, but each one should
+            # keep resetting the clock so the watchdog never sees a real
+            # timeout-length gap.
+            for _ in range(8):
+                await asyncio.sleep(0.5)
+                s._tool_activity_at = _wdtime.monotonic()
+        finally:
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except asyncio.CancelledError:
+                pass
+
+        return len(s._live_session.sent_turns) == 0
+    finally:
+        dl._RESPONSE_TIMEOUT_S = old_timeout
+        _logging.disable(_logging.NOTSET)
+
+check("watchdog does NOT nudge while tool-call activity is ongoing (the actual repeated-question fix)",
+      asyncio.run(_watchdog_does_not_nudge_during_ongoing_tool_activity()))
+
+async def _watchdog_still_nudges_on_genuine_silence():
+    # Safety net must survive the fix above: if there is NO tool activity
+    # and NO speech for the full timeout, the watchdog must still nudge
+    # (never leave the caller hanging on a genuinely wedged session).
+    from severity_engine import dispatcher_live as dl
+    _logging.disable(_logging.CRITICAL)
+    old_timeout = dl._RESPONSE_TIMEOUT_S
+    dl._RESPONSE_TIMEOUT_S = 0.5
+    try:
+        s = DispatcherSession.__new__(DispatcherSession)
+        s.state = DispatcherState(language="en-IN")
+        s._live_session = _FakeLiveSessionForWatchdog()
+        now = _wdtime.monotonic()
+        s._session_started = now
+        s._model_last_spoke = now  # model's last (previous) reply
+        s._caller_last_spoke = now + 0.01  # caller spoke AFTER that -- now genuinely waiting on a reply
+        s._tool_activity_at = 0.0  # no tool activity at all
+        s._nudge_sent_at = 0.0
+
+        watchdog_task = asyncio.create_task(s._watchdog())
+        try:
+            await asyncio.sleep(2.7)  # past one 2s poll tick, well past the shrunk 0.5s timeout
+        finally:
+            watchdog_task.cancel()
+            try:
+                await watchdog_task
+            except asyncio.CancelledError:
+                pass
+
+        return len(s._live_session.sent_turns) >= 1
+    finally:
+        dl._RESPONSE_TIMEOUT_S = old_timeout
+        _logging.disable(_logging.NOTSET)
+
+check("watchdog still nudges on genuine silence (no tool activity, no speech) -- safety net preserved",
+      asyncio.run(_watchdog_still_nudges_on_genuine_silence()))
+
 # WebSocket keepalive (real reported bug, persisting even after the 3-segment
 # split: the call would sometimes go silent mid-briefing with no error shown
 # at all -- not a spoken cutoff, a hard connection drop). Root cause: this
