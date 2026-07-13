@@ -59,13 +59,22 @@ _FLASH_MAX_OUTPUT_TOKENS = int(os.environ.get("ENGLISH_BRIEFING_FLASH_MAX_TOKENS
 
 # ── Google Cloud Text-to-Speech ────────────────────────────────────────────────
 _TTS_VOICE_LANGUAGE = os.environ.get("ENGLISH_TTS_LANGUAGE_CODE", "en-IN")
-# Neural2 is a long-established, generally-available voice family with
-# well-documented en-IN voice IDs -- chosen as a default that won't 400 on an
-# unverified project. If this project's Google Cloud console shows Chirp3-HD
-# or Studio voices enabled (newer, higher-quality tiers), switch
-# ENGLISH_TTS_VOICE_NAME to one of those. NOT independently verified live —
-# see synthesize_speech's docstring.
-_TTS_VOICE_NAME = os.environ.get("ENGLISH_TTS_VOICE_NAME", "en-IN-Neural2-D")
+# Voice matching (real user request): the live conversation (Gemini Live,
+# dispatcher_live.py) and this closing briefing used to sound like two
+# different people. Gemini Live is now explicitly pinned to the
+# native-audio voice "Charon" (see dispatcher_live.py's _ENGLISH_VOICE_NAME
+# comment for the full reasoning) instead of an unset, undocumented, can-
+# change-anytime default. `en-IN-Chirp3-HD-Charon` is the closest achievable
+# match FOR THIS SPECIFIC PROJECT: Chirp 3 HD and Gemini Live's native-audio
+# voices are the SAME underlying named voice models, so using the identical
+# name on both sides matches gender and character, not just a same-gender
+# guess across two unrelated voice catalogs. (The previous default,
+# `en-IN-Neural2-D`, was FEMALE -- confirmed a gender mismatch on top of not
+# being voice-matched to Gemini Live at all.) If this project's Google Cloud
+# console does NOT have Chirp3-HD enabled, fall back to a Neural2 voice of
+# the correct gender (`en-IN-Neural2-B` or `-C`, both MALE) rather than
+# reverting to `-D`.
+_TTS_VOICE_NAME = os.environ.get("ENGLISH_TTS_VOICE_NAME", "en-IN-Chirp3-HD-Charon")
 _TTS_SPEAKING_RATE = float(os.environ.get("ENGLISH_TTS_SPEAKING_RATE", "1.0"))
 _TTS_PITCH = float(os.environ.get("ENGLISH_TTS_PITCH", "0.0"))
 # Matches useVoiceDispatcher.ts's PLAYBACK_SAMPLE_RATE exactly -- do not change

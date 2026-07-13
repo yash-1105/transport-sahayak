@@ -51,7 +51,9 @@ from google.genai import types
 from google.oauth2 import service_account
 
 from . import classifier, local_extract
-from .english_briefing import EnglishTTSError, generate_dispatch_script, synthesize_speech
+from .english_briefing import (
+    EnglishTTSError, _TTS_SAMPLE_RATE_HZ, generate_dispatch_script, synthesize_speech,
+)
 from .google_credentials import load_service_account_info
 
 logger = logging.getLogger("dispatcher_live")
@@ -61,6 +63,28 @@ _LOCATION = os.environ.get("VERTEX_AI_LOCATION", "us-central1")
 _MODEL = os.environ.get("GEMINI_LIVE_MODEL", "gemini-live-2.5-flash-native-audio")
 SUPPORTED_LANGUAGES = ("en-IN", "hi-IN")
 _DEFAULT_LANGUAGE = "en-IN"
+
+# English (en-IN) only -- Hindi never calls _build_config/_run_live_session
+# at all (its own pipeline is Sarvam Saaras/Bulbul + plain Gemini
+# generate_content, confirmed no reference to either function anywhere in
+# dispatcher_hindi.py). Explicitly pins Gemini Live's spoken voice rather
+# than leaving it at the API default: the conversation (Gemini Live) and
+# the closing briefing (Gemini Flash script + Google Cloud TTS, see
+# english_briefing.py) are two entirely different audio-generation systems
+# that used to sound like two different people. Google's own developer
+# forum confirms the unset default is undocumented and can change without
+# notice, so pinning it is correct regardless of which voice is chosen.
+# "Charon" (documented character: "Informative") was chosen as the closest
+# match among Gemini's native-audio prebuilt voices to this app's required
+# tone (calm, warm, serious, NEVER upbeat/chipper -- see the system
+# instruction's TONE section) -- ruled out Puck/Fenrir (explicitly
+# upbeat/excitable) and Kore/Orus (firm/commanding rather than calm-warm).
+# english_briefing.py's ENGLISH_TTS_VOICE_NAME defaults to the
+# identically-named `en-IN-Chirp3-HD-Charon` specifically because Chirp 3
+# HD and Gemini Live's native-audio voices are the SAME underlying named
+# voice models -- using the same name on both sides is the closest
+# achievable cross-engine match, not just a same-gender guess.
+_ENGLISH_VOICE_NAME = os.environ.get("GEMINI_LIVE_VOICE_NAME", "Charon")
 
 _LOCATION_TIMEOUT_S = 8.0
 
@@ -129,6 +153,18 @@ _KEEPALIVE_INTERVAL_S = float(os.environ.get("DISPATCHER_KEEPALIVE_INTERVAL_S", 
 # english_briefing.py) -- each either returns a complete result or raises,
 # with no "half-delivered" state in between for a stall timer to detect.
 _DISPATCH_WAIT_S = float(os.environ.get("DISPATCH_BRIEFING_WAIT_S", "30"))
+
+# Real reported bug: the agent started speaking the closing briefing for
+# real, then was cut off abruptly mid-sentence. Root cause was on the
+# frontend (useVoiceDispatcher.ts's ws.onclose calling stop() instantly
+# instead of draining queued playback like its own call_complete handler
+# already correctly does) -- that is the actual fix. This margin is
+# defense in depth only: app.py's route handler closes this WebSocket in
+# its own `finally` right after run() returns, so keeping the connection
+# open for roughly as long as the audio's real playback duration means the
+# server-side close can never plausibly race the browser, independent of
+# whatever the frontend does.
+_POST_BRIEFING_DRAIN_MARGIN_S = float(os.environ.get("DISPATCH_BRIEFING_DRAIN_MARGIN_S", "1.0"))
 
 _RECONNECT_APOLOGY = {
     "hi-IN": "मुझे क्षमा कीजिए, तकनीकी समस्या आ गई है। कृपया दोबारा बोलें।",
@@ -595,6 +631,28 @@ class DispatcherSession:
         self._live_session = None
         self._client_task: Optional["asyncio.Task"] = None
         self._keepalive_task: Optional["asyncio.Task"] = None
+        # Real reported bug: the agent started speaking the closing briefing
+        # for real, then went silent/cut off partway through -- root-caused
+        # to unsynchronized concurrent writes on this single WebSocket
+        # connection. _keepalive() sends a frame every _KEEPALIVE_INTERVAL_S
+        # (10s) for the ENTIRE call with no coordination, while
+        # _send_audio_chunks() streams potentially 100+ chunks of a full
+        # briefing (ambulance/fire/towing/hospital/police/SOPs/closing can
+        # easily run past 10s of speech) and _pump_gemini_to_client() also
+        # writes audio/JSON during the conversation phase -- nothing
+        # prevented two of these from calling send_bytes()/send_json() on
+        # the SAME ASGI WebSocket at the same instant. A concurrent write
+        # collision on Starlette/uvicorn's WebSocket can raise (or, worse,
+        # interleave frames), and _send_audio_chunks() previously treated
+        # ANY send exception as fatal for the WHOLE remaining clip (logs and
+        # returns), then _deliver_briefing_or_raise still sent call_complete
+        # right after regardless -- silently dropping however many chunks
+        # were left, which is exactly "spoke real words, then shut down
+        # abruptly." Every WebSocket write in this class now goes through
+        # this single lock (_safe_send_json, _send_audio_chunks, and the
+        # raw send_bytes for Gemini Live's own audio in
+        # _pump_gemini_to_client) so no two writes can ever interleave.
+        self._ws_send_lock: "asyncio.Lock" = asyncio.Lock()
         # Watchdog bookkeeping (see _watchdog): monotonic timestamps of the
         # last caller speech and last model activity in the CURRENT session.
         self._session_started: float = 0.0
@@ -635,9 +693,27 @@ class DispatcherSession:
 
     async def _safe_send_json(self, payload: dict) -> None:
         try:
-            await self.websocket.send_json(payload)
+            async with self._ws_send_lock:
+                await self.websocket.send_json(payload)
         except Exception:
             logger.debug("Could not send message on /ws/dispatcher (socket likely closed)", exc_info=True)
+
+    async def _safe_send_bytes(self, data: bytes) -> bool:
+        """Same lock-protected send discipline as _safe_send_json, for
+        binary audio frames -- see the _ws_send_lock comment in __init__
+        for why every WebSocket write in this class must go through one of
+        these two methods, never self.websocket.send_bytes/send_json
+        directly. Returns False (rather than raising) on failure so callers
+        that need to know whether a chunk actually went out (unlike
+        _safe_send_json's fire-and-forget JSON events) can react -- see
+        _send_audio_chunks."""
+        try:
+            async with self._ws_send_lock:
+                await self.websocket.send_bytes(data)
+            return True
+        except Exception:
+            logger.debug("Could not send bytes on /ws/dispatcher (socket likely closed)", exc_info=True)
+            return False
 
     def _compute_still_missing(self) -> list[str]:
         missing = []
@@ -1041,15 +1117,29 @@ class DispatcherSession:
         # and reproduced on EVERY call for that caller ("not working, every
         # time"), while different test audio never encounters it. Temperature
         # alone gives the consistency without the correlated-failure risk.
-        # English is deliberately left at API defaults -- it's confirmed
-        # working well and must not change (per user request).
+        # Hindi's own sampling/consistency settings above are the only
+        # config that ever differs by language for THIS reason; the voice
+        # pin below is a separate, English-only change (see
+        # _ENGLISH_VOICE_NAME's module-level comment for why) -- Hindi
+        # never reaches this method at all, so the language check here is
+        # belt-and-suspenders, not the real safety mechanism.
         hindi_consistency: dict = (
             {"temperature": 0.4}
             if self.state.language == "hi-IN" else {}
         )
+        speech_config = (
+            types.SpeechConfig(
+                language_code=self.state.language,
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=_ENGLISH_VOICE_NAME)
+                ),
+            )
+            if self.state.language == "en-IN"
+            else types.SpeechConfig(language_code=self.state.language)
+        )
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(language_code=self.state.language),
+            speech_config=speech_config,
             tools=[{"function_declarations": _TOOL_DECLARATIONS}],
             system_instruction=types.Content(parts=[types.Part(text=_system_instruction(self.state.language))]),
             input_audio_transcription=types.AudioTranscriptionConfig(),
@@ -1492,7 +1582,18 @@ class DispatcherSession:
         await self._safe_send_json({"type": "status", "state": "briefing"})
         await self._send_audio_chunks(audio)
         await self._safe_send_json({"type": "call_complete"})
-        logger.info("Call ended (briefing delivered)")
+        # Belt-and-suspenders alongside the frontend's own fix (see
+        # useVoiceDispatcher.ts's ws.onclose): the browser drives its own
+        # drain-before-teardown timing from what it actually has queued, so
+        # this delay is not what makes playback safe. But app.py's route
+        # handler awaits run() and then closes this WebSocket in its own
+        # finally block -- keeping the connection open for roughly as long
+        # as real playback takes means the server-side close itself can
+        # never plausibly race the browser's playback, on top of (not
+        # instead of) the frontend already handling this correctly.
+        audio_duration_s = len(audio) / 2 / _TTS_SAMPLE_RATE_HZ  # 16-bit mono PCM -> 2 bytes/sample
+        await asyncio.sleep(audio_duration_s + _POST_BRIEFING_DRAIN_MARGIN_S)
+        logger.info("Call ended (briefing delivered, %.1fs after sending the final chunk)", audio_duration_s)
 
     async def _send_audio_chunks(self, audio: bytes) -> None:
         """Sends already-synthesized PCM16/24kHz audio to the browser as a
@@ -1504,15 +1605,22 @@ class DispatcherSession:
         rather than live-paced like a real-time stream, schedules
         identically to several consecutive Gemini Live turns would have.
         Chunked rather than sent as one frame to mirror that existing
-        pattern and avoid one very large WS message."""
+        pattern and avoid one very large WS message.
+
+        Every send goes through _safe_send_bytes (the shared _ws_send_lock)
+        -- see that lock's comment in __init__ for the real bug this fixes:
+        an unsynchronized write here could previously collide with
+        _keepalive's periodic frame (sent for the whole call, uncoordinated)
+        and abort the ENTIRE remaining clip on the first exception, silently
+        dropping however much of the briefing was left unsent."""
         chunk_size = 8192
-        for i in range(0, len(audio), chunk_size):
-            try:
-                await self.websocket.send_bytes(audio[i:i + chunk_size])
-            except Exception:
-                logger.debug("Could not send a briefing audio chunk (socket likely closed)",
-                             exc_info=True)
+        total_chunks = (len(audio) + chunk_size - 1) // chunk_size
+        for n, i in enumerate(range(0, len(audio), chunk_size), start=1):
+            if not await self._safe_send_bytes(audio[i:i + chunk_size]):
+                logger.warning("Briefing audio send failed at chunk %d/%d -- "
+                               "socket likely closed, abandoning the rest", n, total_chunks)
                 return
+        logger.info("Sent all %d briefing audio chunk(s) (%d bytes)", total_chunks, len(audio))
 
     async def _pump_gemini_to_client(self) -> None:
         live_session = self._live_session
@@ -1559,9 +1667,7 @@ class DispatcherSession:
                             if part.inline_data and part.inline_data.data:
                                 self._model_last_spoke = time.monotonic()
                                 await self._safe_send_json({"type": "status", "state": "speaking"})
-                                try:
-                                    await self.websocket.send_bytes(part.inline_data.data)
-                                except Exception:
+                                if not await self._safe_send_bytes(part.inline_data.data):
                                     return
                     if sc.interrupted:
                         await self._safe_send_json({"type": "interrupted"})

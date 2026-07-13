@@ -182,6 +182,7 @@ class _FakeWS:
 
 async def _search(desc):
     s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
     s.websocket = _FakeWS()
     s.state = DispatcherState(language="hi-IN")
     result = await s._tool_search_incident_type(desc)
@@ -588,6 +589,7 @@ def _fake_client(session):
 
 def _session_for_lifecycle_test(live_phase_done):
     s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
     s.websocket = _RecordingWS()
     s.state = DispatcherState(language="en-IN")
     s.state.submitted = True
@@ -639,6 +641,36 @@ def _reconnect_kickoff_always_holds_the_line_post_submission():
 check("reconnect kickoff post-submission always sends the short holding line (no briefing to resume)",
       _reconnect_kickoff_always_holds_the_line_post_submission())
 
+# Voice matching (real user request): Gemini Live's conversational voice and
+# the closing briefing's Google Cloud TTS voice used to sound like two
+# different people. English (en-IN) must now be explicitly pinned to a
+# named voice rather than left at Gemini Live's unset/undocumented default.
+def _build_config_pins_english_voice_to_charon():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.state = DispatcherState(language="en-IN")
+    config = s._build_config()
+    voice_config = config.speech_config.voice_config
+    return (
+        voice_config is not None
+        and voice_config.prebuilt_voice_config.voice_name == "Charon"
+    )
+
+check("_build_config pins English (en-IN) Gemini Live to the same voice as the TTS briefing (Charon)",
+      _build_config_pins_english_voice_to_charon())
+
+def _build_config_does_not_touch_hindi_voice():
+    # Hindi never actually reaches this method (confirmed: dispatcher_hindi.py
+    # has its own run() and never references _build_config/_run_live_session),
+    # but this locks in that the voice-pinning code path is explicitly gated
+    # on language == "en-IN" and does nothing for hi-IN as belt-and-suspenders.
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.state = DispatcherState(language="hi-IN")
+    config = s._build_config()
+    return config.speech_config.voice_config is None
+
+check("_build_config leaves Hindi's speech_config untouched (no voice_config set)",
+      _build_config_does_not_touch_hindi_voice())
+
 # The mic must NOT reopen after the post-submission "stay on the line"
 # acknowledgment turn (real reported bug, predates this redesign but the
 # mechanism is unchanged: _pump_gemini_to_client sent {"status":"listening"}
@@ -664,6 +696,7 @@ def _make_turn_complete_event():
 
 async def _mic_stays_closed_after_submission_ack_turn():
     s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
     s.websocket = _RecordingWS()
     s.state = DispatcherState(language="en-IN")
     s.state.submitted = True
@@ -717,6 +750,7 @@ async def _handoff_happy_path_closes_live_and_delivers_audio():
         dl.synthesize_speech = fake_synth
 
         s = DispatcherSession.__new__(DispatcherSession)
+        s._ws_send_lock = asyncio.Lock()
         s.websocket = _RecordingWS()
         s.state = DispatcherState(language="en-IN")
         s._dispatch_info = {"ambulance": {"name": "108 Post — X", "etaMinutes": 10, "distanceKm": 5}}
@@ -745,6 +779,54 @@ async def _handoff_happy_path_closes_live_and_delivers_audio():
 check("the Flash+TTS handoff closes Gemini Live, sends chunked audio, and ends the call",
       asyncio.run(_handoff_happy_path_closes_live_and_delivers_audio()))
 
+# Real reported bug: the agent started speaking the closing briefing for
+# real, then was shut down abruptly mid-sentence. Root-caused (in part) to
+# unsynchronized concurrent writes on the same WebSocket -- _keepalive()
+# (every 10s, for the whole call) racing with _send_audio_chunks() (which
+# can be 100+ chunks for a full briefing) with nothing preventing both from
+# calling send_bytes()/send_json() on the same connection at once. Every
+# send now goes through _ws_send_lock via _safe_send_json/_safe_send_bytes
+# -- this test proves the lock actually serializes concurrent callers
+# rather than just existing unused.
+class _ConcurrencyDetectingWS:
+    """Fails a send if another send is already in flight on this same fake
+    connection -- simulates the real risk (frame interleaving / a
+    concurrent-write exception) without needing a real ASGI WebSocket."""
+    def __init__(self):
+        self.busy = False
+        self.violation = False
+        self.completed = []
+    async def _send(self, kind):
+        if self.busy:
+            self.violation = True
+        self.busy = True
+        try:
+            await asyncio.sleep(0.02)  # simulate real I/O taking measurable time
+        finally:
+            self.busy = False
+        self.completed.append(kind)
+    async def send_json(self, payload):
+        await self._send("json")
+    async def send_bytes(self, data):
+        await self._send("bytes")
+
+async def _concurrent_sends_are_serialized_by_the_lock():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.websocket = _ConcurrencyDetectingWS()
+    s._ws_send_lock = asyncio.Lock()
+
+    # Fire a keepalive-shaped JSON send and a multi-chunk audio send at the
+    # exact same time -- without the lock, these would race on the same
+    # fake connection.
+    await asyncio.gather(
+        s._safe_send_json({"type": "keepalive"}),
+        s._send_audio_chunks(b"\x00" * (8192 * 3)),  # 3 chunks
+    )
+    return not s.websocket.violation and len(s.websocket.completed) == 4  # 1 keepalive + 3 chunks
+
+check("concurrent keepalive + audio-chunk sends are serialized by _ws_send_lock, never interleaved",
+      asyncio.run(_concurrent_sends_are_serialized_by_the_lock()))
+
 async def _handoff_tts_failure_falls_back_to_text():
     from severity_engine import dispatcher_live as dl
     _logging.disable(_logging.CRITICAL)
@@ -759,6 +841,7 @@ async def _handoff_tts_failure_falls_back_to_text():
         dl.synthesize_speech = fake_synth
 
         s = DispatcherSession.__new__(DispatcherSession)
+        s._ws_send_lock = asyncio.Lock()
         s.websocket = _RecordingWS()
         s.state = DispatcherState(language="en-IN")
         s._dispatch_info = None
@@ -809,6 +892,7 @@ async def _handoff_survives_a_totally_unexpected_exception():
         dl.synthesize_speech = fake_synth
 
         s = DispatcherSession.__new__(DispatcherSession)
+        s._ws_send_lock = asyncio.Lock()
         s.websocket = _RecordingWS()
         s.state = DispatcherState(language="en-IN")
         s._dispatch_info = None
@@ -847,6 +931,7 @@ async def _run_awaits_handoff_task_when_caller_still_connected():
     try:
         dl._get_client = lambda: "FAKE-CLIENT"
         s = DispatcherSession.__new__(DispatcherSession)
+        s._ws_send_lock = asyncio.Lock()
         s.websocket = _RecordingWS()
         s.state = DispatcherState(language="en-IN")
         s._pending_location = {}
@@ -893,6 +978,7 @@ async def _run_cancels_handoff_task_when_caller_disconnected():
     try:
         dl._get_client = lambda: "FAKE-CLIENT"
         s = DispatcherSession.__new__(DispatcherSession)
+        s._ws_send_lock = asyncio.Lock()
         s.websocket = _RecordingWS()
         s.state = DispatcherState(language="en-IN")
         s._pending_location = {}
@@ -949,6 +1035,7 @@ check("run() cancels the Flash+TTS handoff instead of waiting when the caller ha
 
 async def _backstop_sets_type_and_vehicles():
     s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
     s.websocket = _FakeWS()
     s.state = DispatcherState(language="hi-IN")
     s.state.caller_transcript = " मेरी कार दूसरी कार से टकरा गई है।"
@@ -957,6 +1044,7 @@ async def _backstop_sets_type_and_vehicles():
 
 async def _backstop_ignores_gibberish():
     s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
     s.websocket = _FakeWS()
     s.state = DispatcherState(language="hi-IN")
     s.state.caller_transcript = " हैलो, सुनिए"
@@ -965,6 +1053,7 @@ async def _backstop_ignores_gibberish():
 
 async def _backstop_never_overrides_existing_type():
     s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
     s.websocket = _FakeWS()
     s.state = DispatcherState(language="hi-IN")
     s.state.sub_type = "Head-On Collision"
@@ -975,6 +1064,7 @@ async def _backstop_never_overrides_existing_type():
 
 async def _implied_count_never_overwrites_caller_number():
     s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
     s.websocket = _FakeWS()
     s.state = DispatcherState(language="hi-IN")
     s.state.vehicles_involved = 3
@@ -1007,6 +1097,7 @@ check("dense fog still classifies",
 
 async def _symptom_only_tool_call_applies_nothing():
     s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
     s.websocket = _FakeWS()
     s.state = DispatcherState(language="hi-IN")
     result = await s._tool_search_incident_type("चार लोग घायल हैं")
@@ -1016,6 +1107,7 @@ async def _backstop_recovers_type_from_full_transcript_after_injury_answer():
     # The exact reported sequence: injury answer classifies nothing, but the
     # full transcript (which contains the actual collision description) does.
     s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
     s.websocket = _FakeWS()
     s.state = DispatcherState(language="hi-IN")
     await s._tool_search_incident_type("चार लोग घायल हैं")
@@ -1178,6 +1270,7 @@ async def _keepalive_fires_periodically_and_cancels_cleanly():
     _logging2.disable(_logging2.CRITICAL)
     try:
         s = DispatcherSession.__new__(DispatcherSession)
+        s._ws_send_lock = asyncio.Lock()
         s.websocket = _KeepaliveWS()
         task = asyncio.create_task(s._keepalive())
         await asyncio.sleep(0.65)  # should fire at least twice

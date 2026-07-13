@@ -198,6 +198,22 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
     statusRef.current = status;
   }, [status]);
 
+  // How many seconds of already-scheduled audio are still queued on the Web
+  // Audio timeline (see playChunk's nextStartTimeRef). Shared by every place
+  // that needs to wait out queued playback before tearing down -- see the
+  // "call_complete" and ws.onclose handlers below, which both need it for
+  // the same reason: once audio chunks are ALREADY scheduled via playChunk,
+  // that scheduled playback is entirely client-side (Web Audio) and keeps
+  // running to completion regardless of the WebSocket's state, so neither
+  // handler should stop it early just because a message arrived or the
+  // socket closed.
+  const remainingPlaybackSeconds = useCallback(() => {
+    const ctx = playbackCtxRef.current;
+    return ctx && ctx.state !== "closed"
+      ? Math.max(0, nextStartTimeRef.current - ctx.currentTime)
+      : 0;
+  }, []);
+
   const flushPlayback = useCallback(() => {
     activeSourcesRef.current.splice(0).forEach((src) => {
       try {
@@ -358,10 +374,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           // remaining audio may still be scheduled in the playback queue —
           // wait for it to drain before tearing down, so the goodbye is
           // never clipped.
-          const ctx = playbackCtxRef.current;
-          const remainingS = ctx && ctx.state !== "closed"
-            ? Math.max(0, nextStartTimeRef.current - ctx.currentTime)
-            : 0;
+          const remainingS = remainingPlaybackSeconds();
           const wasBriefing = statusRef.current === "briefing";
           console.info(`[dispatcher] call_complete received — draining ${remainingS.toFixed(1)}s of queued audio, then ending`);
           setTimeout(() => {
@@ -373,7 +386,19 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           break;
         }
         case "interrupted":
-          flushPlayback();
+          // Gemini Live's own conversational barge-in signal -- never
+          // legitimately sent by the backend once the closing briefing
+          // (Gemini Flash + Google TTS, entirely outside Gemini Live) has
+          // started, since the code path that emits "interrupted" only
+          // runs while the Gemini Live pump is still active, which stops
+          // before the briefing phase begins. Defensive guard anyway: a
+          // stray/stale one truncating the briefing via flushPlayback()
+          // would look identical to the mid-briefing-cutoff bug this file
+          // just fixed for "call_complete"/onclose, so never act on it
+          // during the non-conversational "thinking"/"briefing" phases.
+          if (statusRef.current !== "thinking" && statusRef.current !== "briefing") {
+            flushPlayback();
+          }
           break;
         case "form_update": {
           if (event.field === "incidentType") {
@@ -583,7 +608,30 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           // (or instead of) the closing briefing is a normal call end, not a
           // drop to reconnect from. Reconnecting here would start a brand new
           // session with a fresh opening greeting.
-          stop();
+          //
+          // Real reported bug: the agent started speaking the closing
+          // briefing for real, then was "shut down abruptly" mid-sentence.
+          // Root cause: this branch used to call stop() IMMEDIATELY, with
+          // no regard for how much audio was still queued -- racing against,
+          // and defeating, the "call_complete" handler's own correct drain
+          // wait above. The backend closes its WebSocket very soon after
+          // sending call_complete (see dispatcher_live.py), so onclose fires
+          // within milliseconds -- while remainingPlaybackSeconds() can
+          // still be several real seconds for a full ambulance/fire/towing/
+          // SOP briefing. Whichever handler called stop() first won, and
+          // onclose (near-instant) beat call_complete's setTimeout (seconds
+          // long) essentially every time, truncating playback via stop()'s
+          // flushPlayback(). Already-scheduled audio (playChunk's
+          // AudioBufferSourceNodes) is entirely client-side Web Audio
+          // playback and keeps running regardless of the WebSocket's state,
+          // so there is no need to react to the socket closing at all until
+          // that scheduled playback has actually finished -- drain the same
+          // way call_complete already correctly does, instead of stopping
+          // immediately.
+          const remainingS = remainingPlaybackSeconds();
+          setTimeout(() => {
+            if (!isStale()) stop();
+          }, remainingS * 1000 + 300);
           return;
         }
         if (reconnectAttemptRef.current < MAX_RECONNECT_ATTEMPTS) {
