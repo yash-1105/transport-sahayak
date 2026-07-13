@@ -74,26 +74,44 @@ _DEFAULT_LANGUAGE = "en-IN"
 # that used to sound like two different people. Google's own developer
 # forum confirms the unset default is undocumented and can change without
 # notice, so pinning it is correct regardless of which voice is chosen.
-# "Charon" (documented character: "Informative") was chosen as the closest
-# match among Gemini's native-audio prebuilt voices to this app's required
-# tone (calm, warm, serious, NEVER upbeat/chipper -- see the system
-# instruction's TONE section) -- ruled out Puck/Fenrir (explicitly
-# upbeat/excitable) and Kore/Orus (firm/commanding rather than calm-warm).
+#
+# Per explicit user request, switched from "Charon" (MALE, "Informative")
+# to "Sulafat" (FEMALE, documented character: "Warm") -- confirmed FEMALE
+# via this project's own earlier live doc research (ai.google.dev/gemini-
+# api/docs/speech-generation). "Warm" is the best character match among
+# the confirmed-FEMALE native-audio voices (Kore/Firm, Zephyr/Bright,
+# Leda/Youthful, Sulafat/Warm) for this app's required tone (calm, warm,
+# serious, NEVER upbeat/chipper -- see the system instruction's TONE
+# section, which uses the word "warm" itself) -- ruled out Zephyr (Bright
+# reads closer to upbeat) and Kore (Firm reads more commanding than warm).
+#
 # This pin is a DIFFERENT API surface from english_briefing.py's Google
 # Cloud TTS voice (below) and is unaffected by that module's own voice
 # availability -- confirmed live: a real call completed its conversation
-# successfully with this pin in place. english_briefing.py's
-# ENGLISH_TTS_VOICE_NAME was ORIGINALLY also set to the identically-named
-# `en-IN-Chirp3-HD-Charon` (Chirp 3 HD and Gemini Live's native-audio
-# voices are the same underlying named voice models, so same-name would
-# have been the closest achievable cross-engine match) -- but that broke
-# the closing briefing entirely (silent, no audio) because Chirp3-HD's
-# availability was never independently verified live for this project and
-# turned out not to be enabled. Reverted to a verified-available Neural2
-# voice there; see that module's own comment for the current default and
-# why. Do not re-introduce an unverified voice ID as either module's
+# successfully with the earlier Charon pin in place (same mechanism, only
+# the voice name differs now). Also per explicit user request, the
+# conversation's voice was independently observed (live, by the user) to
+# already carry a USA/American accent regardless of this SpeechConfig's
+# language_code staying "en-IN" -- that language_code is deliberately left
+# UNCHANGED here (it governs Gemini Live's speech RECOGNITION tuning for
+# real Assam/Indian-accented callers, not the output voice's accent, which
+# appears to be inherent to the chosen native-audio voice itself) -- only
+# english_briefing.py's TTS locale/voice (a genuinely different, locale-
+# tied voice catalog) needed to change to actually match that accent; see
+# that module's own comment.
+#
+# english_briefing.py's ENGLISH_TTS_VOICE_NAME was ORIGINALLY set to the
+# identically-named `en-IN-Chirp3-HD-Charon` (Chirp 3 HD and Gemini Live's
+# native-audio voices are the same underlying named voice models, so same-
+# name would have been the closest achievable cross-engine match) -- but
+# that broke the closing briefing entirely (silent, no audio) because
+# Chirp3-HD's availability was never independently verified live for this
+# project and turned out not to be enabled. Reverted to a verified-
+# available Neural2 voice there (now en-US, FEMALE, per this same voice-
+# matching request); see that module's own comment for the current default
+# and why. Do not re-introduce an unverified voice ID as either module's
 # DEFAULT without confirming live availability first.
-_ENGLISH_VOICE_NAME = os.environ.get("GEMINI_LIVE_VOICE_NAME", "Charon")
+_ENGLISH_VOICE_NAME = os.environ.get("GEMINI_LIVE_VOICE_NAME", "Sulafat")
 
 _LOCATION_TIMEOUT_S = 8.0
 

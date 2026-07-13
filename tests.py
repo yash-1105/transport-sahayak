@@ -285,6 +285,18 @@ check("_CLOSING_EN (English-only) is trimmed to exactly the 3 mandatory closing 
 # machinery for a Gemini-Live-spoken briefing no longer exists at all).
 from severity_engine import english_briefing as eb
 
+# Voice/accent matching (real user request): a FEMALE voice, USA/American
+# accent to match Gemini Live's own observed accent. Locking in the exact
+# default here since this project has already shipped two wrong voice
+# defaults in a row (wrong gender, then an unavailable voice tier that
+# silently broke the whole briefing) -- a live-verified, en-US, proven-
+# available Neural2 voice this time (see dispatcher_live.py/
+# english_briefing.py's own comments for the verification trail).
+check("ENGLISH_TTS_VOICE_NAME defaults to a FEMALE en-US Neural2 voice (accent-matched, proven-available tier)",
+      eb._TTS_VOICE_NAME == "en-US-Neural2-C")
+check("ENGLISH_TTS_LANGUAGE_CODE defaults to en-US (not en-IN) to match Gemini Live's observed USA accent",
+      eb._TTS_VOICE_LANGUAGE == "en-US")
+
 class _FakeGeminiResponse:
     def __init__(self, text):
         content = SimpleNamespace(parts=[SimpleNamespace(text=text)]) if text is not None else None
@@ -645,18 +657,20 @@ check("reconnect kickoff post-submission always sends the short holding line (no
 # the closing briefing's Google Cloud TTS voice used to sound like two
 # different people. English (en-IN) must now be explicitly pinned to a
 # named voice rather than left at Gemini Live's unset/undocumented default.
-def _build_config_pins_english_voice_to_charon():
+# Switched from "Charon" (MALE) to "Sulafat" (FEMALE, "Warm") per a later
+# explicit user request for a female voice.
+def _build_config_pins_english_voice_to_sulafat():
     s = DispatcherSession.__new__(DispatcherSession)
     s.state = DispatcherState(language="en-IN")
     config = s._build_config()
     voice_config = config.speech_config.voice_config
     return (
         voice_config is not None
-        and voice_config.prebuilt_voice_config.voice_name == "Charon"
+        and voice_config.prebuilt_voice_config.voice_name == "Sulafat"
     )
 
-check("_build_config pins English (en-IN) Gemini Live to the same voice as the TTS briefing (Charon)",
-      _build_config_pins_english_voice_to_charon())
+check("_build_config pins English (en-IN) Gemini Live to the same voice as the TTS briefing (Sulafat)",
+      _build_config_pins_english_voice_to_sulafat())
 
 def _build_config_does_not_touch_hindi_voice():
     # Hindi never actually reaches this method (confirmed: dispatcher_hindi.py
