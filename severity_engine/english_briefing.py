@@ -38,6 +38,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from typing import Optional
 
 from google.cloud import texttospeech
@@ -172,10 +173,23 @@ async def generate_dispatch_script(gemini_client, state, services: Optional[dict
     this module and dispatcher_live.py — mirrors the exact pattern
     dispatcher_hindi.py already uses for its own plain-generate_content
     calls. Falls back to a deterministic plain-language script (never
-    silence) if Flash fails, times out, or returns nothing usable."""
-    prompt = _build_flash_prompt(state, services)
-    logger.info("Gemini Flash request started (model=%s)", _FLASH_MODEL)
+    silence) if Flash fails, times out, or returns nothing usable. The
+    ENTIRE body (including building the prompt) is inside the try block --
+    an earlier version built the prompt outside it, so a bug there would
+    have escaped this function's own fallback entirely and propagated to
+    the caller, which does not expect this function to ever raise."""
+    t0 = time.monotonic()
     try:
+        prompt = _build_flash_prompt(state, services)
+        logger.info("========================\n"
+                    "Stage 4\n"
+                    "Building unified briefing\n"
+                    "Characters: %d\n"
+                    "========================", len(prompt))
+        logger.info("========================\n"
+                    "Stage 5\n"
+                    "Calling Gemini Flash (model=%s)\n"
+                    "========================", _FLASH_MODEL)
         response = await asyncio.wait_for(
             gemini_client.aio.models.generate_content(
                 model=_FLASH_MODEL,
@@ -197,11 +211,22 @@ async def generate_dispatch_script(gemini_client, state, services: Optional[dict
                 p.text.strip() for p in (candidate.content.parts or []) if getattr(p, "text", None)
             ).strip()
         if text:
-            logger.info("Gemini Flash response received (%d chars)", len(text))
+            logger.info("========================\n"
+                        "Stage 6\n"
+                        "Gemini Flash completed\n"
+                        "Latency: %.2fs\n"
+                        "Characters returned: %d\n"
+                        "========================", time.monotonic() - t0, len(text))
             return text
-        logger.warning("Gemini Flash returned no usable text -- using deterministic fallback script")
+        logger.warning("Gemini Flash returned no usable text after %.2fs -- "
+                       "using deterministic fallback script", time.monotonic() - t0)
     except Exception:
-        logger.exception("Gemini Flash request failed -- using deterministic fallback script")
+        # DO NOT swallow silently -- full traceback, then fall back to a
+        # deterministic script rather than letting this propagate (the
+        # caller, _end_conversation_and_deliver_briefing, does not expect
+        # this function to ever raise).
+        logger.exception("Gemini Flash request failed after %.2fs -- "
+                         "using deterministic fallback script", time.monotonic() - t0)
     return _fallback_script(state, services)
 
 
@@ -241,14 +266,22 @@ async def synthesize_speech(text: str) -> bytes:
     RPC only). If PCM is ever rejected, the documented fallback is
     LINEAR16 + stripping its WAV header via the stdlib `wave` module.
 
-    Raises EnglishTTSError on any failure so the caller can fall back to the
-    tts_text (display-as-text) path Hindi's Bulbul-failure handling already
-    established.
+    Raises EnglishTTSError on ANY failure -- including client construction
+    and SSML building, which an earlier version left OUTSIDE the try block,
+    so a credentials/library exception there would have escaped as some
+    other exception type entirely, past both this function's own handling
+    and the caller's `except EnglishTTSError` -- so the caller MUST wrap
+    this call in its own broad exception handler too; do not assume this
+    docstring's promise alone is sufficient defense in depth.
     """
-    client = _get_tts_client()
-    ssml = _to_ssml(text)
-    logger.info("Google TTS request started (%d chars of SSML, voice=%s)", len(ssml), _TTS_VOICE_NAME)
+    t0 = time.monotonic()
     try:
+        client = _get_tts_client()
+        ssml = _to_ssml(text)
+        logger.info("========================\n"
+                    "Stage 7\n"
+                    "Calling Google Cloud TTS (%d chars of SSML, voice=%s)\n"
+                    "========================", len(ssml), _TTS_VOICE_NAME)
         response = await asyncio.wait_for(
             client.synthesize_speech(
                 input=texttospeech.SynthesisInput(ssml=ssml),
@@ -264,12 +297,24 @@ async def synthesize_speech(text: str) -> bytes:
             ),
             timeout=_TTS_TIMEOUT_S,
         )
+    except EnglishTTSError:
+        raise
     except Exception as e:
-        logger.exception("Google TTS request failed")
+        # Full traceback, then convert to EnglishTTSError -- this is the
+        # ONLY exception type the caller is allowed to assume it will ever
+        # see from this function.
+        logger.exception("Google TTS request failed after %.2fs", time.monotonic() - t0)
         raise EnglishTTSError(str(e)) from e
     audio = response.audio_content
     if not audio:
-        logger.error("Google TTS returned no audio content")
+        logger.error("Google TTS returned no audio content after %.2fs", time.monotonic() - t0)
         raise EnglishTTSError("Google TTS returned no audio content")
-    logger.info("Google TTS completed (%d bytes of PCM audio)", len(audio))
+    duration_s = len(audio) / 2 / _TTS_SAMPLE_RATE_HZ  # 16-bit mono PCM -> 2 bytes/sample
+    logger.info("========================\n"
+                "Stage 8\n"
+                "Google TTS completed\n"
+                "Latency: %.2fs\n"
+                "Audio bytes: %d\n"
+                "Duration: %.2fs\n"
+                "========================", time.monotonic() - t0, len(audio), duration_s)
     return audio

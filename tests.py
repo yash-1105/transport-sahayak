@@ -335,6 +335,53 @@ async def _tts_empty_audio_raises():
 check("synthesize_speech raises EnglishTTSError if Google TTS returns empty audio",
       asyncio.run(_tts_empty_audio_raises()))
 
+# Real root cause of "the agent goes completely silent after submission, no
+# TTS, no error": _get_tts_client() used to be called OUTSIDE synthesize_
+# speech's try block, so a non-EnglishTTSError exception building the TTS
+# client (e.g. a credentials/library bug) escaped as its own exception type,
+# past both this function's error handling and the caller's narrow
+# `except EnglishTTSError` in dispatcher_live.py -- killing the fire-and-
+# forget briefing task with nothing ever reaching the frontend. Now the
+# client construction is inside the try/except too.
+async def _tts_client_construction_failure_still_raises_english_tts_error():
+    orig = eb._get_tts_client
+    def raise_unrelated():
+        raise ValueError("malformed service account credentials")
+    eb._get_tts_client = raise_unrelated
+    _logging.disable(_logging.CRITICAL)
+    try:
+        await eb.synthesize_speech("Hello.")
+        return False
+    except eb.EnglishTTSError:
+        return True
+    except ValueError:
+        return False  # the bug: a raw ValueError escaped instead
+    finally:
+        eb._get_tts_client = orig
+        _logging.disable(_logging.NOTSET)
+
+check("synthesize_speech converts even a client-construction failure to EnglishTTSError",
+      asyncio.run(_tts_client_construction_failure_still_raises_english_tts_error()))
+
+async def _flash_script_falls_back_if_prompt_building_itself_raises():
+    # Same class of bug as above: _build_flash_prompt used to be called
+    # OUTSIDE generate_dispatch_script's try block.
+    orig = eb._build_flash_prompt
+    def raise_unrelated(state, services):
+        raise KeyError("boom")
+    eb._build_flash_prompt = raise_unrelated
+    _logging.disable(_logging.CRITICAL)
+    try:
+        client = _FakeGeminiClient(text="unused")
+        script = await eb.generate_dispatch_script(client, DispatcherState(language="en-IN"), None)
+        return "registered successfully" in script
+    finally:
+        eb._build_flash_prompt = orig
+        _logging.disable(_logging.NOTSET)
+
+check("generate_dispatch_script falls back to a deterministic script even if prompt-building itself raises",
+      asyncio.run(_flash_script_falls_back_if_prompt_building_itself_raises()))
+
 # ── dispatcher_live.py: Gemini Live closes right after the post-submit ack ────
 # Root cause fixed here (2026-07 redesign): rather than Gemini Live speaking
 # the closing briefing itself (Rounds 1-5's whole saga), Gemini Live's job
@@ -554,6 +601,53 @@ async def _handoff_tts_failure_falls_back_to_text():
 
 check("a Google TTS failure falls back to the tts_text event and still ends the call cleanly",
       asyncio.run(_handoff_tts_failure_falls_back_to_text()))
+
+# Real reported bug: after incident submission, the agent went completely
+# silent -- no TTS audio, no error, nothing. Root cause: _end_conversation_
+# and_deliver_briefing had NO enclosing try/except at all, so an unexpected
+# exception ANYWHERE in the pipeline (credentials bug, prompt-building bug,
+# anything neither english_briefing.py's own narrower handlers nor the
+# `except EnglishTTSError` here were written to catch) killed the
+# fire-and-forget task with nothing ever reaching the frontend. Now
+# _deliver_briefing_or_raise is allowed to raise ANYTHING, and the outer
+# _end_conversation_and_deliver_briefing guarantees a terminal signal
+# (tts_text + call_complete) and _call_over=True regardless.
+async def _handoff_survives_a_totally_unexpected_exception():
+    from severity_engine import dispatcher_live as dl
+    _logging.disable(_logging.CRITICAL)
+    orig_get_client, orig_gen, orig_synth = dl._get_client, dl.generate_dispatch_script, dl.synthesize_speech
+    try:
+        dl._get_client = lambda: "FAKE-CLIENT"
+        async def raise_something_unexpected(client, state, services):
+            raise AttributeError("some completely unanticipated bug")
+        dl.generate_dispatch_script = raise_something_unexpected
+        async def fake_synth(text):
+            return b"\x00"  # never reached
+        dl.synthesize_speech = fake_synth
+
+        s = DispatcherSession.__new__(DispatcherSession)
+        s.websocket = _RecordingWS()
+        s.state = DispatcherState(language="en-IN")
+        s._dispatch_info = None
+        s._dispatch_ready = asyncio.Event()
+        s._dispatch_ready.set()
+        s._live_phase_done = False
+        s._call_over = False
+        s._live_session = _FakeLive()
+
+        await s._end_conversation_and_deliver_briefing()
+
+        return (
+            s._call_over is True
+            and {"type": "call_complete"} in s.websocket.sent
+            and any(m.get("type") == "tts_text" for m in s.websocket.sent)
+        )
+    finally:
+        dl._get_client, dl.generate_dispatch_script, dl.synthesize_speech = orig_get_client, orig_gen, orig_synth
+        _logging.disable(_logging.NOTSET)
+
+check("a totally unexpected exception in the handoff still ends the call, never leaves it silent",
+      asyncio.run(_handoff_survives_a_totally_unexpected_exception()))
 
 # ── dispatcher_live.py: run() must AWAIT the handoff task, never cancel it,
 # purely because Gemini Live itself closed early ───────────────────────────────

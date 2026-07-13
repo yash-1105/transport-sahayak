@@ -365,7 +365,9 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           const wasBriefing = statusRef.current === "briefing";
           console.info(`[dispatcher] call_complete received — draining ${remainingS.toFixed(1)}s of queued audio, then ending`);
           setTimeout(() => {
-            if (wasBriefing) console.info("[dispatcher] Audio playback completed (closing briefing)");
+            if (wasBriefing) {
+              console.info("========================\nStage 12\nPlayback completed\n========================");
+            }
             if (!isStale()) stop();
           }, remainingS * 1000 + 300);
           break;
@@ -543,7 +545,13 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
         if (event.data instanceof ArrayBuffer) {
           if (statusRef.current === "briefing" && !briefingPlaybackLoggedRef.current) {
             briefingPlaybackLoggedRef.current = true;
-            console.info("[dispatcher] Audio playback started (closing briefing)");
+            console.info(
+              "========================\n" +
+              "Stage 10\n" +
+              `Frontend received audio (${event.data.byteLength} bytes, first chunk)\n` +
+              "========================"
+            );
+            console.info("========================\nStage 11\nPlayback started\n========================");
           }
           playChunk(event.data);
           return;
@@ -601,11 +609,22 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
 
   const sendDispatchBriefing = useCallback((services: DispatchBriefingServices) => {
     const ws = wsRef.current;
-    if (ws?.readyState !== WebSocket.OPEN) return;
+    if (ws?.readyState !== WebSocket.OPEN) {
+      // The one place this can silently no-op: if the WS closed (or never
+      // opened) before the matching flow finished, dispatch_update is never
+      // sent and the backend's _dispatch_ready.wait() times out after
+      // DISPATCH_BRIEFING_WAIT_S (30s) instead of firing immediately — worth
+      // knowing about explicitly rather than a bare silent return.
+      console.warn(
+        `[dispatcher] sendDispatchBriefing called but WS not OPEN (readyState=${ws?.readyState ?? "no socket"}) — dispatch_update NOT sent`
+      );
+      return;
+    }
     try {
       ws.send(JSON.stringify({ type: "dispatch_update", services }));
-    } catch {
-      /* socket already going away — backend closes via its own timeout */
+      console.info("========================\nStage 3 (frontend)\nDispatch services calculated — sent to backend\n========================");
+    } catch (e) {
+      console.warn("[dispatcher] sendDispatchBriefing threw while sending:", e);
     }
   }, []);
 

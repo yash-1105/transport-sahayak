@@ -980,6 +980,10 @@ class DispatcherSession:
         }
         self.state.submitted = True
         await self._safe_send_json({"type": "submitted", "incident": payload})
+        logger.info("========================\n"
+                    "Stage 2\n"
+                    "submit_incident completed\n"
+                    "========================")
         # Gemini Live's job in this call ends right after this acknowledgment
         # -- the browser's matching flow result (responder ETAs) is no longer
         # read out by Gemini Live at all. Once this turn's turn_complete
@@ -1393,31 +1397,63 @@ class DispatcherSession:
 
     async def _end_conversation_and_deliver_briefing(self) -> None:
         """Runs once, spawned at the turn_complete of submit_incident's
-        post-submit acknowledgment ("your report has been submitted
-        successfully -- stay on the line"), which is the LAST thing Gemini
-        Live ever says in this call (see the system instruction's AFTER
-        SUBMISSION section and _tool_submit_incident's next_step). From
-        here: wait for the browser's dispatch_update (the SAME responder
-        ETAs the dashboard is already displaying -- never recomputed),
-        gracefully close this Gemini Live session (freeing it immediately
-        rather than holding it open, unused, for however long the rest of
-        this takes), then hand off entirely to Gemini Flash (script text)
-        and Google Cloud TTS (audio) -- see english_briefing.py. Neither of
-        those is a live, per-turn audio-generation call, so neither carries
-        Gemini Live's own native-audio generation-length/session-lifecycle
-        reliability history (CLAUDE.md Rounds 1-5): a batch text call and a
-        batch TTS call each either return a complete result or raise, with
-        no "half-delivered" state a stall timer would need to catch.
+        post-submit acknowledgment (Stage 1/2 -- see the pump's turn_complete
+        handler and _tool_submit_incident), which is the LAST thing Gemini
+        Live ever says in this call. From here: wait for the browser's
+        dispatch_update, gracefully close this Gemini Live session, then
+        hand off entirely to Gemini Flash (script text) and Google Cloud TTS
+        (audio) -- see english_briefing.py.
 
-        This function keeps running to completion AFTER Gemini Live closes
-        -- see run()'s handling of _briefing_task, which awaits (not
-        cancels) this task as long as the caller is still connected, exactly
-        so closing Gemini Live early doesn't kill the work that's supposed
-        to happen next."""
+        This is a TOP-LEVEL safety net, not the actual pipeline (see
+        _deliver_briefing_or_raise for that) -- a real reported bug: the
+        agent went completely silent after submission with no audio and no
+        error, root-caused to this function previously having NO enclosing
+        try/except at all, so an unexpected exception ANYWHERE in the chain
+        (a credentials/library exception constructing the TTS client, a bug
+        in prompt-building -- both of which used to be OUTSIDE their own
+        inner try blocks too, see english_briefing.py's fixes) killed this
+        fire-and-forget task with nothing ever reaching the frontend: no
+        call_complete, no tts_text, nothing -- exactly "goes silent forever"
+        with only a "Task exception was never retrieved" line in the logs,
+        easy to miss. This wrapper guarantees SOME terminal signal always
+        reaches the frontend and the call always ends, no matter what
+        breaks, and always logs the full traceback of whatever did.
+
+        Runs to completion AFTER Gemini Live closes -- see run()'s handling
+        of _briefing_task, which awaits (not cancels) this task as long as
+        the caller is still connected, exactly so closing Gemini Live early
+        doesn't kill the work that's supposed to happen next."""
+        t_start = time.monotonic()
+        try:
+            await self._deliver_briefing_or_raise()
+        except Exception:
+            logger.exception("Post-submission briefing pipeline failed unexpectedly after "
+                             "%.2fs -- ending the call instead of leaving it silent",
+                             time.monotonic() - t_start)
+            await self._safe_send_json({
+                "type": "tts_text",
+                "text": ("Your report has been registered successfully. Emergency services "
+                         "have been notified. If you do not hear back, please call this "
+                         "helpline again."),
+            })
+            await self._safe_send_json({"type": "call_complete"})
+        finally:
+            self._call_over = True
+            logger.info("Backend: call_complete sent, task finished (total %.2fs)",
+                        time.monotonic() - t_start)
+
+    async def _deliver_briefing_or_raise(self) -> None:
+        """The actual Flash+TTS pipeline. Deliberately allowed to raise --
+        _end_conversation_and_deliver_briefing (the sole caller) is what
+        guarantees the call still ends gracefully no matter what happens
+        here; this function does not need its own top-level catch-all."""
         try:
             await asyncio.wait_for(self._dispatch_ready.wait(), timeout=_DISPATCH_WAIT_S)
-            logger.info("Dispatch data collected (services: %s)",
-                        sorted((self._dispatch_info or {}).keys()))
+            logger.info("========================\n"
+                        "Stage 3\n"
+                        "Dispatch services calculated\n"
+                        "Services: %s\n"
+                        "========================", sorted((self._dispatch_info or {}).keys()))
         except asyncio.TimeoutError:
             logger.warning("No dispatch_update within %.0fs -- closing without responder ETAs",
                            _DISPATCH_WAIT_S)
@@ -1446,14 +1482,16 @@ class DispatcherSession:
             # new handling for this.
             await self._safe_send_json({"type": "tts_text", "text": script})
             await self._safe_send_json({"type": "call_complete"})
-            self._call_over = True
             logger.info("Call ended (TTS fallback path)")
             return
 
+        logger.info("========================\n"
+                    "Stage 9\n"
+                    "Sending audio to frontend\n"
+                    "========================")
         await self._safe_send_json({"type": "status", "state": "briefing"})
         await self._send_audio_chunks(audio)
         await self._safe_send_json({"type": "call_complete"})
-        self._call_over = True
         logger.info("Call ended (briefing delivered)")
 
     async def _send_audio_chunks(self, audio: bytes) -> None:
@@ -1543,9 +1581,10 @@ class DispatcherSession:
                                 # briefing), so nothing more is expected from
                                 # Gemini Live from here on regardless of how
                                 # many more turn_completes this pump sees.
-                                logger.info("Post-submission acknowledgment turn complete -- "
-                                            "Gemini Live's job in this call is done; handing "
-                                            "off to Gemini Flash + Google Cloud TTS")
+                                logger.info("========================\n"
+                                            "Stage 1\n"
+                                            "Gemini Live finished\n"
+                                            "========================")
                                 self._briefing_task = asyncio.create_task(
                                     self._end_conversation_and_deliver_briefing()
                                 )
