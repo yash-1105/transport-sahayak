@@ -4,5 +4,6 @@ pydantic>=2.6
 google-generativeai>=0.7
 scikit-learn>=1.4
 google-cloud-speech>=2.26
+google-cloud-texttospeech>=2.16
 google-genai>=1.0
 websockets>=13

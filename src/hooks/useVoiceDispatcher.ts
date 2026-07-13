@@ -22,6 +22,7 @@ export type DispatcherStatus =
   | "listening"
   | "thinking"
   | "speaking"
+  | "briefing"
   | "reconnecting"
   | "error"
   | "ended";
@@ -165,6 +166,14 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
   // "listening" transition (see the "status" handler) detect that a newer
   // status has since superseded it and skip applying a now-stale mic-open.
   const statusSeqRef = useRef(0);
+  // Logs "Audio playback started" exactly once per call, the first binary
+  // chunk received while status is "briefing" (the Gemini-Flash-script +
+  // Google-Cloud-TTS audio, as opposed to Gemini Live's own conversational
+  // audio) — actual playback only ever happens client-side, so this is
+  // logged here rather than trusted from a backend claim (see the backend's
+  // own send-side "Sending TTS audio" log, which is a true statement about
+  // what it sent, not about what the browser has played).
+  const briefingPlaybackLoggedRef = useRef(false);
 
   // Playback scheduling state
   const playbackCtxRef = useRef<AudioContext | null>(null);
@@ -300,8 +309,17 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           setStatus("connecting");
           break;
         case "status": {
-          if (event.state !== "listening" && event.state !== "thinking" && event.state !== "speaking" && event.state !== "reconnecting") {
+          if (
+            event.state !== "listening" &&
+            event.state !== "thinking" &&
+            event.state !== "speaking" &&
+            event.state !== "briefing" &&
+            event.state !== "reconnecting"
+          ) {
             break;
+          }
+          if (event.state === "briefing") {
+            briefingPlaybackLoggedRef.current = false;
           }
           statusSeqRef.current += 1;
           const seq = statusSeqRef.current;
@@ -344,8 +362,10 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           const remainingS = ctx && ctx.state !== "closed"
             ? Math.max(0, nextStartTimeRef.current - ctx.currentTime)
             : 0;
+          const wasBriefing = statusRef.current === "briefing";
           console.info(`[dispatcher] call_complete received — draining ${remainingS.toFixed(1)}s of queued audio, then ending`);
           setTimeout(() => {
+            if (wasBriefing) console.info("[dispatcher] Audio playback completed (closing briefing)");
             if (!isStale()) stop();
           }, remainingS * 1000 + 300);
           break;
@@ -521,6 +541,10 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
       ws.onmessage = (event: MessageEvent<string | ArrayBuffer>) => {
         if (isStale()) return;
         if (event.data instanceof ArrayBuffer) {
+          if (statusRef.current === "briefing" && !briefingPlaybackLoggedRef.current) {
+            briefingPlaybackLoggedRef.current = true;
+            console.info("[dispatcher] Audio playback started (closing briefing)");
+          }
           playChunk(event.data);
           return;
         }

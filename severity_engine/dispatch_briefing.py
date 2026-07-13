@@ -246,113 +246,25 @@ _CLOSING_HI = [
 ]
 
 
-# ── Segmented delivery (English / Gemini Live only) ────────────────────────────
-# Real reported bug, in three rounds: the English agent spoke the ambulance
-# ETA and stopped; after a first fix (3 segments: facts/SOPs/closing) it got
-# through fire before stopping; after strengthening the facts segment's
-# instructions it got through towing before stopping. Each fix bought a
-# LITTLE more content, never a full fix -- the pattern across all three
-# reports points at generation reliability degrading with how much a REAL
-# call has already accumulated (a live call's context is native AUDIO in
-# both directions, far more token-dense per second than the equivalent text,
-# so even a genuinely short multi-turn conversation can represent a much
-# larger context footprint than it sounds like it should) rather than any
-# single fixed length threshold. Confirmed live (2026-07) that a single
-# 5-sentence facts turn is NOT reliably safe on its own: even in isolated,
-# short-context test sessions with a real ~25s idle gap injected (matching
-# _brief_and_close's dispatch_update wait) it worked 6/6 times -- so the
-# earlier "3 segments" design was never proven unsafe by direct testing, it
-# was simply not conservative enough for whatever real accumulated-context
-# state actually degrades it. Since the exact threshold can't be pinned down
-# from outside a real call, the only defensible fix is maximum granularity:
-# ONE fact, ONE SOP line, or ONE closing line per turn -- never more than a
-# single short sentence asked of the model in any one turn of this sequence,
-# so there is nothing left within a turn that COULD be dropped or cut short.
-# Hindi has no equivalent risk and was NOT changed (build_briefing_instruction,
-# still one combined string): its text is fully generated up front by plain
-# generate_content, then handed to Bulbul TTS as one already-complete string
-# with its own internal chunked streaming -- there's no live per-turn audio-
-# generation step that could stop partway, unlike Gemini Live which generates
-# audio directly, turn by turn.
-def build_briefing_segments(state, services: Optional[dict], language_code: str) -> list:
-    """Same content as build_briefing_instruction, as MANY short sequential
-    turns instead of one -- one turn per responder fact, one per SOP line,
-    one per closing line (see the module comment above for why granularity
-    this fine). Each is self-contained (states its position and total count)
-    so the model doesn't try to also produce other turns' content or say
-    goodbye early. dispatcher_live.py's _brief_and_close/_send_next_briefing_
-    segment already drive an arbitrary-length segment list generically, so no
-    caller-side changes were needed to go from 3 segments to N."""
-    hindi = language_code == "hi-IN"
-    facts = _responder_facts_hi(services) if hindi else _responder_facts_en(services)
-    if not facts:
-        facts = [
-            "एमरजेंसी सेवाओं को सूचित कर दिया गया है और उन्हें भेजा जा रहा है — अभी कोई अनुमानित समय उपलब्ध नहीं है।"
-            if hindi else
-            "The emergency services have been notified and are being arranged — no estimated times are available right now."
-        ]
-    sops = select_sops(state)
-    sop_lines = [s["hi" if hindi else "en"] for s in sops]
-    closing = _CLOSING_HI if hindi else _CLOSING_EN
-
-    items = (
-        [("fact", f) for f in facts]
-        + [("sop", s) for s in sop_lines]
-        + [("closing", c) for c in closing]
-    )
-    total = len(items)
-
-    lang_note = (
-        "Speak in simple, natural spoken Hindi as before (the material below is already in Hindi — "
-        "deliver it faithfully; any facility or hospital name written in English letters must be "
-        "spoken with natural Hindi pronunciation, and numbers are already written out as words). "
-        if hindi
-        else "Speak in natural, warm English as before. "
-    )
-
-    _KIND_INSTRUCTION = {
-        "fact": (
-            "Say this ONE responding-service update to the caller now, using this exact name and "
-            "number, word for word — never invent, round differently, or change it. It is an estimate "
-            "and must sound like one (\"estimated\", \"approximately\" / \"अनुमानित\", \"लगभग\"):"
-        ),
-        "sop": "Give the caller this ONE safety instruction now, briefly and clearly, in your own natural words while keeping the exact meaning:",
-        "closing": "Say this ONE closing point to the caller now, in your own natural words while keeping the exact meaning:",
-    }
-
-    segments = []
-    for i, (kind, line) in enumerate(items):
-        n = i + 1
-        is_final = n == total
-        position = f"turn {n} of {total} — the FINAL turn" if is_final else f"turn {n} of {total}"
-        preface = (
-            "(SYSTEM UPDATE — not the caller speaking. The incident report was submitted successfully "
-            "and the response dashboard has now matched the responding services. You are delivering the "
-            "closing of this call in MANY SHORT BACK-TO-BACK TURNS, one short point at a time, instead "
-            f"of one long one — this is {position}. " + lang_note
-        )
-        body = f"\n\n{_KIND_INSTRUCTION[kind]}\n   - {line}"
-        if is_final:
-            tail = (
-                "\n\nThis is the ONLY point in this turn — just this one line, said naturally. This IS "
-                "the final turn of the call: after saying it, do not ask the caller any further "
-                "question, do not call any tool, and say nothing more — the call ends here.)"
-            )
-        else:
-            tail = (
-                "\n\nThis is the ONLY point in this turn — just this one line, said naturally and "
-                "briefly, like a caring human operator, never a robot reading a checklist. Do not add "
-                "any other fact, instruction, or closing remark from later in the sequence — more is "
-                "coming right after this, one point at a time. Do not ask the caller any question, do "
-                "not call any tool, and do not say goodbye yet. After speaking, say nothing further and "
-                "wait.)"
-            )
-        segments.append(preface + body + tail)
-    return segments
+# ── English no longer uses this module for delivery (2026-07) ─────────────────
+# History: build_unified_briefing (and, before it, build_briefing_segments)
+# used to build the text handed to Gemini LIVE as a synthetic turn -- see
+# CLAUDE.md's Rounds 1-5 for the full saga of native-audio generation-length
+# and session-lifecycle issues that caused. That entire delivery mechanism has
+# been replaced: Gemini Live's job now ends at "your report has been submitted
+# successfully" (dispatcher_live.py's _end_conversation_and_deliver_briefing),
+# and the closing briefing is generated as plain text by Gemini Flash
+# (english_briefing.py's generate_dispatch_script — a single batch
+# generate_content call, not a live audio turn) and spoken by Google Cloud
+# Text-to-Speech, not Gemini Live's own audio. english_briefing.py reuses the
+# SAME deterministic facts/SOPs/closing helpers below (_responder_facts_en,
+# select_sops, _CLOSING_EN) that this function used to assemble into a
+# Gemini-Live-turn-shaped instruction string -- only the delivery mechanism
+# changed, not the underlying content or its sourcing.
+# Hindi (build_briefing_instruction, directly below) is completely unaffected.
 
 
-# ── The single combined turn (Hindi only — see build_briefing_segments above
-# for why English uses the segmented version instead) ──────────────────────────
+# ── The single combined turn (Hindi only) ───────────────────────────────────
 
 def build_briefing_instruction(state, services: Optional[dict], language_code: str) -> str:
     """One synthetic model turn (same parenthesized-system-note convention as

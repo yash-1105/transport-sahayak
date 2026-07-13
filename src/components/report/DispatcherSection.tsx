@@ -19,6 +19,7 @@ const STATUS_LABEL: Record<string, string> = {
   listening: "Listening…",
   thinking: "Thinking…",
   speaking: "Speaking…",
+  briefing: "Emergency briefing…",
   reconnecting: "Reconnecting…",
   error: "Something went wrong",
   ended: "Conversation ended",
@@ -30,6 +31,7 @@ const STATUS_RING: Record<string, string> = {
   listening: "bg-emerald-600 border-emerald-700 shadow-lg shadow-emerald-200",
   thinking: "bg-amber-500 border-amber-600 shadow-lg shadow-amber-200",
   speaking: "bg-[#0f2044] border-[#0f2044] shadow-lg shadow-blue-200",
+  briefing: "bg-[#0f2044] border-[#0f2044] shadow-lg shadow-blue-200",
   reconnecting: "bg-amber-500 border-amber-600",
   error: "bg-red-600 border-red-700",
   ended: "bg-white border-gray-300",
@@ -153,7 +155,7 @@ export function DispatcherSection({
           onClick={() => (isActive ? dispatcher.stop() : dispatcher.start(locale))}
           className={`w-20 h-20 rounded-full border-2 flex items-center justify-center transition-all ${STATUS_RING[dispatcher.status] ?? STATUS_RING.idle}`}
         >
-          {dispatcher.status === "speaking" ? (
+          {dispatcher.status === "speaking" || dispatcher.status === "briefing" ? (
             <WaveformBars active />
           ) : (
             <svg
