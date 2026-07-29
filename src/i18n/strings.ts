@@ -33,6 +33,45 @@ export const strings = {
   // ── Map tabs ─────────────────────────────────────────────────────────────────
   tabServices:  { EN: "Services",   HI: "सेवाएं",        AS: "সেৱাসমূহ" },
   tabAccidents: { EN: "Accidents",  HI: "दुर्घटनाएं",    AS: "দুৰ্ঘটনাসমূহ" },
+  tabNetwork:   { EN: "Network",    HI: "नेटवर्क",       AS: "নেটৱৰ্ক" },
+
+  // ── Signals DPG dashboard (Network tab) ─────────────────────────────────────
+  signalsDashTitle: {
+    EN: "Signals DPG — Network Dashboard",
+    HI: "Signals DPG — नेटवर्क डैशबोर्ड",
+    AS: "Signals DPG — নেটৱৰ্ক ডেশ্বব'ৰ্ড",
+  },
+  signalsDashBanner: {
+    EN: "⚠ Signals DPG — local development instance. Shows only what this console has published; not a live network feed.",
+    HI: "⚠ Signals DPG — स्थानीय विकास इंस्टेंस। केवल वही दिखता है जो इस कंसोल ने प्रकाशित किया है; यह लाइव नेटवर्क फ़ीड नहीं है।",
+    AS: "⚠ Signals DPG — স্থানীয় বিকাশ ইনষ্টেন্স। কেৱল এই কনছ'লে প্ৰকাশ কৰা তথ্যহে দেখা যায়; এয়া লাইভ নেটৱৰ্ক ফীড নহয়।",
+  },
+  signalsDashRefresh: { EN: "Refresh", HI: "रीफ़्रेश", AS: "ৰিফ্ৰেশ্ব" },
+  signalsDashExport:  { EN: "Export CSV", HI: "CSV निर्यात", AS: "CSV ৰপ্তানি" },
+  signalsDashLastComputed: {
+    EN: "Computed at {time} — cached rollup, not live",
+    HI: "{time} पर गणना — कैश्ड रोलअप, लाइव नहीं",
+    AS: "{time} ত গণনা — কেশ্বড ৰ'লআপ, লাইভ নহয়",
+  },
+  signalsDashNoKey: {
+    EN: "Signals DPG not configured. Set SIGNALS_API_KEY and SIGNALS_AGG_ORG_ID to enable the network mirror.",
+    HI: "Signals DPG कॉन्फ़िगर नहीं है। नेटवर्क मिरर सक्षम करने के लिए SIGNALS_API_KEY और SIGNALS_AGG_ORG_ID सेट करें।",
+    AS: "Signals DPG কনফিগাৰ কৰা হোৱা নাই। নেটৱৰ্ক মিৰৰ সক্ষম কৰিবলৈ SIGNALS_API_KEY আৰু SIGNALS_AGG_ORG_ID ছেট কৰক।",
+  },
+  signalsDashUnavailable: {
+    EN: "⚠ Signals instance unreachable — incident reporting is unaffected.",
+    HI: "⚠ Signals इंस्टेंस अनुपलब्ध — घटना रिपोर्टिंग प्रभावित नहीं है।",
+    AS: "⚠ Signals ইনষ্টেন্স অনুপলব্ধ — ঘটনা প্ৰতিবেদন প্ৰভাৱিত নহয়।",
+  },
+  signalsDomainControlRoom: { EN: "Incidents (Control Room)", HI: "घटनाएं (कंट्रोल रूम)", AS: "ঘটনাসমূহ (কন্ট্ৰ'ল ৰূম)" },
+  signalsDomainResponder:   { EN: "Responder Facilities",     HI: "रिस्पॉन्डर सुविधाएं",   AS: "ৰেছপণ্ডাৰ সুবিধাসমূহ" },
+  signalsRollupItems:       { EN: "Records",                  HI: "रिकॉर्ड",               AS: "ৰেকৰ্ড" },
+  signalsRollupNotifSent:   { EN: "Notifications sent",       HI: "भेजी गई सूचनाएं",       AS: "প্ৰেৰিত অধিসূচনা" },
+  signalsRollupNotifRecv:   { EN: "Notifications received",   HI: "प्राप्त सूचनाएं",        AS: "প্ৰাপ্ত অধিসূচনা" },
+  signalsStatusNew:      { EN: "New",              HI: "नई",             AS: "নতুন" },
+  signalsStatusActive:   { EN: "Dispatch active",  HI: "डिस्पैच सक्रिय", AS: "ডিচপেচ সক্ৰিয়" },
+  signalsStatusAtRisk:   { EN: "Awaiting dispatch",HI: "डिस्पैच प्रतीक्षित", AS: "ডিচপেচৰ অপেক্ষাত" },
+  signalsStatusInactive: { EN: "Older",            HI: "पुरानी",          AS: "পুৰণি" },
 
   // ── Layer filter chips ───────────────────────────────────────────────────────
   layerHospitals:   { EN: "Hospitals",           HI: "अस्पताल",              AS: "চিকিৎসালয়" },

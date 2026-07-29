@@ -58,6 +58,39 @@ sig = local_extract.extract_signals_locally(
 )
 check("negation suppresses fire and entrapment", sig["fire"] is False and sig["entrapment"] is False)
 
+# ── #6: widened local extraction (worded counts, zero-fill, vitals) ───────────
+_ex = local_extract.extract_signals_locally
+check("worded casualty count (EN): 'two people injured' -> 2",
+      _ex("two people injured in the crash")["estimatedCasualties"] == 2)
+check("worded casualty count (HI): 'दो लोग घायल' -> 2",
+      _ex("दो लोग घायल हैं")["estimatedCasualties"] == 2)
+check("worded vehicle count (HI): 'तीन गाड़ियाँ' -> 3",
+      _ex("तीन गाड़ियाँ आपस में टकरा गईं")["estimatedVehiclesInvolved"] == 3)
+check("'a couple of cars' -> 2 vehicles (approximate worded number)",
+      _ex("a couple of cars collided")["estimatedVehiclesInvolved"] == 2)
+check("bare 'a car'/'a truck' is NOT counted (keeps the two-vehicle override intact)",
+      _ex("a car hit a truck")["estimatedVehiclesInvolved"] is None)
+check("zero-fill (EN): 'no one is hurt' -> casualties 0 + bleeding ruled out",
+      _ex("no one is hurt, just some damage")["estimatedCasualties"] == 0
+      and _ex("no one is hurt")["flag_determinations"].get("Heavy bleeding") is False)
+check("zero-fill (HI): 'सब ठीक हैं, कोई घायल नहीं' -> casualties 0",
+      _ex("सब ठीक हैं, कोई घायल नहीं")["estimatedCasualties"] == 0)
+check("negated hazard is DISCUSSED-and-ruled-out: 'there is no fire' -> Fire False (not absent)",
+      _ex("there is no fire")["flag_determinations"].get("Fire") is False)
+check("Hindi negated fire 'आग नहीं लगी' -> Fire ruled out, fire signal stays False (regression)",
+      _ex("आग नहीं लगी")["flag_determinations"].get("Fire") is False
+      and _ex("आग नहीं लगी")["fire"] is False)
+check("vital: 'the driver is unconscious' -> Conscious False",
+      _ex("the driver is unconscious")["flag_determinations"].get("Conscious") is False)
+check("vital: 'he is breathing normally' -> Breathing True",
+      _ex("he is breathing normally")["flag_determinations"].get("Breathing") is True)
+check("vital: 'bleeding heavily' -> Heavy bleeding True; 'no bleeding' -> False",
+      _ex("she is bleeding heavily")["flag_determinations"].get("Heavy bleeding") is True
+      and _ex("there is no bleeding")["flag_determinations"].get("Heavy bleeding") is False)
+check("un-mentioned flags stay absent from determinations (never guessed)",
+      "Trapped" not in _ex("a minor scratch on the bumper")["flag_determinations"]
+      and "Fire" not in _ex("a minor scratch on the bumper")["flag_determinations"])
+
 # common paraphrasing is caught via synonym normalization + TF-IDF blend, not
 # just exact keyword overlap
 o = engine.assess({"description": "The truck flipped over on the curve near km 60"}, {}, None)
@@ -244,11 +277,18 @@ _full_services = {
 _full_facts = _responder_facts_en(_full_services)
 check("_responder_facts_en returns exactly 5 lines when all services are present",
       len(_full_facts) == 5)
-check("_responder_facts_en names every real service's location, in order (ambulance/fire/towing/trauma/police)",
-      [loc in _full_facts[i] for i, loc in enumerate(
-          ["Baraut", "Muzaffarnagar Bypass", "Shamli", "Ganga Amrit Hospital", "Jorabat PS"])] == [True] * 5)
-check("_responder_facts_en calls the hospital section 'trauma centre'",
-      "trauma centre" in _full_facts[3].lower())
+# ETA phrasing simplified (2026-07): ambulance/fire/towing lines state just the
+# estimated time -- no "responds from {location}" origin -- while still being
+# "notified" and stating an "approximately N minutes" estimate. Hospital/police
+# still name their DESTINATION facility (trauma centre / notified station).
+check("_responder_facts_en drops the origin location for ambulance/fire/towing (states just the estimated time)",
+      not any(loc in _full_facts[i] for i, loc in enumerate(["Baraut", "Muzaffarnagar Bypass", "Shamli"]))
+      and all("notified" in _full_facts[i].lower() and "approximately" in _full_facts[i].lower()
+              and str(eta) in _full_facts[i]
+              for i, eta in [(0, 26), (1, 36), (2, 23)]))
+check("_responder_facts_en still names the destination facility for the trauma centre and police station",
+      "trauma centre" in _full_facts[3].lower() and "Ganga Amrit Hospital" in _full_facts[3]
+      and "Jorabat PS" in _full_facts[4])
 
 _partial_facts = _responder_facts_en({
     "ambulance": {"name": "108 Post — Baraut", "etaMinutes": 26, "distanceKm": 18.2},
@@ -267,6 +307,16 @@ check("_responder_facts_en announces missing services as 'currently unavailable'
 _no_facts = _responder_facts_en(None)
 check("_responder_facts_en returns exactly 5 'currently unavailable' lines when NO dispatch data ever arrived",
       len(_no_facts) == 5 and all("unavailable" in f.lower() for f in _no_facts))
+
+# Hindi ETA phrasing simplified the same way (drop "{location} से आएगी" origin);
+# Hindi keeps its omit-if-missing behavior (only present services get a line).
+from severity_engine.dispatch_briefing import _responder_facts_hi
+_hi_facts = _responder_facts_hi(_full_services)
+check("_responder_facts_hi drops the origin location for ambulance/fire/towing but keeps 'सूचित' + 'लगभग' estimate",
+      len(_hi_facts) == 5
+      and "Baraut" not in _hi_facts[0] and "से आएगी" not in _hi_facts[0]
+      and "सूचित कर दिया गया है" in _hi_facts[0] and "लगभग" in _hi_facts[0]
+      and "Ganga Amrit Hospital" in _hi_facts[3])
 
 check("_CLOSING_EN (English-only) is trimmed to exactly the 3 mandatory closing sections "
       "(2-hour follow-up, callback-if-missed, polite close)",
@@ -362,6 +412,32 @@ async def _flash_script_rejected_when_missing_a_section():
 check("generate_dispatch_script discards Flash's output entirely if it omits any required section",
       asyncio.run(_flash_script_rejected_when_missing_a_section()))
 
+# #7 regression: after the ETA phrasing dropped the origin location, the
+# coverage anchors for PRESENT services became the service label words (no
+# longer the facility location). A validly-rephrased script that keeps every
+# service label + time must still be ACCEPTED, not falsely rejected.
+async def _flash_script_accepted_with_present_services():
+    services = {
+        "ambulance": {"name": "108 Post — Baraut", "etaMinutes": 26},
+        "fire": {"name": "Fire Post — Muzaffarnagar", "etaMinutes": 36},
+        "towing": {"name": "Recovery Post — Shamli", "etaMinutes": 23},
+        "hospital": {"name": "Ganga Amrit Hospital", "etaMinutes": 18},
+        "police": {"name": "Jorabat PS", "etaMinutes": 12},
+    }
+    rephrased = (
+        "Your report has been registered. The nearest ambulance service has been notified, "
+        "about 26 minutes away. The fire service is on its way, roughly 36 minutes out. A "
+        "towing and recovery team has been notified too, around 23 minutes. The nearest trauma "
+        "centre is Ganga Amrit Hospital, about 18 minutes by road. The police station Jorabat PS "
+        "has been notified, roughly 12 minutes away. Please keep a safe distance from traffic. "
+        "Our team will call within two hours, and if you miss it, call this helpline again."
+    )
+    client = _FakeGeminiClient(text=rephrased)
+    script = await eb.generate_dispatch_script(client, DispatcherState(language="en-IN"), services)
+    return script == rephrased  # accepted as-is, not rejected to the deterministic fallback
+check("generate_dispatch_script ACCEPTS a rephrased present-services script under the new label anchors (#7)",
+      asyncio.run(_flash_script_accepted_with_present_services()))
+
 # The deterministic fallback (also what the anti-omission Flash prompt is
 # built from) must follow the exact required 10-section order: submission
 # confirmation, then ambulance/fire/towing/trauma-centre/police, then SOPs,
@@ -372,11 +448,11 @@ _order_state.flags_discussed = {"Heavy bleeding"}
 _order_script = eb._fallback_script(_order_state, _full_services)
 _order_positions = [
     _order_script.find("registered successfully"),
-    _order_script.find("Baraut"),
-    _order_script.find("Muzaffarnagar Bypass"),
-    _order_script.find("Shamli"),
-    _order_script.find("Ganga Amrit Hospital"),
-    _order_script.find("Jorabat PS"),
+    _order_script.find("ambulance service"),      # ambulance line (origin location no longer present)
+    _order_script.find("fire service"),            # fire line
+    _order_script.find("towing and recovery"),     # towing line
+    _order_script.find("Ganga Amrit Hospital"),    # trauma centre (still names its facility)
+    _order_script.find("Jorabat PS"),              # police (still names its station)
     _order_script.find("apply firm pressure"),  # bleeding SOP
     _order_script.find("two hours"),
     _order_script.find("call this helpline again"),
@@ -758,8 +834,12 @@ async def _handoff_happy_path_closes_live_and_delivers_audio():
             assert client == "FAKE-CLIENT"
             return "The script."
         async def fake_synth(text):
+            # #2: the hold line is synthesized+sent FIRST (distinct byte), then
+            # the main briefing script.
+            if text == dl._ENGLISH_HOLD_LINE:
+                return b"\x02" * 4096   # 1 chunk
             assert text == "The script."
-            return b"\x01" * 20000  # forces multiple 8192-byte chunks
+            return b"\x01" * 20000      # forces multiple 8192-byte chunks (3)
         dl.generate_dispatch_script = fake_gen
         dl.synthesize_speech = fake_synth
 
@@ -781,8 +861,11 @@ async def _handoff_happy_path_closes_live_and_delivers_audio():
             s._live_phase_done is True
             and fake_live.closed is True
             and s._call_over is True
-            and sum(len(c) for c in s.websocket.bytes_sent) == 20000
-            and len(s.websocket.bytes_sent) == 3  # 20000 / 8192 -> 3 chunks
+            # hold-line audio (4096 -> 1 chunk) is sent BEFORE the briefing
+            # audio (20000 -> 3 chunks): 4 chunks total, hold first.
+            and len(s.websocket.bytes_sent) == 4
+            and s.websocket.bytes_sent[0][:1] == b"\x02"        # hold line first
+            and sum(len(c) for c in s.websocket.bytes_sent) == 4096 + 20000
             and {"type": "status", "state": "briefing"} in s.websocket.sent
             and {"type": "call_complete"} in s.websocket.sent
         )
@@ -870,8 +953,11 @@ async def _handoff_tts_failure_falls_back_to_text():
         tts_text_events = [m for m in s.websocket.sent if m.get("type") == "tts_text"]
         return (
             s._call_over is True
-            and len(tts_text_events) == 1
-            and tts_text_events[0]["text"] == "The script."
+            # BOTH the hold line and the script fall back to on-screen text when
+            # TTS is down: hold line first, then the briefing script.
+            and len(tts_text_events) == 2
+            and tts_text_events[0]["text"] == dl._ENGLISH_HOLD_LINE
+            and tts_text_events[1]["text"] == "The script."
             and not s.websocket.bytes_sent  # no audio was ever sent on the failure path
             and {"type": "call_complete"} in s.websocket.sent
         )
@@ -881,6 +967,36 @@ async def _handoff_tts_failure_falls_back_to_text():
 
 check("a Google TTS failure falls back to the tts_text event and still ends the call cleanly",
       asyncio.run(_handoff_tts_failure_falls_back_to_text()))
+
+# #2 (Hindi): the closing-briefing delivery speaks the fixed hold line FIRST,
+# before generating/speaking the main ETA briefing turn, to fill the gap.
+async def _hindi_briefing_speaks_hold_line_first():
+    from severity_engine import dispatcher_hindi as dh
+    s = dh.HindiDispatcherSession.__new__(dh.HindiDispatcherSession)
+    s.state = DispatcherState(language="hi-IN")
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _RecordingWS()
+    s._dispatch_ready = asyncio.Event(); s._dispatch_ready.set()
+    s._dispatch_info = None
+    s._ended = asyncio.Event()  # not set -> proceed
+    s._turn_stats = {}
+    s._briefing_config = None
+    order = []
+    async def fake_speak(text):
+        order.append(("speak", text)); return True
+    async def fake_agent_turn(client, instruction, config=None):
+        order.append(("agent_turn", instruction))
+    s._speak_or_fallback = fake_speak
+    s._agent_turn = fake_agent_turn
+    await s._deliver_dispatch_briefing(gemini_client=None)
+    return (
+        len(order) >= 2
+        and order[0] == ("speak", dh._HINDI_HOLD_LINE)   # hold line first
+        and order[1][0] == "agent_turn"                   # then the briefing turn
+        and {"type": "call_complete"} in s.websocket.sent
+    )
+check("Hindi briefing speaks the hold line first, then the ETA briefing turn (#2)",
+      asyncio.run(_hindi_briefing_speaks_hold_line_first()))
 
 # Real reported bug: after incident submission, the agent went completely
 # silent -- no TTS audio, no error, nothing. Root cause: _end_conversation_
@@ -1138,6 +1254,52 @@ check("transcript backstop never overrides an already-recorded incident type",
 check("implied vehicle count never overwrites the caller's own number",
       asyncio.run(_implied_count_never_overwrites_caller_number()))
 
+# #6 backstop integration: zero/negation fill and vitals from the narrative flow
+# into state (casualties=0, flags_discussed) so the deterministic next_question
+# stops asking about them; and the two-vehicle override still beats a singular
+# worded count now that count extraction runs AFTER classification.
+async def _backstop_zero_and_negation_drop_questions():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="en-IN")
+    s.state.category = "Vehicle Collisions"
+    s.state.sub_type = "Car vs. Car Collision"
+    s.state.description = "two cars bumped"
+    s.state.location = {"lat": 1, "lng": 1, "label": "x"}
+    s.state.vehicles_involved = 2
+    s.state.caller_transcript = " Two cars bumped, no one is hurt and there is no fire."
+    await s._apply_local_signals_from_transcript()
+    missing = s._compute_still_missing()
+    return (s.state.casualties == 0
+            and "Fire" in s.state.flags_discussed and "Fire" not in s.state.flags
+            and not any("injured" in m or "fire" in m for m in missing))
+
+async def _backstop_override_beats_singular_worded_count():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    s.state.caller_transcript = " एक कार दूसरी कार से टकरा गई।"
+    await s._apply_local_signals_from_transcript()
+    return s.state.vehicles_involved == 2 and s.state.sub_type == "Car vs. Car Collision"
+
+async def _backstop_single_vehicle_narrative_still_counts():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="en-IN")
+    s.state.caller_transcript = " One car broke down on the shoulder."
+    await s._apply_local_signals_from_transcript()
+    return s.state.vehicles_involved == 1
+
+check("backstop: 'no one hurt / no fire' -> casualties 0 + Fire marked discussed, dropping both questions",
+      asyncio.run(_backstop_zero_and_negation_drop_questions()))
+check("backstop: 'one car hit another car' -> 2 vehicles (override beats singular 'one', count extracted last)",
+      asyncio.run(_backstop_override_beats_singular_worded_count()))
+check("backstop: a genuine single-vehicle narrative ('one car broke down') still records 1",
+      asyncio.run(_backstop_single_vehicle_narrative_still_counts()))
+
 # ── Hindi single-round fast path ──────────────────────────────────────────────
 # Latency: a tool-using Hindi turn used to cost TWO sequential Gemini round
 # trips; the fast path composes "model's acknowledgment + code-appended
@@ -1154,13 +1316,141 @@ from severity_engine.dispatcher_live import (
     REQUIRED_FIELDS,
 )
 
-_all_hints = [item for fields in REQUIRED_FIELDS.values() for item in fields] + DEFAULT_REQUIRED_FIELDS
-_uncovered = [
-    item["hint"] for item in _all_hints
-    if item["hint"] not in _CANONICAL_QUESTIONS
-]
-check(f"every REQUIRED_FIELDS hint has a canonical Hindi question (uncovered: {_uncovered})",
+# Coverage: every hint _compute_still_missing can emit -- both the per-field
+# INDIVIDUAL hints (partial-group case) AND the per-group COMBINED hints
+# (all-missing case) -- must have a canonical Hindi phrasing, or the Hindi fast
+# path silently disables for it. REQUIRED_FIELDS is now a list of GROUPS.
+_all_groups = [g for groups in REQUIRED_FIELDS.values() for g in groups] + DEFAULT_REQUIRED_FIELDS
+_needed_hints = set()
+for _g in _all_groups:
+    _needed_hints.update(item["hint"] for item in _g["fields"])
+    if "combined" in _g:
+        _needed_hints.add(_g["combined"])
+_uncovered = sorted(h for h in _needed_hints if h not in _CANONICAL_QUESTIONS)
+check(f"every REQUIRED_FIELDS hint (individual + combined) has a canonical Hindi question (uncovered: {_uncovered})",
       not _uncovered)
+
+# #1: combined question when ALL of a group's fields are missing; the group
+# dissolves to individual questions (for just the remaining fields) once some
+# are already filled -- and it must produce the same sequence in EN and HI.
+def _sess_for(category, language="en-IN", **state):
+    s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language=language)
+    s.state.category = category
+    s.state.sub_type = "X"
+    s.state.description = "x"
+    s.state.location = {"lat": 1, "lng": 1, "label": "x"}
+    for k, v in state.items():
+        setattr(s.state, k, v)
+    return s
+
+_s_all = _sess_for("Vehicle Collisions")
+check("#1 all-missing group -> ONE combined question (count + injury + trapped)",
+      _s_all._compute_still_missing()[0]
+      == "how many vehicles were involved, and whether anyone is injured or trapped")
+check("#1 EN and HI produce the SAME next_question sequence for the same state",
+      _sess_for("Vehicle Collisions", language="hi-IN")._compute_still_missing()
+      == _s_all._compute_still_missing())
+# casualties=0 (a KNOWN, non-critical value) exercises the partial-group path
+# without tripping the #1 injury fast-track -- casualties > 0 would (correctly)
+# skip all remaining secondary questions, so it can't be used as a neutral
+# "already-filled" field here.
+_s_partial = _sess_for("Vehicle Collisions", vehicles_involved=2, casualties=0)
+_m_partial = _s_partial._compute_still_missing()
+check("#1 partially-filled group -> individual question for the remainder, no re-ask, no combined",
+      "how many vehicles were involved, and whether anyone is injured or trapped" not in _m_partial
+      and "how many vehicles were involved" not in _m_partial   # vehicles already known -> not re-asked
+      and "how many people are injured" not in _m_partial       # casualties already known -> not re-asked
+      and "whether anyone is trapped" in _m_partial)
+check("#1 fire+hazmat group asks the combined fire/hazmat question when both are undiscussed",
+      "whether there is any fire or a hazardous-material leak" in _m_partial)
+# #2 pruning: a medical case is never asked for a vehicle count.
+check("#2 Medical & Casualty never asks how many vehicles",
+      all("vehicle" not in m for m in _sess_for("Medical & Casualty")._compute_still_missing()))
+# The combined question flows through the Hindi fast path verbatim from code.
+_hi_all = HindiDispatcherSession.__new__(HindiDispatcherSession)
+HindiDispatcherSession.__init__(_hi_all, _FakeWS())
+_hi_all.state.category = "Vehicle Collisions"
+_hi_all.state.sub_type = "X"
+_hi_all.state.description = "x"
+_hi_all.state.location = {"lat": 1, "lng": 1, "label": "x"}
+check("#1 Hindi fast path appends the canonical COMBINED question for an all-missing group",
+      _hi_all._compose_single_round_reply("अच्छा...", {"update_form_field"})
+      == "अच्छा... कुल कितनी गाड़ियाँ थीं, और क्या किसी को चोट लगी या कोई फँसा हुआ है?")
+
+# #4: severity fast-track. A life-threatening condition skips the routine
+# secondary safety/count questions and the summarize-and-confirm gate; the three
+# essentials (type/location/description) still gate submission. Stays a
+# notification record (no auto-dispatch implied).
+check("#4 _is_critical: trapped", _sess_for("Vehicle Collisions", flags={"Trapped"})._is_critical())
+check("#4 _is_critical: fire", _sess_for("Vehicle Collisions", flags={"Fire"})._is_critical())
+check("#4 _is_critical: heavy bleeding", _sess_for("Vehicle Collisions", flags={"Heavy bleeding"})._is_critical())
+check("#4 _is_critical: unconscious (Conscious discussed, not active)",
+      _sess_for("Vehicle Collisions", flags_discussed={"Conscious"})._is_critical())
+check("#4 _is_critical: not breathing (Breathing discussed, not active)",
+      _sess_for("Vehicle Collisions", flags_discussed={"Breathing"})._is_critical())
+# #1: an injury (casualties > 0) or a vulnerable victim now also fast-tracks,
+# not only the explicit hazard flags.
+check("#1 _is_critical: someone injured (casualties > 0)",
+      _sess_for("Vehicle Collisions", casualties=1)._is_critical())
+check("#1 _is_critical: multiple injured (casualties > 0)",
+      _sess_for("Vehicle Collisions", casualties=4)._is_critical())
+check("#1 _is_critical: vulnerable victim at risk (child/pregnant/elderly/disabled)",
+      _sess_for("Vehicle Collisions", vulnerable_victim=True)._is_critical())
+check("#4 not critical when only routine facts are known",
+      not _sess_for("Vehicle Collisions", vehicles_involved=2, casualties=0)._is_critical())
+check("#1 not critical when casualties is confirmed zero and nothing else",
+      not _sess_for("Vehicle Collisions", casualties=0, vulnerable_victim=False)._is_critical())
+
+_crit = _sess_for("Vehicle Collisions", flags={"Trapped"})
+check("#4 critical + all essentials known -> no further questions (safety groups skipped)",
+      _crit._compute_still_missing() == [])
+check("#4 fast_track surfaced in the state block when critical",
+      _crit._state_block()["fast_track"] is True)
+_crit_no_desc = _sess_for("Vehicle Collisions", flags={"Fire"}, description="")
+check("#4 critical still requires the 3 essentials before submit (description still asked)",
+      _crit_no_desc._compute_still_missing() == ["a short description of what happened"])
+_normal = _sess_for("Vehicle Collisions")
+check("#4 non-critical still asks the routine combined safety question first, fast_track False",
+      _normal._compute_still_missing()[0]
+      == "how many vehicles were involved, and whether anyone is injured or trapped"
+      and _normal._state_block()["fast_track"] is False)
+
+async def _backstop_unconscious_triggers_fast_track():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="en-IN")
+    s.state.caller_transcript = " There's been a crash, the driver is unconscious."
+    await s._apply_local_signals_from_transcript()
+    return s._is_critical() and "Conscious" in s.state.flags_discussed and "Conscious" not in s.state.flags
+check("#4 backstop: 'the driver is unconscious' in the narrative triggers fast_track",
+      asyncio.run(_backstop_unconscious_triggers_fast_track()))
+
+async def _backstop_injury_triggers_fast_track():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="en-IN")
+    s.state.caller_transcript = " Two cars crashed and two people are injured."
+    await s._apply_local_signals_from_transcript()
+    return (s.state.casualties or 0) > 0 and s._is_critical()
+check("#1 backstop: a stated injury count in the narrative triggers fast_track",
+      asyncio.run(_backstop_injury_triggers_fast_track()))
+
+async def _backstop_vulnerable_victim_triggers_fast_track():
+    s = DispatcherSession.__new__(DispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="en-IN")
+    # A vulnerable person at risk, with no explicit casualty count or hazard flag.
+    s.state.caller_transcript = " A small child was hit by a car near the market."
+    await s._apply_local_signals_from_transcript()
+    return s.state.vulnerable_victim and s._is_critical()
+check("#1 backstop: a vulnerable victim (child) in the narrative triggers fast_track",
+      asyncio.run(_backstop_vulnerable_victim_triggers_fast_track()))
 
 def _fresh_hindi_session():
     s = HindiDispatcherSession.__new__(HindiDispatcherSession)
@@ -1184,7 +1474,9 @@ check("fast path refuses with no tool calls at all",
       s._compose_single_round_reply("ठीक है।", set()) is None)
 s_done = _fresh_hindi_session()
 s_done.state.casualties = 0
-s_done.state.flags_discussed = {"Trapped", "Fire"}
+# Vehicle Collisions now groups fire+hazmat, so both must be discussed for the
+# form to be complete (nothing missing).
+s_done.state.flags_discussed = {"Trapped", "Fire", "Hazardous material"}
 check("fast path refuses at the summarize-and-confirm stage (nothing missing)",
       s_done._compose_single_round_reply("ठीक है।", {"update_form_field"}) is None)
 
@@ -1211,20 +1503,50 @@ def _model_response(parts):
 async def _reason_uses_single_round():
     from google.genai import types as gtypes
     s = _fresh_hindi_session()
+    s.state.vehicles_involved = 2   # already known
     fake = _FakeGeminiClient([
         _model_response([
-            gtypes.Part(text="अच्छा... दो लोग घायल हैं"),
+            gtypes.Part(text="अच्छा... किसी को चोट नहीं आई"),
+            gtypes.Part(function_call=gtypes.FunctionCall(
+                name="update_form_field", args={"field": "casualties", "number_value": 0})),
+        ]),
+    ])
+    reply = await s._reason(fake, "किसी को चोट नहीं आई")
+    last = s._history[-1]
+    # vehicles(2) + casualties(0) now known, so the count/injury/trapped group is
+    # partial -> the individual trapped question (new shorter canonical), not the
+    # combined one. casualties=0 is deliberate: casualties > 0 would trip the #1
+    # injury fast-track (next_question -> null) and correctly fall back to the
+    # model for the fast-track reassurance instead of taking this fast path.
+    return (
+        fake.calls == 1
+        and reply == "अच्छा... किसी को चोट नहीं आई। क्या कोई फँसा हुआ है?"
+        and s.state.casualties == 0
+        and last.role == "model" and last.parts[0].text == reply
+    )
+
+async def _reason_injury_falls_back_for_fast_track():
+    # #1: when the caller reports an injury (casualties > 0), the turn becomes
+    # critical, next_question goes null (essentials already present), and the
+    # single-round fast path must DEFER to a second model round -- that round is
+    # where the fast-track reassurance + submit is spoken, which the deterministic
+    # canonical-question appender cannot produce.
+    from google.genai import types as gtypes
+    s = _fresh_hindi_session()
+    fake = _FakeGeminiClient([
+        _model_response([
+            gtypes.Part(text="ओह... मैं समझ सकता हूँ"),
             gtypes.Part(function_call=gtypes.FunctionCall(
                 name="update_form_field", args={"field": "casualties", "number_value": 2})),
         ]),
+        _model_response([gtypes.Part(
+            text="मैं अभी आपके लिए एम्बुलेंस का इंतज़ाम कर रहा हूँ... आप मेरे साथ बने रहिए।")]),
     ])
     reply = await s._reason(fake, "दो लोग घायल हैं")
-    last = s._history[-1]
     return (
-        fake.calls == 1
-        and reply == "अच्छा... दो लोग घायल हैं। क्या कोई गाड़ी के अंदर फँसा हुआ है?"
+        fake.calls == 2               # fell back to the model, no canonical appended
         and s.state.casualties == 2
-        and last.role == "model" and last.parts[0].text == reply
+        and s._is_critical()
     )
 
 async def _reason_falls_back_without_ack_text():
@@ -1242,8 +1564,220 @@ async def _reason_falls_back_without_ack_text():
 
 check("fast path answers in ONE Gemini round and mirrors the reply into history",
       asyncio.run(_reason_uses_single_round()))
+check("#1 an injury report falls back to the model for the fast-track reassurance",
+      asyncio.run(_reason_injury_falls_back_for_fast_track()))
 check("missing ack text still falls back to the normal second round",
       asyncio.run(_reason_falls_back_without_ack_text()))
+
+async def _reason_composes_after_split_update_round():
+    # Issue 2: the model splits its work -- round 0 has a tool call but NO ack,
+    # round 1 has a tool call WITH a question-free ack. The fast path now
+    # composes after round 1 (2 rounds), instead of needing a 3rd spoken-reply
+    # round. Only 2 fake responses are provided, so fake.calls==2 proves it did
+    # not fall through to a 3rd round.
+    from google.genai import types as gtypes
+    s = _fresh_hindi_session()
+    fake = _FakeGeminiClient([
+        _model_response([  # round 0: tool call, NO ack
+            gtypes.Part(function_call=gtypes.FunctionCall(
+                name="update_form_field", args={"field": "vehiclesInvolved", "number_value": 2})),
+        ]),
+        _model_response([  # round 1: tool call + question-free ack
+            gtypes.Part(text="अच्छा... किसी को चोट नहीं आई"),
+            gtypes.Part(function_call=gtypes.FunctionCall(
+                name="update_form_field", args={"field": "casualties", "number_value": 0})),
+        ]),
+    ])
+    reply = await s._reason(fake, "दो गाड़ियाँ टकराईं, किसी को चोट नहीं")
+    return (
+        fake.calls == 2
+        and reply == "अच्छा... किसी को चोट नहीं आई। क्या कोई फँसा हुआ है?"
+        and s.state.vehicles_involved == 2
+        and s.state.casualties == 0
+    )
+check("#2 fast path composes after a split classify/update round (2 rounds, not 3)",
+      asyncio.run(_reason_composes_after_split_update_round()))
+
+# Issue 3: BulbulStream splits a long utterance (the closing briefing) into
+# sentence-level pieces so no single synthesis is long enough to drift off the
+# configured voice; short replies stay one piece.
+from severity_engine.sarvam_speech import _split_for_synthesis, _MAX_SYNTH_CHARS
+check("Bulbul split: short text stays one piece",
+      _split_for_synthesis("नमस्ते, क्या हुआ बताइए?") == ["नमस्ते, क्या हुआ बताइए?"])
+check("Bulbul split: blank -> []", _split_for_synthesis("   ") == [])
+_lg = " ".join(f"यह वाक्य संख्या {i} है।" for i in range(1, 40))
+_pcs = _split_for_synthesis(_lg)
+check("Bulbul split: a long utterance -> multiple pieces", len(_pcs) > 1)
+check("Bulbul split: every piece within the char cap", all(len(p) <= _MAX_SYNTH_CHARS for p in _pcs))
+check("Bulbul split: content preserved across pieces",
+      "".join(_pcs).replace(" ", "") == _lg.replace(" ", ""))
+
+async def _bulbul_speak_splits_long_utterance():
+    from severity_engine import sarvam_speech as ss
+    b = ss.BulbulStream.__new__(ss.BulbulStream)
+    b._closed = False
+    calls = []
+    async def fake_speak_one(text):
+        calls.append(text)
+        yield b"\x00\x00"  # one dummy PCM frame per piece
+    b._speak_one = fake_speak_one
+    long_text = " ".join(f"वाक्य {i} यहाँ लिखा है।" for i in range(1, 40))
+    out = [c async for c in b.speak(long_text)]
+    # one _speak_one synthesis per piece, all yielded as one continuous stream
+    return len(calls) > 1 and len(out) == len(calls)
+check("Bulbul speak() synthesizes a long utterance as several config'd pieces (#3)",
+      asyncio.run(_bulbul_speak_splits_long_utterance()))
+
+# Real reported bug: the Hindi agent spoke internal tool-result fields aloud
+# ("tone reminder", ...). _strip_meta_leak (run in _render_for_speech) removes
+# leaked tokens + parenthesized system notes; natural Hindi speech is untouched.
+from severity_engine.dispatcher_hindi import _strip_meta_leak, _HINDI_OPENING_LINE
+check("meta strip: leaves clean Hindi untouched",
+      _strip_meta_leak("ओह... मुझे यह सुनकर दुख हुआ। क्या कोई फँसा हुआ है?")
+      == "ओह... मुझे यह सुनकर दुख हुआ। क्या कोई फँसा हुआ है?")
+check("meta strip: removes a snake_case token word",
+      "tone_reminder" not in _strip_meta_leak("ठीक है। tone_reminder क्या हुआ बताइए?"))
+check("meta strip: removes 'tone reminder' (spaced) and 'next question'",
+      _strip_meta_leak("tone reminder और next question मत बोलो।").find("reminder") == -1)
+check("meta strip: drops a parenthesized system note entirely",
+      "SYSTEM UPDATE" not in _strip_meta_leak("(SYSTEM UPDATE — internal) मैं मदद भेज रहा हूँ।")
+      and "मदद" in _strip_meta_leak("(SYSTEM UPDATE — internal) मैं मदद भेज रहा हूँ।"))
+check("meta strip: strips a leaked label:value clause but keeps the real reply",
+      "fast_track" not in _strip_meta_leak("(fast_track: true) घबराइए मत... मदद आ रही है।")
+      and "घबराइए मत" in _strip_meta_leak("(fast_track: true) घबराइए मत... मदद आ रही है।"))
+
+def _render_strips_meta_leak():
+    from severity_engine import dispatcher_hindi as dh
+    s = dh.HindiDispatcherSession.__new__(dh.HindiDispatcherSession)
+    s._last_opener = None
+    out = s._render_for_speech("ठीक है। (tone_reminder: caller injured) क्या हुआ बताइए?")
+    return "tone_reminder" not in out and "क्या हुआ" in out
+check("_render_for_speech strips leaked meta before Bulbul",
+      _render_strips_meta_leak())
+
+def _compose_strips_meta_from_ack():
+    # A leaked-meta ack composes cleanly (fast path preserved), meta removed.
+    s = _fresh_hindi_session()
+    composed = s._compose_single_round_reply(
+        "अच्छा... दो लोग घायल हैं (tone_reminder: be gentle)", {"update_form_field"})
+    return composed is not None and "tone_reminder" not in composed
+check("_compose_single_round_reply strips leaked meta from the ack",
+      _compose_strips_meta_from_ack())
+
+# Issue 2: an explicit ambulance request from the caller makes the Hindi
+# fast-track fire (critical), so the model stops asking routine secondary
+# questions and submits once the essentials are in. Hindi-scoped -- the shared
+# English _is_critical is untouched.
+from severity_engine.dispatcher_hindi import _AMBULANCE_REQUEST_RE
+check("ambulance regex matches Devanagari + Latin spellings, not unrelated text",
+      all(_AMBULANCE_REQUEST_RE.search(t) for t in
+          ["एम्बुलेंस भेजो", "एंबुलेंस जल्दी चाहिए", "please send an ambulance asap"])
+      and not _AMBULANCE_REQUEST_RE.search("दो गाड़ियाँ आपस में टकराईं"))
+
+async def _hindi_ambulance_request_is_critical():
+    from severity_engine import dispatcher_hindi as dh
+    s = dh.HindiDispatcherSession.__new__(dh.HindiDispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    s._ambulance_requested = False
+    before = s._is_critical()                     # no ambulance, no injury -> not critical
+    s.state.caller_transcript = " एक्सीडेंट हुआ है, जल्दी एम्बुलेंस भेजो!"
+    await s._apply_local_signals_from_transcript()
+    return (
+        before is False
+        and s._ambulance_requested is True
+        and s._is_critical() is True
+        and s._state_block()["fast_track"] is True
+    )
+check("#2 an ambulance request makes the Hindi fast-track fire (critical)",
+      asyncio.run(_hindi_ambulance_request_is_critical()))
+
+def _english_is_critical_unaffected_by_ambulance():
+    # The SHARED English _is_critical has no ambulance override -> a fresh
+    # (non-injury) English session is not critical, i.e. Hindi's change didn't
+    # leak into dispatcher_live.
+    from severity_engine.dispatcher_live import DispatcherSession
+    s = DispatcherSession.__new__(DispatcherSession)
+    s.state = DispatcherState(language="en-IN")
+    return s._is_critical() is False and not hasattr(s, "_ambulance_requested")
+check("English _is_critical is unaffected by the Hindi ambulance override",
+      _english_is_critical_unaffected_by_ambulance())
+
+# Real reported bug: the Hindi model skipped the fixed 1033 welcome greeting and
+# opened straight with the location question. The greeting is now spoken
+# deterministically as a prefix on the FIRST agent turn only (never left to the
+# model, never repeated on later turns).
+def _fresh_opening_session():
+    from severity_engine import dispatcher_hindi as dh
+    s = dh.HindiDispatcherSession.__new__(dh.HindiDispatcherSession)
+    s._ws_send_lock = asyncio.Lock()
+    s.websocket = _FakeWS()
+    s.state = DispatcherState(language="hi-IN")
+    s._opening_line_pending = True
+    s._ended = asyncio.Event()
+    s._last_opener = None
+    s._turn_stats = {}
+    return s
+
+async def _hindi_opening_turn_greeting_one_utterance():
+    # Issue 1 (fixed): the 1033 greeting + the model's opening reply are spoken
+    # as ONE UNINTERRUPTIBLE utterance in _agent_turn -- so no between-turn
+    # "interrupted"/flush can drop the greeting (the failure a separate greeting
+    # utterance had). Later turns speak only the model reply.
+    from severity_engine import dispatcher_hindi as dh
+    s = _fresh_opening_session()
+    spoken = []
+    async def fake_reason(client, user_text, config=None):
+        return "क्या यह लोकेशन सही है? क्या हुआ, बताइए?"
+    async def fake_speak(text, allow_bargein=True):
+        spoken.append((text, allow_bargein)); return True
+    async def fake_noop(*a, **k):
+        return None
+    s._reason = fake_reason
+    s._speak_or_fallback = fake_speak
+    s._preconnect_tts = fake_noop
+    s._enter_listening = fake_noop
+
+    await s._agent_turn(None, "(opening)")
+    first_ok = (
+        len(spoken) == 1
+        and spoken[0][0].startswith(dh._HINDI_OPENING_LINE)  # greeting first, same utterance
+        and "क्या हुआ" in spoken[0][0]                         # ...then the model's question
+        and spoken[0][1] is False                            # uninterruptible
+        and s._opening_line_pending is False
+    )
+    spoken.clear()
+    await s._agent_turn(None, "दो गाड़ियाँ टकराईं")             # a later turn
+    later_ok = len(spoken) == 1 and not spoken[0][0].startswith(dh._HINDI_OPENING_LINE)
+    return first_ok and later_ok
+check("Hindi 1033 greeting + first reply are ONE uninterruptible utterance; later turns don't repeat it",
+      asyncio.run(_hindi_opening_turn_greeting_one_utterance()))
+
+async def _hindi_greeting_still_spoken_when_model_silent():
+    # Even if the model returns nothing on the opening turn, the greeting (+ a
+    # fallback question) is still spoken.
+    from severity_engine import dispatcher_hindi as dh
+    s = _fresh_opening_session()
+    spoken = []
+    async def fake_reason(client, user_text, config=None):
+        return ""                       # model produced nothing usable
+    async def fake_speak(text, allow_bargein=True):
+        spoken.append(text); return True
+    async def fake_noop(*a, **k):
+        return None
+    s._reason = fake_reason
+    s._speak_or_fallback = fake_speak
+    s._preconnect_tts = fake_noop
+    s._enter_listening = fake_noop
+    await s._agent_turn(None, "(opening)")
+    return (
+        len(spoken) == 1
+        and spoken[0].startswith(dh._HINDI_OPENING_LINE)
+        and dh._OPENING_FALLBACK_QUESTION in spoken[0]
+    )
+check("Hindi 1033 greeting is spoken even if the model returns nothing (fallback question)",
+      asyncio.run(_hindi_greeting_still_spoken_when_model_silent()))
 
 # Reconnect resilience (real reported bug: a call hit "The voice service hit
 # a technical problem" after exhausting reconnects; no code-level regression

@@ -14,7 +14,19 @@ export async function GET() {
     .order("created_at", { ascending: false });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data ?? []);
+
+  // Annotate each accident with its ambiguity-review status (read-path only —
+  // the write path is untouched). This lets the PUBLIC density heatmap exclude
+  // 'ignored' duplicates and the operator list dim them, WITHOUT any client
+  // needing to read the incident_reviews table directly.
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  const { data: reviews } = await supabase.from("incident_reviews").select("incident_id, review_status");
+  const statusById = new Map<string, string>();
+  for (const r of (reviews ?? []) as Array<{ incident_id: string; review_status: string }>) {
+    statusById.set(r.incident_id, r.review_status);
+  }
+  const annotated = rows.map((a) => ({ ...a, review_status: statusById.get(a.id as string) ?? null }));
+  return NextResponse.json(annotated);
 }
 
 export async function POST(req: Request) {

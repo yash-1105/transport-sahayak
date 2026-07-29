@@ -47,3 +47,7 @@ next-env.d.ts
 __pycache__/
 *.pyc
 *.pyo
+
+# Supabase CLI local link state (per-machine cache)
+supabase/.temp/
+supabase/.branches/

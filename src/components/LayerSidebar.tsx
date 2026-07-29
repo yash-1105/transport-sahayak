@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { LAYER_TO_PLACE_TYPE } from "@/hooks/usePlaces";
+import { LAYER_TO_PLACE_TYPE } from "@/hooks/useResponders";
 import type {
   ServiceLayerType,
   AccidentLayerType,
@@ -80,7 +80,9 @@ function MiniShape({ shape, color }: { shape: LayerShape; color: string }) {
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
-type Tab = "SERVICES" | "ACCIDENTS";
+// NETWORK belongs to MapView's tab union (the Signals DPG dashboard); the
+// sidebar has no layer chips for it and simply keeps showing both sections.
+type Tab = "SERVICES" | "ACCIDENTS" | "NETWORK";
 
 interface LayerSidebarProps {
   open: boolean;

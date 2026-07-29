@@ -8,32 +8,38 @@ import {
   InfoWindow,
   Polyline,
 } from "@vis.gl/react-google-maps";
+import { useMap } from "@vis.gl/react-google-maps";
 import { useRoutingStore, type SimulatedVehicleKind } from "@/store/routingStore";
 import { useEventLog } from "@/store/eventLog";
 import TimelinePanel from "@/components/TimelinePanel";
 import LanguageToggle from "@/components/LanguageToggle";
+import AuthControl from "@/components/auth/AuthControl";
+import { useIsOperator } from "@/store/authStore";
 import InstallPWA from "@/components/InstallPWA";
 import IncidentRecord from "@/components/IncidentRecord";
-import { useT } from "@/hooks/useI18n";
-import { usePlaces, LAYER_TO_PLACE_TYPE } from "@/hooks/usePlaces";
+import { useT, useBilingual } from "@/hooks/useI18n";
+import { useResponders, LAYER_TO_PLACE_TYPE } from "@/hooks/useResponders";
+import { C, HEADER_GRADIENT, BRAND_GRADIENT, CTA_GRADIENT, SHADOW } from "@/lib/design";
+import { ShieldCrossIcon } from "@/components/ui/icons";
+import ClusteredLayer, { type ClusterItem } from "@/components/map/ClusteredLayer";
+import AccidentDensityLayer from "@/components/map/AccidentDensityLayer";
+import MapControls from "@/components/map/MapControls";
+import FloatingPanel, {
+  type ServiceLayerRow,
+  type NearbyFacility,
+  type ReportCardData,
+} from "@/components/map/FloatingPanel";
 import { usePotholes } from "@/hooks/usePotholes";
 import { useAccidents } from "@/hooks/useAccidents";
-import { CORRIDOR_WAYPOINTS, CORRIDOR_CENTER, CORRIDOR_WAYPOINT_RADIUS_M } from "@/lib/corridorWaypoints";
+import { CORRIDOR_CENTER } from "@/lib/corridorWaypoints";
 import type { StringKey } from "@/i18n/strings";
 import type { GooglePlace } from "@/lib/types";
-
-// Synthetic-only layers still loaded from seed files
-import ambulanceData from "../../data/ambulance-stations.json";
-import fireStationData from "../../data/fire-stations.json";
-import towingStationData from "../../data/towing-stations.json";
-import blackspotsData from "../../data/blackspots.json";
 
 import type {
   AmbulanceStation,
   FireStation,
   TowingStation,
   AccidentReport,
-  Blackspot,
   DbPothole,
   DbAccident,
   ServiceLayerType,
@@ -42,7 +48,7 @@ import type {
 } from "@/lib/types";
 import { reverseGeocode } from "@/lib/geocode";
 import ReportPanel from "@/components/report/ReportPanel";
-import LayerSidebar from "@/components/LayerSidebar";
+import OperatorDashboard from "@/components/operator/OperatorDashboard";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -50,32 +56,38 @@ import LayerSidebar from "@/components/LayerSidebar";
 
 // ── Layer config ──────────────────────────────────────────────────────────────
 
+// Category colours match the design handoff's panel/cluster palette. `hi` is
+// the Hindi sub-label shown in the floating panel. `defaultOn` sets the initial
+// layer visibility — only Hospitals / Ambulance / Fire / Towing start ON.
 const SERVICE_LAYERS: {
   key: ServiceLayerType;
   labelKey: StringKey;
+  hi: string;
   color: string;
   strokeColor: string;
   source: "google" | "synthetic";
+  defaultOn: boolean;
 }[] = [
-  { key: "HOSPITAL",          labelKey: "layerHospitals", color: "#2563eb", strokeColor: "#1d4ed8", source: "google" },
-  { key: "AMBULANCE_STATION", labelKey: "layerAmbulance", color: "#16a34a", strokeColor: "#15803d", source: "synthetic" },
-  { key: "FIRE_STATION",      labelKey: "layerFire",      color: "#dc2626", strokeColor: "#b91c1c", source: "synthetic" },
-  { key: "TOWING_STATION",    labelKey: "layerTowing",    color: "#57534e", strokeColor: "#3f3c3a", source: "synthetic" },
-  { key: "MECHANIC",          labelKey: "layerMechanics", color: "#6b7280", strokeColor: "#4b5563", source: "google" },
-  { key: "POLICE",            labelKey: "layerPolice",    color: "#1e3a8a", strokeColor: "#1e3069", source: "google" },
-  { key: "PHARMACY",          labelKey: "layerPharmacy",  color: "#7c3aed", strokeColor: "#6d28d9", source: "google" },
-  { key: "GAS_STATION",       labelKey: "layerFuel",      color: "#0891b2", strokeColor: "#0e7490", source: "google" },
+  { key: "HOSPITAL",          labelKey: "layerHospitals", hi: "अस्पताल",           color: "#2456A6", strokeColor: "#1B417D", source: "google",    defaultOn: true },
+  { key: "AMBULANCE_STATION", labelKey: "layerAmbulance", hi: "एम्बुलेंस केंद्र",  color: "#1E7F4F", strokeColor: "#155C39", source: "synthetic", defaultOn: true },
+  { key: "FIRE_STATION",      labelKey: "layerFire",      hi: "दमकल केंद्र",       color: "#C6362C", strokeColor: "#9E2A22", source: "synthetic", defaultOn: true },
+  { key: "TOWING_STATION",    labelKey: "layerTowing",    hi: "टोइंग / रिकवरी",    color: "#6B7280", strokeColor: "#4B5563", source: "synthetic", defaultOn: true },
+  { key: "MECHANIC",          labelKey: "layerMechanics", hi: "मैकेनिक",           color: "#374151", strokeColor: "#1F2937", source: "google",    defaultOn: false },
+  { key: "POLICE",            labelKey: "layerPolice",    hi: "पुलिस थाने",        color: "#4F46E5", strokeColor: "#3730B3", source: "google",    defaultOn: false },
+  { key: "PHARMACY",          labelKey: "layerPharmacy",  hi: "दवा दुकानें",       color: "#0D9488", strokeColor: "#0A6E64", source: "google",    defaultOn: false },
+  { key: "GAS_STATION",       labelKey: "layerFuel",      hi: "पेट्रोल पंप",       color: "#B45309", strokeColor: "#8A3F07", source: "google",    defaultOn: false },
 ];
 
 const ACCIDENT_LAYERS: {
   key: AccidentLayerType;
   labelKey: StringKey;
+  hi: string;
   color: string;
   strokeColor: string;
   source: "synthetic" | "live";
 }[] = [
-  { key: "POTHOLE",           labelKey: "layerPotholes",           color: "#78350f", strokeColor: "#5c2a0b", source: "live" },
-  { key: "REPORTED_ACCIDENT", labelKey: "layerReportedAccidents",  color: "#ea580c", strokeColor: "#c2410c", source: "live" },
+  { key: "POTHOLE",           labelKey: "layerPotholes",           hi: "सड़क दोष",             color: "#6B4226", strokeColor: "#4E2F1A", source: "live" },
+  { key: "REPORTED_ACCIDENT", labelKey: "layerReportedAccidents",  hi: "दुर्घटनाएँ",           color: "#D14036", strokeColor: "#A82C22", source: "live" },
 ];
 
 const LAYER_COLOR: Record<string, { color: string; strokeColor: string }> = {
@@ -170,14 +182,6 @@ function ReportedAccidentIcon() {
     </svg>
   );
 }
-function BlackspotIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M7 4v5" stroke="white" strokeWidth="2.2" strokeLinecap="round"/>
-      <circle cx="7" cy="11.5" r="1.3" fill="white"/>
-    </svg>
-  );
-}
 function PotholeIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -267,7 +271,6 @@ const LAYER_MARKER: Record<string, { shape: MarkerShape; Icon: () => React.JSX.E
   POLICE:            { shape: "square",   Icon: PoliceIcon },
   PHARMACY:          { shape: "square",   Icon: PharmacyIcon },
   GAS_STATION:       { shape: "square",   Icon: GasIcon },
-  BLACKSPOT:           { shape: "triangle", Icon: BlackspotIcon },
   POTHOLE:             { shape: "diamond",  Icon: PotholeIcon },
   REPORTED_ACCIDENT:   { shape: "circle",   Icon: ReportedAccidentIcon },
 };
@@ -284,43 +287,6 @@ function LayerMarker({ layerKey, color, strokeColor }: { layerKey: string; color
   }
 }
 
-// Mini shape used in filter chips — mirrors the map marker shape at small scale
-function ChipShape({ layerKey, color }: { layerKey: string; color: string }) {
-  const shape = LAYER_MARKER[layerKey]?.shape ?? "circle";
-  if (shape === "triangle") {
-    return (
-      <svg width="10" height="9" viewBox="0 0 10 9" style={{ flexShrink: 0, display: "inline-block" }}>
-        <path d="M5 1L9.5 8.5H.5L5 1z" fill={color}/>
-      </svg>
-    );
-  }
-  if (shape === "diamond") {
-    return (
-      <span style={{
-        display: "inline-block", flexShrink: 0,
-        width: 9, height: 9,
-        background: color, borderRadius: 1.5,
-        transform: "rotate(45deg)",
-      }}/>
-    );
-  }
-  if (shape === "square") {
-    return (
-      <span style={{
-        display: "inline-block", flexShrink: 0,
-        width: 9, height: 9,
-        background: color, borderRadius: 2,
-      }}/>
-    );
-  }
-  return (
-    <span style={{
-      display: "inline-block", flexShrink: 0,
-      width: 9, height: 9,
-      background: color, borderRadius: "50%",
-    }}/>
-  );
-}
 
 // ── Incident pin (teardrop + pulse ring) ──────────────────────────────────────
 
@@ -529,24 +495,6 @@ function TowingStationPopup({ w }: { w: TowingStation }) {
   );
 }
 
-function BlackspotPopup({ b }: { b: Blackspot }) {
-  return (
-    <div className="text-xs leading-relaxed min-w-[220px]">
-      <p className="font-semibold text-sm text-gray-900">{b.name}</p>
-      <p className="text-gray-500 mb-1">{b.highway} · {b.district}</p>
-      <table className="w-full text-gray-700">
-        <tbody>
-          <tr><td className="pr-2 text-gray-500">Accidents (3 yr)</td><td className="font-medium text-red-700">{b.accidentsLast3Years}</td></tr>
-          <tr><td className="pr-2 text-gray-500">Deaths (3 yr)</td><td className="font-medium text-red-900">{b.deathsLast3Years}</td></tr>
-          <tr><td className="pr-2 text-gray-500">Hazard</td><td>{b.primaryHazard}</td></tr>
-          <tr><td className="pr-2 text-gray-500">Peak period</td><td>{b.periodOfPeak}</td></tr>
-        </tbody>
-      </table>
-      <p className="text-amber-700 text-[10px] mt-2">⚠ Sample data</p>
-    </div>
-  );
-}
-
 function PotholePopup({ p }: { p: DbPothole }) {
   const col = p.severity === "HIGH" ? "text-red-700" : p.severity === "MEDIUM" ? "text-amber-700" : "text-gray-700";
   return (
@@ -592,17 +540,62 @@ interface MarkerInfo {
   content: React.ReactNode;
 }
 
+// Lifts the live google.maps.Map instance (and current centre) up to MapView so
+// the floating panel's list rows can pan/zoom the map. Renders nothing.
+function MapHandle({
+  onMap,
+  onCenter,
+}: {
+  onMap: (m: google.maps.Map | null) => void;
+  onCenter: (c: { lat: number; lng: number }) => void;
+}) {
+  const map = useMap();
+  useEffect(() => {
+    onMap(map ?? null);
+  }, [map, onMap]);
+  useEffect(() => {
+    if (!map) return;
+    const listener = map.addListener("idle", () => {
+      const c = map.getCenter();
+      if (c) onCenter({ lat: c.lat(), lng: c.lng() });
+    });
+    return () => listener.remove();
+  }, [map, onCenter]);
+  return null;
+}
+
+// Coarse relative-time label for report cards (date-granularity source data).
+function relTime(dateStr: string): string {
+  const then = new Date(dateStr).getTime();
+  if (Number.isNaN(then)) return "";
+  const mins = Math.floor((Date.now() - then) / 60000);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} h`;
+  return `${Math.floor(hrs / 24)} d`;
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
-type Tab = "SERVICES" | "ACCIDENTS";
+type Tab = "SERVICES" | "ACCIDENTS" | "NETWORK";
 
 export default function MapView() {
   const t = useT();
+  const { showHindi } = useBilingual();
   const browserKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY ?? "";
 
   const [tab, setTab] = useState<Tab>("SERVICES");
+  // Network tab is operator-only (Signals/Aggregator dispatch dashboard).
+  const isOperator = useIsOperator();
+  // Never let a non-operator sit on NETWORK (e.g. via stale state after sign-out
+  // or a role change) — fall back to Services.
+  useEffect(() => {
+    if (tab === "NETWORK" && !isOperator) setTab("SERVICES");
+  }, [tab, isOperator]);
+  // Only Hospitals / Ambulance / Fire / Towing start ON (design default).
   const [activeServices, setActiveServices] = useState<Set<ServiceLayerType>>(
-    new Set(SERVICE_LAYERS.map((l) => l.key))
+    new Set(SERVICE_LAYERS.filter((l) => l.defaultOn).map((l) => l.key))
   );
   const [activeAccidents, setActiveAccidents] = useState<Set<AccidentLayerType>>(
     new Set(ACCIDENT_LAYERS.map((l) => l.key))
@@ -613,7 +606,16 @@ export default function MapView() {
   const [pinnedLocation, setPinnedLocation] = useState<GeoPoint | null>(null);
   const [pinnedLabel, setPinnedLabel] = useState("");
   const [openInfo, setOpenInfo] = useState<MarkerInfo | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // On mobile the floating panel becomes a bottom drawer — start it collapsed so
+  // the map, FAB and timeline pill are visible; the ☰ button re-opens it. Safe to
+  // read matchMedia in the initializer: MapView is a client-only (ssr:false)
+  // dynamic import, so `window` always exists and there's no hydration mismatch.
+  const [panelOpen, setPanelOpen] = useState(
+    () => !(typeof window !== "undefined" && window.matchMedia("(max-width: 640px)").matches)
+  );
+  const [searchQuery, setSearchQuery] = useState("");
+  const [mapInstance, setMapInstance] = useState<google.maps.Map | null>(null);
+  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>(CORRIDOR_CENTER);
 
   const mapRoutes = useRoutingStore((s) => s.routes);
   const simulatedVehicles = useRoutingStore((s) => s.simulatedVehicles);
@@ -646,15 +648,14 @@ export default function MapView() {
   const incidentPinLabel = pinnedLabel || activeIncident?.label || "";
 
   // ── Google Places (live, server-fetched) ──────────────────────────────────
-  const { results: places, loading: placesLoading, hasError: placesError } = usePlaces(
-    CORRIDOR_WAYPOINTS, CORRIDOR_WAYPOINT_RADIUS_M
-  );
+  // All responder/service layers come from the Aggregator DPG — curated,
+  // synthetic and Google-synced alike. Google Places is ingestion-only.
+  const { results: places, data: responders, loading: placesLoading, hasError: placesError } = useResponders();
 
   // ── Synthetic seed data (labelled as sample) ──────────────────────────────
-  const ambulances    = useMemo(() => ambulanceData.ambulanceStations as AmbulanceStation[], []);
-  const fireStations  = useMemo(() => fireStationData.fireStations as FireStation[], []);
-  const towingStations = useMemo(() => towingStationData.towingStations as TowingStation[], []);
-  const blackspots    = useMemo(() => blackspotsData.blackspots as Blackspot[], []);
+  const ambulances = responders.ambulanceStations;
+  const fireStations = responders.fireStations;
+  const towingStations = responders.towingStations;
   const { potholes, loading: potholesLoading, error: potholesError, refetch: refetchPotholes } = usePotholes();
   const { accidents: reportedAccidents, refetch: refetchAccidents } = useAccidents();
 
@@ -688,6 +689,148 @@ export default function MapView() {
     setOpenInfo({ position: { lat: p.lat, lng: p.lng }, content: <GooglePlacePopup p={p} label={label} /> });
   }
 
+  // Pan + zoom the live map to a coordinate (used by floating-panel list rows).
+  const focusOn = useCallback((lat: number, lng: number) => {
+    if (!mapInstance) return;
+    mapInstance.panTo({ lat, lng });
+    if ((mapInstance.getZoom() ?? 0) < 13) mapInstance.setZoom(14);
+  }, [mapInstance]);
+
+  const query = searchQuery.trim().toLowerCase();
+  const matchesSearch = useCallback(
+    (name: string) => query.length === 0 || name.toLowerCase().includes(query),
+    [query]
+  );
+
+  // ── Floating-panel: service-layer rows (label, colour, count, toggle) ───────
+  const serviceLayerRows: ServiceLayerRow[] = SERVICE_LAYERS.map((l) => {
+    const pt = LAYER_TO_PLACE_TYPE[l.key];
+    const isGoogle = l.source === "google" && pt;
+    const count = isGoogle
+      ? places[pt].length
+      : l.key === "AMBULANCE_STATION"
+      ? ambulances.length
+      : l.key === "FIRE_STATION"
+      ? fireStations.length
+      : l.key === "TOWING_STATION"
+      ? towingStations.length
+      : null;
+    return {
+      key: l.key,
+      en: t(l.labelKey),
+      hi: l.hi,
+      color: l.color,
+      count,
+      loading: isGoogle ? placesLoading[pt] : false,
+      sample: l.source === "synthetic",
+      active: activeServices.has(l.key),
+      onToggle: () => toggleService(l.key),
+    };
+  });
+
+  // ── Floating-panel: nearby facilities (active service layers, by distance) ──
+  const nearbyFacilities: NearbyFacility[] = useMemo(() => {
+    const items: (NearbyFacility & { lat: number; lng: number })[] = [];
+    for (const l of SERVICE_LAYERS) {
+      if (!activeServices.has(l.key)) continue;
+      const pt = LAYER_TO_PLACE_TYPE[l.key];
+      if (l.source === "google" && pt) {
+        const label = singularLabel(t(l.labelKey));
+        for (const p of places[pt]) {
+          if (!matchesSearch(p.name)) continue;
+          items.push({
+            key: p.id, name: p.name, meta: label, color: l.color, lat: p.lat, lng: p.lng,
+            distanceLabel: "",
+            onSelect: () => { focusOn(p.lat, p.lng); openPlaceInfo(p, label); },
+          });
+        }
+      } else if (l.key === "AMBULANCE_STATION") {
+        for (const a of ambulances) {
+          if (!matchesSearch(a.name)) continue;
+          items.push({ key: a.id, name: a.name, meta: a.district, color: l.color, lat: a.lat, lng: a.lng, distanceLabel: "",
+            onSelect: () => { focusOn(a.lat, a.lng); setOpenInfo({ position: { lat: a.lat, lng: a.lng }, content: <AmbulancePopup a={a} /> }); } });
+        }
+      } else if (l.key === "FIRE_STATION") {
+        for (const f of fireStations) {
+          if (!matchesSearch(f.name)) continue;
+          items.push({ key: f.id, name: f.name, meta: f.district, color: l.color, lat: f.lat, lng: f.lng, distanceLabel: "",
+            onSelect: () => { focusOn(f.lat, f.lng); setOpenInfo({ position: { lat: f.lat, lng: f.lng }, content: <FireStationPopup f={f} /> }); } });
+        }
+      } else if (l.key === "TOWING_STATION") {
+        for (const w of towingStations) {
+          if (!matchesSearch(w.name)) continue;
+          items.push({ key: w.id, name: w.name, meta: w.district, color: l.color, lat: w.lat, lng: w.lng, distanceLabel: "",
+            onSelect: () => { focusOn(w.lat, w.lng); setOpenInfo({ position: { lat: w.lat, lng: w.lng }, content: <TowingStationPopup w={w} /> }); } });
+        }
+      }
+    }
+    items.sort(
+      (a, b) => haversineKmLocal(mapCenter, { lat: a.lat, lng: a.lng }) - haversineKmLocal(mapCenter, { lat: b.lat, lng: b.lng })
+    );
+    return items.slice(0, 8).map((it) => ({
+      ...it,
+      distanceLabel: `${haversineKmLocal(mapCenter, { lat: it.lat, lng: it.lng }).toFixed(1)} km`,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [places, ambulances, fireStations, towingStations, activeServices, query, mapCenter, focusOn]);
+
+  // ── Floating-panel: report cards (accidents tab) ────────────────────────────
+  const reportCards: ReportCardData[] = useMemo(() => {
+    const cards: (ReportCardData & { ts: number })[] = [];
+    // Individual accident report cards (with their detailed popups) are
+    // operator-only. Citizens/guests never get per-report rows — they see the
+    // aggregated density layer + legend instead.
+    if (isOperator && activeAccidents.has("REPORTED_ACCIDENT")) {
+      for (const a of reportedAccidents) {
+        const sev: ReportCardData["sev"] =
+          a.severity === "CRITICAL" || a.severity === "HIGH" ? "HIGH" : a.severity === "MEDIUM" ? "MED" : "LOW";
+        const title = a.description?.trim().split(/[.\n]/)[0].slice(0, 42) || "Reported accident";
+        const ignored = a.review_status === "ignored"; // B5: dim reviewed-duplicate rows
+        cards.push({
+          key: `acc-${a.id}`, sev, title, time: relTime(a.reported_date), loc: a.location_label,
+          status: ignored ? "Ignored (dup)" : "Reported", statusHot: false, dimmed: ignored,
+          ts: new Date(a.reported_date).getTime() || 0,
+          onSelect: () => { focusOn(a.lat, a.lng); setOpenInfo({ position: { lat: a.lat, lng: a.lng }, content: <ReportedAccidentPopup a={a} /> }); },
+        });
+      }
+    }
+    if (activeAccidents.has("POTHOLE")) {
+      for (const p of potholes) {
+        const sev: ReportCardData["sev"] = p.severity === "HIGH" ? "HIGH" : p.severity === "MEDIUM" ? "MED" : "LOW";
+        cards.push({
+          key: `pot-${p.id}`, sev, title: "Road defect", time: relTime(p.reported_date), loc: p.road,
+          status: p.status || "Reported", statusHot: false, ts: new Date(p.reported_date).getTime() || 0,
+          onSelect: () => { focusOn(p.lat, p.lng); setOpenInfo({ position: { lat: p.lat, lng: p.lng }, content: <PotholePopup p={p} /> }); },
+        });
+      }
+    }
+    cards.sort((a, b) => b.ts - a.ts);
+    return cards;
+  }, [reportedAccidents, potholes, activeAccidents, focusOn, isOperator]);
+
+  // Density-zone click (citizen/guest Accidents view): aggregate text ONLY —
+  // never an individual report field. Stable identity so AccidentDensityLayer's
+  // effect doesn't redraw circles on every render.
+  const handleAccidentZoneClick = useCallback(
+    (position: { lat: number; lng: number }, count: number) => {
+      setOpenInfo({
+        position,
+        content: (
+          <div className="text-xs leading-relaxed" style={{ minWidth: 190 }}>
+            <p className="font-semibold text-sm text-gray-900">Accident-prone area</p>
+            <p className="text-gray-700" style={{ marginTop: 2 }}>
+              {count} reported accident{count === 1 ? "" : "s"} in this area — drive with caution.
+            </p>
+            <p className="text-gray-400" style={{ fontSize: 11, marginTop: 4 }}>
+              दुर्घटना-संभावित क्षेत्र · reported density, not an official blackspot
+            </p>
+          </div>
+        ),
+      });
+    },
+    []
+  );
+
   // ── Missing browser key guard ──────────────────────────────────────────────
 
   if (!browserKey) {
@@ -708,14 +851,77 @@ export default function MapView() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="relative w-full h-screen overflow-hidden bg-gray-100">
+    <div className="h-full flex flex-col overflow-hidden" style={{ background: C.page, color: C.ink }}>
+      {/* ── Header (60px navy) ─────────────────────────────────────────────── */}
+      <header
+        className="flex items-center gap-5 px-4 flex-none"
+        style={{ height: 60, background: HEADER_GRADIENT, boxShadow: "0 1px 0 rgba(255,255,255,.06) inset, 0 2px 8px rgba(14,26,47,.25)" }}
+      >
+        {/* Brand */}
+        <div className="flex items-center gap-[11px] min-w-0">
+          <div
+            className="flex items-center justify-center flex-none"
+            style={{ width: 34, height: 34, borderRadius: 9, background: BRAND_GRADIENT }}
+          >
+            <ShieldCrossIcon size={19} style={{ color: "#fff" }} />
+          </div>
+          <div className="min-w-0" style={{ lineHeight: 1.15 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "#fff" }} className="truncate">
+              {t("appName")}
+              {showHindi && <span style={{ fontWeight: 500, color: "#93A3BE", fontSize: 13 }}> · परिवहन सहायक</span>}
+            </div>
+            <div className="truncate hidden sm:block" style={{ fontSize: 11, color: C.onNavySub }}>
+              Delhi–Dehradun Expressway — Road Accident First Response
+            </div>
+          </div>
+        </div>
+
+        {/* Segmented nav */}
+        <nav
+          className="ts-nav flex"
+          style={{ marginLeft: "auto", gap: 4, background: "rgba(255,255,255,.07)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, padding: 3 }}
+        >
+          {([
+            { key: "SERVICES" as Tab, labelKey: "tabServices" as StringKey, hi: "सेवाएँ" },
+            { key: "ACCIDENTS" as Tab, labelKey: "tabAccidents" as StringKey, hi: "दुर्घटनाएँ" },
+            // Network is operator-only — citizens/guests never see this segment.
+            ...(isOperator ? [{ key: "NETWORK" as Tab, labelKey: "tabNetwork" as StringKey, hi: "नेटवर्क" }] : []),
+          ]).map((nt) => {
+            const on = tab === nt.key;
+            return (
+              <button
+                key={nt.key}
+                onClick={() => setTab(nt.key)}
+                className="flex flex-col items-center"
+                style={{ padding: "5px 18px", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 12.5, fontWeight: 600, lineHeight: 1.25, background: on ? "#fff" : "transparent", color: on ? C.navy800 : C.navInactive }}
+              >
+                <span>{t(nt.labelKey)}</span>
+                {showHindi && (
+                  <span style={{ fontSize: 10.5, fontWeight: 500, color: on ? C.muted : C.onNavySub }}>{nt.hi}</span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Account + Language toggle + PWA install */}
+        <div className="flex items-center gap-2" style={{ marginLeft: "auto" }}>
+          <InstallPWA />
+          <AuthControl />
+          <LanguageToggle />
+        </div>
+      </header>
+
+      {/* ── Map / dashboard area ───────────────────────────────────────────── */}
+      <main className="relative flex-1 overflow-hidden">
       <APIProvider apiKey={browserKey}>
         <Map
           mapId="DEMO_MAP_ID"
           defaultCenter={CORRIDOR_CENTER}
           defaultZoom={8}
           gestureHandling="greedy"
-          className="w-full h-full"
+          disableDefaultUI
+          className="absolute inset-0 w-full h-full"
           draggableCursor={isPickingPin ? "crosshair" : ""}
           onClick={(e) => {
             setOpenInfo(null);
@@ -724,105 +930,96 @@ export default function MapView() {
             }
           }}
         >
-          {/* ── Google Places: live service layers ────────────────────────── */}
+          {/* ── Service layers — clustered, one clusterer per category ─────── */}
           {tab === "SERVICES" && (
             <>
               {SERVICE_LAYERS.filter((l) => l.source === "google").map((layer) => {
                 const placeType = LAYER_TO_PLACE_TYPE[layer.key];
                 if (!placeType || !activeServices.has(layer.key)) return null;
-                return places[placeType].map((p) => (
-                  <AdvancedMarker
-                    key={p.id}
-                    position={{ lat: p.lat, lng: p.lng }}
-                    title={p.name}
-                    onClick={() => openPlaceInfo(p, singularLabel(t(layer.labelKey)))}
-                  >
-                    <LayerMarker layerKey={layer.key} color={layer.color} strokeColor={layer.strokeColor} />
-                  </AdvancedMarker>
-                ));
+                const label = singularLabel(t(layer.labelKey));
+                const items: ClusterItem[] = places[placeType]
+                  .filter((p) => matchesSearch(p.name))
+                  .map((p) => ({
+                    key: p.id,
+                    position: { lat: p.lat, lng: p.lng },
+                    title: p.name,
+                    onClick: () => openPlaceInfo(p, label),
+                    pin: <LayerMarker layerKey={layer.key} color={layer.color} strokeColor={layer.strokeColor} />,
+                  }));
+                return <ClusteredLayer key={layer.key} items={items} color={layer.color} />;
               })}
 
               {/* Ambulance stations — synthetic */}
-              {activeServices.has("AMBULANCE_STATION") &&
-                ambulances.map((a) => (
-                  <AdvancedMarker
-                    key={a.id}
-                    position={{ lat: a.lat, lng: a.lng }}
-                    title={a.name}
-                    onClick={() => setOpenInfo({ position: { lat: a.lat, lng: a.lng }, content: <AmbulancePopup a={a} /> })}
-                  >
-                    <LayerMarker layerKey="AMBULANCE_STATION" color={LAYER_COLOR.AMBULANCE_STATION.color} strokeColor={LAYER_COLOR.AMBULANCE_STATION.strokeColor} />
-                  </AdvancedMarker>
-                ))}
+              {activeServices.has("AMBULANCE_STATION") && (
+                <ClusteredLayer
+                  color={LAYER_COLOR.AMBULANCE_STATION.color}
+                  items={ambulances.filter((a) => matchesSearch(a.name)).map((a) => ({
+                    key: a.id, position: { lat: a.lat, lng: a.lng }, title: a.name,
+                    onClick: () => setOpenInfo({ position: { lat: a.lat, lng: a.lng }, content: <AmbulancePopup a={a} /> }),
+                    pin: <LayerMarker layerKey="AMBULANCE_STATION" color={LAYER_COLOR.AMBULANCE_STATION.color} strokeColor={LAYER_COLOR.AMBULANCE_STATION.strokeColor} />,
+                  }))}
+                />
+              )}
 
               {/* Fire stations — synthetic */}
-              {activeServices.has("FIRE_STATION") &&
-                fireStations.map((f) => (
-                  <AdvancedMarker
-                    key={f.id}
-                    position={{ lat: f.lat, lng: f.lng }}
-                    title={f.name}
-                    onClick={() => setOpenInfo({ position: { lat: f.lat, lng: f.lng }, content: <FireStationPopup f={f} /> })}
-                  >
-                    <LayerMarker layerKey="FIRE_STATION" color={LAYER_COLOR.FIRE_STATION.color} strokeColor={LAYER_COLOR.FIRE_STATION.strokeColor} />
-                  </AdvancedMarker>
-                ))}
+              {activeServices.has("FIRE_STATION") && (
+                <ClusteredLayer
+                  color={LAYER_COLOR.FIRE_STATION.color}
+                  items={fireStations.filter((f) => matchesSearch(f.name)).map((f) => ({
+                    key: f.id, position: { lat: f.lat, lng: f.lng }, title: f.name,
+                    onClick: () => setOpenInfo({ position: { lat: f.lat, lng: f.lng }, content: <FireStationPopup f={f} /> }),
+                    pin: <LayerMarker layerKey="FIRE_STATION" color={LAYER_COLOR.FIRE_STATION.color} strokeColor={LAYER_COLOR.FIRE_STATION.strokeColor} />,
+                  }))}
+                />
+              )}
 
               {/* Towing / recovery — synthetic */}
-              {activeServices.has("TOWING_STATION") &&
-                towingStations.map((w) => (
-                  <AdvancedMarker
-                    key={w.id}
-                    position={{ lat: w.lat, lng: w.lng }}
-                    title={w.name}
-                    onClick={() => setOpenInfo({ position: { lat: w.lat, lng: w.lng }, content: <TowingStationPopup w={w} /> })}
-                  >
-                    <LayerMarker layerKey="TOWING_STATION" color={LAYER_COLOR.TOWING_STATION.color} strokeColor={LAYER_COLOR.TOWING_STATION.strokeColor} />
-                  </AdvancedMarker>
-                ))}
-
+              {activeServices.has("TOWING_STATION") && (
+                <ClusteredLayer
+                  color={LAYER_COLOR.TOWING_STATION.color}
+                  items={towingStations.filter((w) => matchesSearch(w.name)).map((w) => ({
+                    key: w.id, position: { lat: w.lat, lng: w.lng }, title: w.name,
+                    onClick: () => setOpenInfo({ position: { lat: w.lat, lng: w.lng }, content: <TowingStationPopup w={w} /> }),
+                    pin: <LayerMarker layerKey="TOWING_STATION" color={LAYER_COLOR.TOWING_STATION.color} strokeColor={LAYER_COLOR.TOWING_STATION.strokeColor} />,
+                  }))}
+                />
+              )}
             </>
           )}
 
-          {/* ── Accident layers — always synthetic ───────────────────────── */}
+          {/* ── Accident layers — clustered ─────────────────────────────── */}
           {tab === "ACCIDENTS" && (
             <>
-              {activeAccidents.has("BLACKSPOT") &&
-                blackspots.map((b) => (
-                  <AdvancedMarker
-                    key={b.id}
-                    position={{ lat: b.lat, lng: b.lng }}
-                    title={b.name}
-                    onClick={() => setOpenInfo({ position: { lat: b.lat, lng: b.lng }, content: <BlackspotPopup b={b} /> })}
-                  >
-                    <LayerMarker layerKey="BLACKSPOT" color={LAYER_COLOR.BLACKSPOT.color} strokeColor={LAYER_COLOR.BLACKSPOT.strokeColor} />
-                  </AdvancedMarker>
-                ))}
+              {/* Road defects (potholes) — brown diamonds */}
+              {activeAccidents.has("POTHOLE") && !potholesLoading && (
+                <ClusteredLayer
+                  color={LAYER_COLOR.POTHOLE.color}
+                  items={potholes.map((p) => ({
+                    key: p.id, position: { lat: p.lat, lng: p.lng },
+                    onClick: () => setOpenInfo({ position: { lat: p.lat, lng: p.lng }, content: <PotholePopup p={p} /> }),
+                    pin: <LayerMarker layerKey="POTHOLE" color={LAYER_COLOR.POTHOLE.color} strokeColor={LAYER_COLOR.POTHOLE.strokeColor} />,
+                  }))}
+                />
+              )}
 
-              {/* DB-backed potholes — loaded from Supabase via usePotholes hook */}
-              {activeAccidents.has("POTHOLE") && !potholesLoading &&
-                potholes.map((p) => (
-                  <AdvancedMarker
-                    key={p.id}
-                    position={{ lat: p.lat, lng: p.lng }}
-                    onClick={() => setOpenInfo({ position: { lat: p.lat, lng: p.lng }, content: <PotholePopup p={p} /> })}
-                  >
-                    <LayerMarker layerKey="POTHOLE" color={LAYER_COLOR.POTHOLE.color} strokeColor={LAYER_COLOR.POTHOLE.strokeColor} />
-                  </AdvancedMarker>
-                ))}
-
-              {/* DB-backed reported accidents — loaded from Supabase via useAccidents hook */}
-              {activeAccidents.has("REPORTED_ACCIDENT") &&
-                reportedAccidents.map((a) => (
-                  <AdvancedMarker
-                    key={a.id}
-                    position={{ lat: a.lat, lng: a.lng }}
-                    title={a.location_label}
-                    onClick={() => setOpenInfo({ position: { lat: a.lat, lng: a.lng }, content: <ReportedAccidentPopup a={a} /> })}
-                  >
-                    <LayerMarker layerKey="REPORTED_ACCIDENT" color={LAYER_COLOR.REPORTED_ACCIDENT.color} strokeColor={LAYER_COLOR.REPORTED_ACCIDENT.strokeColor} />
-                  </AdvancedMarker>
-                ))}
+              {/* Reported accidents — ROLE-BRANCHED. Operator: individual
+                  clustered markers + detailed popups (unchanged). Citizen/guest:
+                  aggregated density heat zones only — no individual markers,
+                  cards, or per-report detail ever reaches them. */}
+              {activeAccidents.has("REPORTED_ACCIDENT") && (
+                isOperator ? (
+                  <ClusteredLayer
+                    color={LAYER_COLOR.REPORTED_ACCIDENT.color}
+                    items={reportedAccidents.map((a) => ({
+                      key: a.id, position: { lat: a.lat, lng: a.lng }, title: a.location_label,
+                      onClick: () => setOpenInfo({ position: { lat: a.lat, lng: a.lng }, content: <ReportedAccidentPopup a={a} /> }),
+                      pin: <LayerMarker layerKey="REPORTED_ACCIDENT" color={LAYER_COLOR.REPORTED_ACCIDENT.color} strokeColor={LAYER_COLOR.REPORTED_ACCIDENT.strokeColor} />,
+                    }))}
+                  />
+                ) : (
+                  <AccidentDensityLayer accidents={reportedAccidents} onZoneClick={handleAccidentZoneClick} />
+                )
+              )}
             </>
           )}
 
@@ -907,124 +1104,60 @@ export default function MapView() {
             </InfoWindow>
           )}
         </Map>
+        <MapHandle onMap={setMapInstance} onCenter={setMapCenter} />
+        {tab !== "NETWORK" && <MapControls />}
       </APIProvider>
 
-      {/* ── Controls overlay ─────────────────────────────────────────────────── */}
-      <div className="absolute top-0 left-0 right-0 z-[1000] pointer-events-none">
-        {/* Header */}
-        <div className="pointer-events-auto bg-[#0f2044] text-white px-4 py-2.5 flex items-center gap-3 shadow-md">
-          <button
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open layer controls"
-            className="w-8 h-8 flex items-center justify-center rounded hover:bg-white/10 flex-shrink-0"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold tracking-wide truncate">{t("appName")}</p>
-            <p className="text-[10px] text-blue-200 leading-tight truncate hidden sm:block">{t("appTagline")}</p>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <InstallPWA />
-            <LanguageToggle />
-          </div>
+      {/* ── Floating left panel (Services / Accidents) ─────────────────────── */}
+      {tab !== "NETWORK" && (
+        <FloatingPanel
+          tab={tab}
+          open={panelOpen}
+          onToggle={() => setPanelOpen((v) => !v)}
+          showHindi={showHindi}
+          search={searchQuery}
+          onSearch={setSearchQuery}
+          serviceLayers={serviceLayerRows}
+          nearby={nearbyFacilities}
+          showDefects={activeAccidents.has("POTHOLE")}
+          showAccidents={activeAccidents.has("REPORTED_ACCIDENT")}
+          onToggleDefects={() => toggleAccident("POTHOLE")}
+          onToggleAccidents={() => toggleAccident("REPORTED_ACCIDENT")}
+          reports={reportCards}
+          isOperator={isOperator}
+        />
+      )}
+
+      {/* Places error notice — only shown when server key is missing/broken */}
+      {placesError && tab === "SERVICES" && panelOpen && (
+        <div className="absolute z-[500]" style={{ left: 14, bottom: 14, width: 342 }}>
+          <p className="text-[10px] px-3" style={{ color: C.red }}>{t("placesLoadError")}</p>
         </div>
+      )}
 
-        {/* Tab toggle */}
-        <div className="pointer-events-auto flex bg-white border-b border-gray-200 shadow-sm">
-          <button
-            onClick={() => setTab("SERVICES")}
-            className={`flex-1 py-2 text-xs font-semibold tracking-wide uppercase border-b-2 transition-colors ${
-              tab === "SERVICES" ? "border-[#0f2044] text-[#0f2044]" : "border-transparent text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            {t("tabServices")}
-          </button>
-          <button
-            onClick={() => setTab("ACCIDENTS")}
-            className={`flex-1 py-2 text-xs font-semibold tracking-wide uppercase border-b-2 transition-colors ${
-              tab === "ACCIDENTS" ? "border-red-700 text-red-700" : "border-transparent text-gray-500 hover:text-gray-700"
-            }`}
-          >
-            {t("tabAccidents")}
-          </button>
+      {/* ── Operator dashboard (full-page overlay) — operator-only ─────────── */}
+      {/* Sub-tabs: Network (Signals) · Call Analytics · Ambiguity review. */}
+      {tab === "NETWORK" && isOperator && (
+        <div className="absolute inset-0 z-[600] overflow-y-auto" style={{ background: C.page }}>
+          <OperatorDashboard accidents={reportedAccidents} onReviewsChanged={refetchAccidents} />
         </div>
-
-        {/* Filter chips */}
-        <div className="pointer-events-auto bg-white/95 backdrop-blur-sm border-b border-gray-200 shadow-sm">
-          <div className="chips-row hidden sm:flex gap-2 overflow-x-auto px-3 py-2">
-            {tab === "SERVICES" &&
-              SERVICE_LAYERS.map((layer) => {
-                const active = activeServices.has(layer.key);
-                const placeType = LAYER_TO_PLACE_TYPE[layer.key];
-                const isLoading = layer.source === "google" && placeType ? placesLoading[placeType] : false;
-                const count = layer.source === "google" && placeType ? places[placeType].length : null;
-                return (
-                  <button
-                    key={layer.key}
-                    onClick={() => toggleService(layer.key)}
-                    className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-medium transition-all ${
-                      active ? "border-gray-400 bg-white text-gray-800 shadow-sm" : "border-gray-200 bg-gray-50 text-gray-400"
-                    }`}
-                  >
-                    <ChipShape layerKey={layer.key} color={active ? layer.color : "#d1d5db"} />
-                    {t(layer.labelKey)}
-                    {isLoading && (
-                      <span className="inline-block w-3 h-3 border-[1.5px] border-gray-300 border-t-gray-600 rounded-full animate-spin" />
-                    )}
-                    {!isLoading && count !== null && (
-                      <span className="text-[10px] text-gray-400 font-normal">({count})</span>
-                    )}
-                    {layer.source === "synthetic" && (
-                      <span className="text-[9px] text-amber-600 font-normal ml-0.5">sample</span>
-                    )}
-                  </button>
-                );
-              })}
-
-            {tab === "ACCIDENTS" &&
-              ACCIDENT_LAYERS.map((layer) => {
-                const active = activeAccidents.has(layer.key);
-                return (
-                  <button
-                    key={layer.key}
-                    onClick={() => toggleAccident(layer.key)}
-                    className={`flex-shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-medium transition-all ${
-                      active ? "border-gray-400 bg-white text-gray-800 shadow-sm" : "border-gray-200 bg-gray-50 text-gray-400"
-                    }`}
-                  >
-                    <ChipShape layerKey={layer.key} color={active ? layer.color : "#d1d5db"} />
-                    {t(layer.labelKey)}
-                    {layer.source === "synthetic" && (
-                      <span className="text-[9px] text-amber-600 font-normal ml-0.5">sample</span>
-                    )}
-                  </button>
-                );
-              })}
-          </div>
-
-          {/* Places error notice — only shown when server key is missing/broken */}
-          {placesError && tab === "SERVICES" && (
-            <div className="px-3 pb-1.5">
-              <p className="text-[10px] text-red-600">{t("placesLoadError")}</p>
-            </div>
-          )}
-        </div>
-      </div>
+      )}
 
       {/* ── Pin-picking hint ─────────────────────────────────────────────────── */}
       {isPickingPin && (
         <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 z-[1001] flex justify-center pointer-events-none">
-          <div className="bg-[#0f2044] text-white text-xs font-semibold px-5 py-2.5 rounded-full shadow-xl flex items-center gap-2">
+          <div
+            className="text-white text-xs font-semibold px-5 py-2.5 rounded-full shadow-xl flex items-center gap-2"
+            style={{ background: C.navy800 }}
+          >
             <svg className="w-4 h-4 flex-shrink-0" aria-hidden="true" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
             </svg>
             Tap anywhere on map to set incident location
             <button
               onClick={() => setIsPickingPin(false)}
-              className="pointer-events-auto ml-2 text-blue-200 hover:text-white font-normal text-[11px] underline"
+              className="pointer-events-auto ml-2 hover:text-white font-normal text-[11px] underline"
+              style={{ color: C.navInactive }}
             >
               Cancel
             </button>
@@ -1032,51 +1165,80 @@ export default function MapView() {
         </div>
       )}
 
-      {/* ── Timeline button ───────────────────────────────────────────────────── */}
-      {!isPickingPin && (
-        <div className="absolute bottom-10 left-4 z-[1000]">
-          <button
-            onClick={() => setTimelineOpen(true)}
-            className="bg-white hover:bg-gray-50 border border-gray-200 text-gray-700 text-xs font-bold px-3 py-2 rounded-lg shadow-md flex items-center gap-2 transition-colors"
-          >
-            <svg className="w-3.5 h-3.5 text-gray-500" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Timeline
-            {eventCount > 0 && (
-              <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-[#0f2044] text-white text-[9px] font-black">
-                {eventCount > 9 ? "9+" : eventCount}
-              </span>
-            )}
-          </button>
-        </div>
+      {/* ── Timeline pill (bottom-left) ────────────────────────────────────── */}
+      {tab !== "NETWORK" && !isPickingPin && (
+        <button
+          onClick={() => setTimelineOpen(true)}
+          className="absolute z-[500] flex items-center gap-[7px]"
+          style={{
+            left: panelOpen ? 368 : 16,
+            bottom: 14,
+            background: "#fff",
+            border: `1px solid ${C.border}`,
+            borderRadius: 99,
+            padding: "8px 14px",
+            fontSize: 12.5,
+            fontWeight: 500,
+            color: C.body,
+            cursor: "pointer",
+            boxShadow: SHADOW.mapControl,
+          }}
+        >
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.blue, display: "inline-block" }} />
+          Timeline
+          {showHindi && <span style={{ color: C.muted }}>· समयरेखा</span>}
+          {eventCount > 0 && (
+            <span
+              className="inline-flex items-center justify-center"
+              style={{ width: 16, height: 16, borderRadius: "50%", background: C.navy800, color: "#fff", fontSize: 9, fontWeight: 700 }}
+            >
+              {eventCount > 9 ? "9+" : eventCount}
+            </span>
+          )}
+        </button>
       )}
 
-      {/* ── FAB ──────────────────────────────────────────────────────────────── */}
+      {/* ── Report Incident FAB (bottom-right, pulsing) ────────────────────── */}
       {!reportOpen && !isPickingPin && (
-        <div className="absolute bottom-10 right-4 z-[1000]">
-          <button
-            onClick={openReport}
-            className="bg-red-600 hover:bg-red-700 active:bg-red-800 text-white text-sm font-semibold px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2 transition-colors"
+        <button
+          onClick={openReport}
+          className="absolute z-[500] flex items-center gap-2.5"
+          style={{
+            right: 22,
+            bottom: 22,
+            background: CTA_GRADIENT,
+            color: "#fff",
+            border: "none",
+            borderRadius: 99,
+            padding: "14px 22px",
+            fontSize: 14.5,
+            fontWeight: 700,
+            cursor: "pointer",
+            boxShadow: SHADOW.fab,
+            animation: "tsPulse 2.6s infinite",
+          }}
+        >
+          <span
+            className="inline-flex items-center justify-center"
+            style={{ width: 20, height: 20, borderRadius: "50%", background: "rgba(255,255,255,.22)", fontSize: 15, fontWeight: 600 }}
           >
-            <svg className="w-4 h-4" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            {t("reportTitle")}
-          </button>
-        </div>
+            +
+          </span>
+          {t("reportTitle")}
+          {showHindi && <span style={{ fontWeight: 500, opacity: 0.85 }}>· रिपोर्ट करें</span>}
+        </button>
       )}
 
       {isPickingPin && pinnedLocation && (
-        <div className="absolute bottom-10 right-4 z-[1001]">
-          <button
-            onClick={() => { setIsPickingPin(false); setReportOpen(true); }}
-            className="bg-amber-500 hover:bg-amber-600 text-white text-sm font-semibold px-4 py-2.5 rounded-lg shadow-lg"
-          >
-            Use this location
-          </button>
-        </div>
+        <button
+          onClick={() => { setIsPickingPin(false); setReportOpen(true); }}
+          className="absolute z-[1001] text-white text-sm font-semibold px-4 py-2.5 rounded-full shadow-lg"
+          style={{ right: 22, bottom: 22, background: CTA_GRADIENT }}
+        >
+          Use this location
+        </button>
       )}
+      </main>
 
       {/* ── Report panel ─────────────────────────────────────────────────────── */}
       <ReportPanel
@@ -1126,22 +1288,6 @@ export default function MapView() {
           refetchAccidents();
         }}
       />
-
-      {/* ── Layer sidebar ─────────────────────────────────────────────────────── */}
-      <LayerSidebar
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-        tab={tab}
-        onTabChange={setTab}
-        activeServices={activeServices}
-        activeAccidents={activeAccidents}
-        onToggleService={toggleService}
-        onToggleAccident={toggleAccident}
-        places={places}
-        placesLoading={placesLoading}
-        placesError={placesError}
-      />
-
 
       {/* ── Timeline panel ────────────────────────────────────────────────────── */}
       <TimelinePanel

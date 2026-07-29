@@ -11,14 +11,12 @@ import { DispatcherSection } from "@/components/report/DispatcherSection";
 import { useEventLog } from "@/store/eventLog";
 import { reverseGeocode } from "@/lib/geocode";
 import { checkDuplicate, type DuplicateMatch } from "@/lib/dedup";
+import { publishIncident, publishAssessment } from "@/lib/signalsPublisher";
 import MatchingPanel from "@/components/report/MatchingPanel";
 import { useRoutingStore } from "@/store/routingStore";
 import { useLocaleStore } from "@/store/localeStore";
-import hospitalsRaw from "../../../data/hospitals.json";
-import policeRaw from "../../../data/police-stations.json";
-import ambulanceRaw from "../../../data/ambulance-stations.json";
-import fireStationsRaw from "../../../data/fire-stations.json";
-import towingStationsRaw from "../../../data/towing-stations.json";
+import { useBilingual } from "@/hooks/useI18n";
+import { useResponders } from "@/hooks/useResponders";
 import type {
   AccidentReport,
   AssessmentResult,
@@ -33,12 +31,127 @@ import type {
   RouteEstimatedPayload,
   HospitalMatchedPayload,
 } from "@/lib/types";
+import { C, CTA_GRADIENT, RADIUS } from "@/lib/design";
+import { MapPinIcon, MicIcon } from "@/components/ui/icons";
 
-const HOSPITALS = hospitalsRaw.hospitals as unknown as Hospital[];
-const POLICE_STATIONS = policeRaw.policeStations as unknown as PoliceStation[];
-const AMBULANCE_STATIONS = ambulanceRaw.ambulanceStations as unknown as AmbulanceStation[];
-const FIRE_STATIONS = fireStationsRaw.fireStations as unknown as FireStation[];
-const TOWING_STATIONS = towingStationsRaw.towingStations as unknown as TowingStation[];
+// ── Shared sheet-UI helpers (UI redesign) ─────────────────────────────────────
+
+// Location picker button. Unset → dashed saffron outline; set → solid green,
+// 600-weight green text with the coordinates. Behaviour is unchanged.
+function LocationField({
+  pinnedLocation,
+  pinnedLabel,
+  onRequestPin,
+}: {
+  pinnedLocation: GeoPoint | null;
+  pinnedLabel: string;
+  onRequestPin: () => void;
+}) {
+  const set = !!pinnedLocation;
+  return (
+    <button
+      onClick={onRequestPin}
+      style={{
+        width: "100%",
+        boxSizing: "border-box",
+        padding: "12px 13px",
+        borderRadius: RADIUS.input,
+        fontSize: 13,
+        cursor: "pointer",
+        textAlign: "left",
+        fontWeight: set ? 600 : 400,
+        border: set ? `1px solid ${C.greenSoftBorder}` : "1.5px dashed #C9B98F",
+        background: set ? C.greenSoftBg : "#FDFBF6",
+        color: set ? C.greenSoftText : C.muted,
+      }}
+    >
+      <span className="flex items-center gap-2">
+        <MapPinIcon size={15} style={{ flex: "none" }} />
+        {set
+          ? `${pinnedLabel || `${pinnedLocation!.lat.toFixed(5)}, ${pinnedLocation!.lng.toFixed(5)}`}`
+          : "Tap here, then tap map to set location"}
+      </span>
+    </button>
+  );
+}
+
+// Red-gradient submit button with location gating. Disabled state is grey with
+// "Set location to submit"; enabled uses the CTA gradient.
+function SubmitButton({ canSubmit, onClick, label }: { canSubmit: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={!canSubmit}
+      style={{
+        marginTop: 2,
+        width: "100%",
+        padding: 14,
+        border: "none",
+        borderRadius: 12,
+        fontSize: 14,
+        fontWeight: 700,
+        cursor: canSubmit ? "pointer" : "default",
+        background: canSubmit ? CTA_GRADIENT : "#EFECE4",
+        color: canSubmit ? "#fff" : "#A9A395",
+        boxShadow: canSubmit ? "0 6px 20px rgba(198,54,44,.3)" : "none",
+      }}
+    >
+      {canSubmit ? label : "Set location to submit"}
+    </button>
+  );
+}
+
+// Field label (12.5/600) with an optional muted Hindi/hint suffix.
+function FieldLabel({ children, suffix }: { children: React.ReactNode; suffix?: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6, color: C.ink }}>
+      {children}
+      {suffix && <span style={{ fontWeight: 400, color: C.muted }}> {suffix}</span>}
+    </div>
+  );
+}
+
+// Segmented control (2-option) used for the language toggles.
+function Segmented({
+  options,
+  value,
+  onChange,
+}: {
+  options: { key: string; label: string }[];
+  value: string;
+  onChange: (k: string) => void;
+}) {
+  return (
+    <div className="flex" style={{ gap: 6, background: C.page, borderRadius: RADIUS.input, padding: 4 }}>
+      {options.map((o) => {
+        const on = o.key === value;
+        return (
+          <button
+            key={o.key}
+            onClick={() => onChange(o.key)}
+            style={{
+              flex: 1,
+              padding: "8px 0",
+              border: "none",
+              borderRadius: 7,
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: on ? 600 : 500,
+              background: on ? "#fff" : "transparent",
+              color: on ? C.ink : C.secondary,
+              boxShadow: on ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Responder lists come from the Aggregator DPG (useResponders inside the
+// component) — the app no longer bundles any responder dataset.
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -518,146 +631,127 @@ function AssessmentCard({
   incidentId: string;
 }) {
   const score = (result.severityScore ?? 1) as AssessmentSeverity;
-  const sev = SEV[score] ?? SEV[1];
   const [modOpen, setModOpen] = useState(false);
   const classLabel = CLASSIFIED_LABEL[result.classifiedBy] ?? result.classifiedBy;
 
+  // Severity → card accent (header tint, score ring, segment bar).
+  const accent =
+    score <= 1
+      ? { bg: C.greenSoftBg, border: C.greenSoftBorder, text: C.greenSoftText, ring: C.green }
+      : score === 2
+      ? { bg: C.saffronSoftBg, border: C.saffronSoftBorder, text: "#B06712", ring: C.saffron }
+      : score === 3
+      ? { bg: "#FFF3EC", border: "#F5C9AE", text: "#C2410C", ring: "#EA580C" }
+      : { bg: C.redSoftBg, border: C.redSoftBorder, text: C.redSoftText, ring: C.red };
+  const SEG_COLORS = [C.green, C.saffron, "#EA580C", C.red];
+
+  const agencyStyle = (code: string): { bg: string; bd: string; tx: string } => {
+    if (code === "AMBULANCE") return { bg: C.greenSoftBg, bd: C.greenSoftBorder, tx: C.greenSoftText };
+    if (code === "POLICE") return { bg: C.blueSoftBg, bd: C.blueSoftBorder, tx: C.blueSoftText };
+    if (code === "FIRE") return { bg: C.redSoftBg, bd: C.redSoftBorder, tx: C.redSoftText };
+    return { bg: C.saffronSoftBg, bd: C.saffronSoftBorder, tx: C.saffronSoftText };
+  };
+
+  const CAPS: React.CSSProperties = { fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.muted };
+
   return (
-    <div className="flex flex-col gap-4">
-      {/* Incident created confirmation */}
-      <div className="flex items-center gap-2 px-1">
-        <div className="w-5 h-5 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
-          <svg className="w-3 h-3 text-green-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-        </div>
-        <p className="text-xs text-gray-500">
-          Incident <span className="font-mono font-semibold text-gray-800">{incidentId}</span> created and logged
-        </p>
+    <div className="flex flex-col gap-3">
+      {/* Success strip */}
+      <div className="flex items-center gap-2.5" style={{ background: C.greenSoftBg, border: `1px solid ${C.greenSoftBorder}`, borderRadius: 11, padding: "11px 15px" }}>
+        <span className="inline-flex items-center justify-center flex-none" style={{ width: 22, height: 22, borderRadius: "50%", background: C.green, color: "#fff", fontSize: 12 }}>✓</span>
+        <span style={{ fontSize: 13, color: C.greenSoftText }}>
+          Incident <b style={{ fontFamily: "ui-monospace,Menlo,monospace" }}>{incidentId}</b> created and logged
+        </span>
       </div>
 
-      {/* Assessment card */}
-      <div className="rounded-xl border-2 overflow-hidden" style={{ borderColor: sev.border, background: sev.bg }}>
-        {/* Header */}
-        <div className="px-4 py-2 flex items-center justify-between" style={{ background: sev.track }}>
-          <p className="text-[11px] font-black tracking-widest text-white uppercase">Severity Assessment</p>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-white/20 text-white">
-              {classLabel}
-            </span>
-            {result.lowConfidence && (
-              <span className="text-[10px] text-white/80 italic">low-confidence input</span>
+      {/* Severity assessment card */}
+      <section style={{ border: `1px solid ${accent.border}`, borderRadius: RADIUS.card, overflow: "hidden" }}>
+        <div className="flex items-center gap-2.5" style={{ background: accent.bg, padding: "10px 16px" }}>
+          <span style={{ ...CAPS, color: accent.text, flex: 1 }}>Severity assessment{" "}
+            {/* Hindi handled inline for the post-report card */}
+            <span style={{ fontWeight: 500 }}>· गंभीरता आकलन</span>
+          </span>
+          <span style={{ fontSize: 11, fontWeight: 600, background: "#fff", border: `1px solid ${accent.border}`, color: accent.text, borderRadius: RADIUS.pill, padding: "3px 10px" }}>
+            {classLabel}
+          </span>
+        </div>
+
+        <div className="ts-assess-grid" style={{ display: "grid", gridTemplateColumns: "1fr 190px", gap: 16, padding: 16 }}>
+          {/* Left column */}
+          <div className="flex flex-col" style={{ gap: 12, minWidth: 0 }}>
+            {result.subType && (
+              <div>
+                <div style={CAPS}>Incident type</div>
+                <div style={{ fontSize: 14.5, fontWeight: 600, marginTop: 2, color: C.ink }}>{result.subType}</div>
+              </div>
+            )}
+            <div>
+              <div style={CAPS}>Impact assessment</div>
+              <div style={{ fontSize: 13, color: C.body, marginTop: 2, lineHeight: 1.5 }}>{result.impactNote}</div>
+            </div>
+            {result.agencies.length > 0 && (
+              <div>
+                <div style={{ ...CAPS, marginBottom: 6 }}>Agencies to notify</div>
+                <div className="flex flex-wrap" style={{ gap: 7 }}>
+                  {result.agencies.map((a) => {
+                    const s = agencyStyle(a.code);
+                    return (
+                      <span key={a.code} style={{ fontSize: 12, fontWeight: 600, border: `1px solid ${s.bd}`, background: s.bg, color: s.tx, borderRadius: RADIUS.pill, padding: "4px 11px" }}>
+                        {a.label}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {result.dataGaps.length > 0 && (
+              <div>
+                <div style={{ ...CAPS, marginBottom: 5 }}>Ask next</div>
+                <div style={{ fontSize: 12.5, color: C.body, lineHeight: 1.7 }}>
+                  {result.dataGaps.map((gap, i) => (
+                    <span key={i}>{i + 1}. {gap}{i < result.dataGaps.length - 1 ? "   " : ""}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {result.appliedModifiers.length > 0 && (
+              <div>
+                <button type="button" onClick={() => setModOpen((v) => !v)} className="flex items-center gap-1" style={{ fontSize: 11, fontWeight: 600, color: C.secondary }}>
+                  <svg className={`w-3 h-3 transition-transform ${modOpen ? "rotate-90" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                  Why this rating
+                </button>
+                {modOpen && (
+                  <ul className="mt-1.5 flex flex-col gap-1">
+                    {result.appliedModifiers.map((m, i) => (
+                      <li key={i} className="flex items-start gap-1.5" style={{ fontSize: 12, color: C.body }}>
+                        <span style={{ color: C.faint }}>+</span>{m}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </div>
-        </div>
 
-        {/* SubType */}
-        {result.subType && (
-          <div className="px-4 pt-3">
-            <p className="text-[10px] font-black tracking-widest uppercase mb-0.5" style={{ color: sev.text }}>Incident Type</p>
-            <p className="text-sm font-semibold text-gray-900">{result.subType}</p>
-          </div>
-        )}
-
-        {/* Score circle + label + track */}
-        <div className="pt-4 pb-3 flex flex-col items-center gap-2">
-          <div className="w-24 h-24 rounded-full border-4 flex items-center justify-center"
-            style={{ borderColor: sev.border, background: "#fff" }}>
-            <span className="text-6xl font-black leading-none tabular-nums" style={{ color: sev.text }}>
+          {/* Right column — score ring */}
+          <div className="flex flex-col items-center justify-center" style={{ gap: 6, borderLeft: `1px solid ${C.hairline}`, paddingLeft: 16 }}>
+            <div className="flex items-center justify-center" style={{ width: 74, height: 74, borderRadius: "50%", border: `4px solid ${accent.ring}`, fontSize: 30, fontWeight: 700, color: accent.text }}>
               {score}
-            </span>
-          </div>
-          <p className="text-xl font-black tracking-wide uppercase" style={{ color: sev.text }}>
-            {result.severity}
-          </p>
-          <div className="flex gap-1 mt-1">
-            {([1, 2, 3, 4] as AssessmentSeverity[]).map((n) => (
-              <div key={n} className="w-8 h-2 rounded-full transition-all"
-                style={{ background: n <= score ? SEV[n].track : "#e5e7eb" }} />
-            ))}
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: ".1em", color: accent.text, textTransform: "uppercase" }}>{result.severity}</div>
+            <div className="flex" style={{ gap: 4 }}>
+              {[0, 1, 2, 3].map((i) => (
+                <span key={i} style={{ width: 22, height: 6, borderRadius: 3, background: i < score ? SEG_COLORS[i] : C.border }} />
+              ))}
+            </div>
+            <div style={{ fontSize: 10.5, color: C.muted, textAlign: "center", marginTop: 2 }}>
+              {result.lowConfidence ? "Low-confidence — verify" : "Verify before acting"}
+            </div>
           </div>
         </div>
-
-        <div className="px-4 pb-4 flex flex-col gap-3">
-          {/* Impact note */}
-          <div>
-            <p className="text-[10px] font-black tracking-widest uppercase mb-1" style={{ color: sev.text }}>
-              Impact Assessment
-            </p>
-            <p className="text-sm text-gray-800 leading-relaxed">{result.impactNote}</p>
-          </div>
-
-          {/* Agency chips */}
-          {result.agencies.length > 0 && (
-            <div className="border-t pt-3" style={{ borderColor: sev.border }}>
-              <p className="text-[10px] font-black tracking-widest uppercase mb-2" style={{ color: sev.text }}>
-                Agencies to Notify
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {result.agencies.map((a) => (
-                  <span key={a.code}
-                    className="text-xs font-semibold px-2.5 py-1 rounded-full border"
-                    style={{ borderColor: sev.border, color: sev.text, background: "#fff" }}>
-                    {a.label}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Why this rating */}
-          {result.appliedModifiers.length > 0 && (
-            <div className="border-t pt-3" style={{ borderColor: sev.border }}>
-              <button type="button" onClick={() => setModOpen((v) => !v)}
-                className="flex items-center gap-1 text-[11px] font-semibold text-gray-500 hover:text-gray-800">
-                <svg className={`w-3 h-3 transition-transform ${modOpen ? "rotate-90" : ""}`}
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
-                Why this rating
-              </button>
-              {modOpen && (
-                <ul className="mt-2 flex flex-col gap-1">
-                  {result.appliedModifiers.map((m, i) => (
-                    <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
-                      <span className="text-gray-400 flex-shrink-0 mt-0.5">+</span>{m}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-
-          {/* Ask-next checklist */}
-          {result.dataGaps.length > 0 && (
-            <div className="border-t pt-3" style={{ borderColor: sev.border }}>
-              <p className="text-[10px] font-black tracking-widest uppercase mb-2" style={{ color: sev.text }}>
-                Ask Next
-              </p>
-              <ol className="flex flex-col gap-1.5">
-                {result.dataGaps.map((gap, i) => (
-                  <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
-                    <span className="w-4 text-gray-400 font-semibold flex-shrink-0">{i + 1}.</span>{gap}
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-
-          {/* Source footer */}
-          <div className="border-t pt-3" style={{ borderColor: sev.border }}>
-            <p className="text-[11px] text-gray-400 leading-relaxed">
-              Assessed by: <span className="font-semibold text-gray-600">{classLabel}</span>
-              {result.llmUsed && " · LLM used for type classification only"}
-              <span className="block mt-0.5">Operator should verify before acting.</span>
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <p className="text-[11px] text-gray-400 text-center px-1">
-        Next step: review and send dispatch notification from the incident detail view.
-      </p>
+      </section>
     </div>
   );
 }
@@ -690,50 +784,58 @@ function SOSView({
   error: string | null;
   onSend: () => void;
 }) {
+  const doesItems = [
+    "Requests your GPS coordinates from the browser",
+    "Creates an incident flagged as high priority",
+    "Triggers automatic severity assessment",
+    "Appends an entry to the session event log",
+  ];
+  const doesNotItems = [
+    "Does not automatically call or alert emergency services",
+    "Does not transmit to any external system in real time",
+    "Dispatch is a separate, manual step",
+  ];
   return (
-    <div className="p-5 flex flex-col gap-4">
-      <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-        <p className="text-xs font-semibold text-red-800 mb-1.5">What SOS does</p>
-        <ul className="text-xs text-red-700 space-y-1 list-disc list-inside">
-          <li>Requests your GPS coordinates from the browser</li>
-          <li>Creates an incident flagged as high priority</li>
-          <li>Triggers automatic severity assessment</li>
-          <li>Appends an entry to the session event log</li>
-        </ul>
-      </div>
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-        <p className="text-xs font-semibold text-gray-500 mb-1.5">What SOS does NOT do</p>
-        <ul className="text-xs text-gray-400 space-y-1 list-disc list-inside">
-          <li>Does not automatically call or alert emergency services</li>
-          <li>Does not transmit to any external system in real time</li>
-          <li>Dispatch is a separate, manual step</li>
-        </ul>
+    <div className="flex flex-col gap-4">
+      <div className="ts-sos-grid grid gap-3" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <div style={{ background: C.redSoftBg, border: `1px solid ${C.redSoftBorder}`, borderRadius: 12, padding: "14px 16px" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: C.redSoftText, marginBottom: 8 }}>What SOS does</div>
+          <div className="flex flex-col" style={{ gap: 6, fontSize: 12.5, color: "#7A2620", lineHeight: 1.45 }}>
+            {doesItems.map((it) => <div key={it}>• {it}</div>)}
+          </div>
+        </div>
+        <div style={{ background: C.inset, border: `1px solid ${C.hairline}`, borderRadius: 12, padding: "14px 16px" }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: C.secondary, marginBottom: 8 }}>What SOS does NOT do</div>
+          <div className="flex flex-col" style={{ gap: 6, fontSize: 12.5, color: "#6B7480", lineHeight: 1.45 }}>
+            {doesNotItems.map((it) => <div key={it}>• {it}</div>)}
+          </div>
+        </div>
       </div>
 
       {status === "IDLE" && (
         <button
           onClick={onSend}
-          className="w-full py-4 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-black text-base rounded-xl tracking-widest uppercase shadow transition-colors"
+          style={{ width: "100%", padding: 17, border: "none", borderRadius: 13, background: CTA_GRADIENT, color: "#fff", fontSize: 16, fontWeight: 700, letterSpacing: ".08em", cursor: "pointer", boxShadow: "0 6px 20px rgba(198,54,44,.35)" }}
         >
-          Send SOS
+          SEND SOS · एसओएस भेजें
         </button>
       )}
 
       {status === "BUSY" && (
         <div className="flex flex-col items-center gap-2 py-4">
-          <div className="w-6 h-6 border-2 border-[#0f2044] border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-gray-500">Acquiring GPS location…</p>
+          <div className="w-6 h-6 rounded-full animate-spin" style={{ border: `2px solid ${C.navy800}`, borderTopColor: "transparent" }} />
+          <p className="text-sm" style={{ color: C.secondary }}>Acquiring GPS location…</p>
         </div>
       )}
 
       {status === "ERROR" && error && (
         <div className="flex flex-col gap-3">
-          <div className="bg-red-50 border border-red-300 rounded-lg p-3 text-xs text-red-800">
+          <div style={{ background: C.redSoftBg, border: `1px solid ${C.redSoftBorder}`, borderRadius: 10, padding: 12, fontSize: 12.5, color: C.redSoftText }}>
             {error}
           </div>
           <button
             onClick={onSend}
-            className="w-full py-3 bg-red-600 text-white font-bold rounded-xl text-sm"
+            style={{ width: "100%", padding: 13, border: "none", borderRadius: 12, background: CTA_GRADIENT, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}
           >
             Try Again
           </button>
@@ -790,10 +892,10 @@ function VoiceSection({
 
   if (!voice.supported) {
     return (
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-500">
+      <div style={{ background: C.inset, border: `1px solid ${C.border}`, borderRadius: RADIUS.input, padding: 12, fontSize: 12.5, color: C.secondary }}>
         Voice input is not supported in this browser. Use the Text tab instead.
         <br />
-        <span className="text-gray-400">Supported: Chrome / Edge on desktop and Android.</span>
+        <span style={{ color: C.muted }}>Supported: Chrome / Edge on desktop and Android.</span>
       </div>
     );
   }
@@ -801,50 +903,41 @@ function VoiceSection({
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-          Voice Language
-        </label>
-        <div className="flex gap-2">
-          {(["en-IN", "hi-IN"] as VoiceLocale[]).map((l) => (
-            <button
-              key={l}
-              onClick={() => { if (voice.listening) voice.stop(); onLocaleChange(l); }}
-              className={`flex-1 py-2 rounded-lg border text-sm font-semibold transition-colors ${
-                locale === l
-                  ? "bg-[#0f2044] text-white border-[#0f2044]"
-                  : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
-              }`}
-            >
-              {l === "en-IN" ? "English" : "हिंदी"}
-            </button>
-          ))}
-        </div>
+        <FieldLabel suffix="· भाषा">Voice language</FieldLabel>
+        <Segmented
+          options={[{ key: "en-IN", label: "English" }, { key: "hi-IN", label: "हिंदी" }]}
+          value={locale}
+          onChange={(k) => { if (voice.listening) voice.stop(); onLocaleChange(k as VoiceLocale); }}
+        />
         {locale === "hi-IN" && (
-          <p className="text-[11px] text-indigo-700 bg-indigo-50 rounded px-2 py-1 mt-1.5">
+          <p style={{ fontSize: 11, color: C.blueSoftText, background: C.blueSoftBg, borderRadius: 6, padding: "4px 8px", marginTop: 6 }}>
             हिंदी में बोलें — text will appear in देवनागरी script
           </p>
         )}
       </div>
 
-      <div className="flex flex-col items-center gap-2">
+      <div className="flex flex-col items-center" style={{ gap: 8, padding: "10px 0" }}>
+        {/* Idle state matches the Voice tab's mic button exactly (same 84px
+            navy-gradient circle + white MicIcon) so the two mic controls look
+            identical; only the active/recording state differs (red). */}
         <button
           onClick={() => (voice.listening ? voice.stop() : voice.start(locale))}
-          className={`w-16 h-16 rounded-full border-2 flex items-center justify-center transition-all ${
-            voice.listening
-              ? "bg-red-600 border-red-700 shadow-lg shadow-red-200 scale-105"
-              : "bg-white border-gray-300 hover:border-[#0f2044] hover:shadow"
-          }`}
+          className="flex items-center justify-center transition-all"
+          style={{
+            width: 84,
+            height: 84,
+            borderRadius: "50%",
+            border: voice.listening ? "2px solid #B92C22" : "none",
+            background: voice.listening ? C.red : "linear-gradient(135deg,#2456A6,#173B77)",
+            color: "#fff",
+            cursor: "pointer",
+            boxShadow: voice.listening ? "none" : "0 8px 24px rgba(36,86,166,.35)",
+          }}
         >
-          <svg
-            className={`w-7 h-7 ${voice.listening ? "text-white" : "text-gray-500"}`}
-            fill="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2zm7 8a1 1 0 0 1 1 1 8 8 0 0 1-7 7.938V21h2a1 1 0 0 1 0 2H9a1 1 0 0 1 0-2h2v-1.062A8 8 0 0 1 4 12a1 1 0 0 1 2 0 6 6 0 0 0 12 0 1 1 0 0 1 1-1z" />
-          </svg>
+          <MicIcon size={32} />
         </button>
-        <p className="text-xs text-gray-500">
-          {voice.listening ? "Recording — tap to stop" : "Tap to start recording"}
+        <p style={{ fontSize: 12.5, color: C.secondary }}>
+          {voice.listening ? "Recording — tap to stop" : "Tap to start recording — transcript fills the form below"}
         </p>
       </div>
 
@@ -937,7 +1030,7 @@ function FormView({
   );
 
   return (
-    <div className="p-4 flex flex-col gap-4">
+    <div className="flex flex-col" style={{ gap: 14, padding: "16px 20px 20px" }}>
       {mode === "VOICE" && (
         <VoiceSection
           voice={voice}
@@ -952,54 +1045,19 @@ function FormView({
 
       {/* Location */}
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-          Incident Location <span className="text-red-600">*</span>
-        </label>
-        {pinnedLocation ? (
-          <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg p-2.5">
-            <svg className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
-            </svg>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-blue-900 break-words">{pinnedLabel}</p>
-              <p className="text-[10px] text-blue-400 mt-0.5">
-                {pinnedLocation.lat.toFixed(5)}, {pinnedLocation.lng.toFixed(5)}
-              </p>
-            </div>
-            <button
-              onClick={onRequestPin}
-              className="text-[11px] text-blue-600 underline flex-shrink-0 hover:text-blue-800"
-            >
-              Change
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={onRequestPin}
-            className="w-full border-2 border-dashed border-gray-300 rounded-lg py-3 px-3 text-sm text-gray-400 hover:border-[#0f2044] hover:text-[#0f2044] transition-colors flex items-center justify-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
-            </svg>
-            Tap here, then tap map to set location
-          </button>
-        )}
+        <FieldLabel suffix={<span style={{ color: C.red }}>*</span>}>Incident location</FieldLabel>
+        <LocationField pinnedLocation={pinnedLocation} pinnedLabel={pinnedLabel} onRequestPin={onRequestPin} />
       </div>
 
       {/* Description */}
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-          Description
-          {mode === "VOICE" && (
-            <span className="font-normal text-gray-400"> — from transcript, editable</span>
-          )}
-        </label>
+        <FieldLabel suffix={mode === "VOICE" ? "— from transcript, editable" : undefined}>Description</FieldLabel>
         <textarea
           rows={3}
           value={description}
           onChange={(e) => onDescription(e.target.value)}
           placeholder="Describe the incident — vehicles, visible injuries, road conditions…"
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#0f2044]/30 resize-none"
+          style={{ width: "100%", boxSizing: "border-box", minHeight: 74, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: RADIUS.input, fontSize: 13.5, background: C.inset, outline: "none", resize: "vertical", color: C.ink }}
         />
         {(() => {
           const hint = classifyIncident(description, selectedFlags);
@@ -1014,9 +1072,7 @@ function FormView({
           regardless of which the reporter meant. */}
       <div className="flex gap-3">
         <div>
-          <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-            Vehicles Involved
-          </label>
+          <FieldLabel>Vehicles involved</FieldLabel>
           <input
             type="number"
             min="0"
@@ -1024,13 +1080,11 @@ function FormView({
             value={vehiclesInvolved}
             onChange={(e) => onVehiclesInvolved(e.target.value)}
             placeholder="0"
-            className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#0f2044]/30"
+            style={{ width: 90, padding: "10px 13px", border: `1px solid ${C.border}`, borderRadius: RADIUS.input, fontSize: 13.5, background: C.inset, outline: "none", color: C.ink }}
           />
         </div>
         <div>
-          <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-            Casualties / Injured
-          </label>
+          <FieldLabel>Casualties / injured</FieldLabel>
           <input
             type="number"
             min="0"
@@ -1038,40 +1092,32 @@ function FormView({
             value={casualties}
             onChange={(e) => onCasualties(e.target.value)}
             placeholder="0"
-            className="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#0f2044]/30"
+            style={{ width: 90, padding: "10px 13px", border: `1px solid ${C.border}`, borderRadius: RADIUS.input, fontSize: 13.5, background: C.inset, outline: "none", color: C.ink }}
           />
         </div>
       </div>
 
-      {/* Quick flags */}
+      {/* Observed conditions — toggle chips */}
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-2">
-          Observed Conditions
-        </label>
-        <div className="grid grid-cols-2 gap-2">
+        <FieldLabel suffix="· देखी गई स्थितियाँ">Observed conditions</FieldLabel>
+        <div className="flex flex-wrap" style={{ gap: 8 }}>
           {QUICK_FLAGS.map((flag) => {
             const active = selectedFlags.has(flag);
             return (
               <button
                 key={flag}
                 onClick={() => onToggleFlag(flag)}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition-all text-left ${
-                  active
-                    ? "bg-[#0f2044] border-[#0f2044] text-white"
-                    : "bg-white border-gray-200 text-gray-600 hover:border-gray-400"
-                }`}
+                style={{
+                  padding: "8px 14px",
+                  border: `1px solid ${active ? C.blue : C.border}`,
+                  borderRadius: RADIUS.pill,
+                  background: active ? C.blueSoftBg : "#fff",
+                  color: active ? C.blueSoftText : C.secondary,
+                  fontSize: 12.5,
+                  fontWeight: active ? 600 : 500,
+                  cursor: "pointer",
+                }}
               >
-                <span
-                  className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center ${
-                    active ? "bg-white border-transparent" : "border-gray-300"
-                  }`}
-                >
-                  {active && (
-                    <svg className="w-2.5 h-2.5 text-[#0f2044]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                  )}
-                </span>
                 {flag}
               </button>
             );
@@ -1080,17 +1126,7 @@ function FormView({
       </div>
 
       {/* Submit */}
-      <button
-        onClick={onSubmit}
-        disabled={!canSubmit}
-        className={`w-full py-3 rounded-lg text-sm font-bold transition-colors ${
-          canSubmit
-            ? "bg-[#0f2044] text-white hover:bg-[#1a3567]"
-            : "bg-gray-100 text-gray-400 cursor-not-allowed"
-        }`}
-      >
-        {canSubmit ? "Submit & Assess Severity" : "Set location to submit"}
-      </button>
+      <SubmitButton canSubmit={canSubmit} onClick={onSubmit} label="Submit report · रिपोर्ट भेजें" />
     </div>
   );
 }
@@ -1115,99 +1151,67 @@ function PotholeFormView({
   severity, onSeverity,
   onSubmit, canSubmit,
 }: PotholeFormViewProps) {
+  const SEV_ITEMS: { key: "LOW" | "MEDIUM" | "HIGH"; color: string }[] = [
+    { key: "LOW", color: C.green },
+    { key: "MEDIUM", color: C.saffron },
+    { key: "HIGH", color: C.red },
+  ];
   return (
-    <div className="p-4 flex flex-col gap-4">
-      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-        <p className="text-xs font-semibold text-amber-800 mb-1">Reporting a road defect</p>
-        <p className="text-xs text-amber-700">
-          Pin the location, describe the defect, and select severity. The pothole will appear on the Accidents tab.
-        </p>
+    <div className="flex flex-col" style={{ gap: 14, padding: "16px 20px 20px" }}>
+      <div style={{ background: C.saffronSoftBg, border: `1px solid ${C.saffronSoftBorder}`, borderRadius: 11, padding: "11px 15px", fontSize: 12.5, color: C.saffronSoftText, lineHeight: 1.5 }}>
+        <b>Reporting a road defect</b> — pin the location, describe the defect, and select severity. It will appear on the Accidents tab.
       </div>
 
       {/* Location */}
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1.5">
-          Location <span className="text-red-600">*</span>
-        </label>
-        {pinnedLocation ? (
-          <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg p-2.5">
-            <svg className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
-            </svg>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-blue-900 break-words">{pinnedLabel}</p>
-              <p className="text-[10px] text-blue-400 mt-0.5">
-                {pinnedLocation.lat.toFixed(5)}, {pinnedLocation.lng.toFixed(5)}
-              </p>
-            </div>
-            <button
-              onClick={onRequestPin}
-              className="text-[11px] text-blue-600 underline flex-shrink-0 hover:text-blue-800"
-            >
-              Change
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={onRequestPin}
-            className="w-full border-2 border-dashed border-gray-300 rounded-lg py-3 px-3 text-sm text-gray-400 hover:border-amber-500 hover:text-amber-600 transition-colors flex items-center justify-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
-            </svg>
-            Tap here, then tap map to set location
-          </button>
-        )}
+        <FieldLabel suffix={<span style={{ color: C.red }}>*</span>}>Location</FieldLabel>
+        <LocationField pinnedLocation={pinnedLocation} pinnedLabel={pinnedLabel} onRequestPin={onRequestPin} />
       </div>
 
       {/* Description */}
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1.5">Description</label>
+        <FieldLabel>Description</FieldLabel>
         <textarea
           rows={3}
           value={description}
           onChange={(e) => onDescription(e.target.value)}
           placeholder="Describe the defect — size, depth, road name, near landmark…"
-          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500/30 resize-none"
+          style={{ width: "100%", boxSizing: "border-box", minHeight: 64, padding: "11px 13px", border: `1px solid ${C.border}`, borderRadius: RADIUS.input, fontSize: 13.5, background: C.inset, outline: "none", resize: "vertical", color: C.ink }}
         />
       </div>
 
       {/* Severity */}
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-2">Severity</label>
-        <div className="flex gap-2">
-          {(["LOW", "MEDIUM", "HIGH"] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => onSeverity(s)}
-              className={`flex-1 py-2 rounded-lg border text-xs font-bold transition-all ${
-                severity === s
-                  ? s === "HIGH"
-                    ? "bg-red-600 border-red-700 text-white"
-                    : s === "MEDIUM"
-                    ? "bg-amber-500 border-amber-600 text-white"
-                    : "bg-gray-500 border-gray-600 text-white"
-                  : "bg-white border-gray-200 text-gray-500 hover:border-gray-400"
-              }`}
-            >
-              {s}
-            </button>
-          ))}
+        <FieldLabel suffix="· गंभीरता">Severity</FieldLabel>
+        <div className="flex" style={{ gap: 8 }}>
+          {SEV_ITEMS.map(({ key, color }) => {
+            const on = severity === key;
+            return (
+              <button
+                key={key}
+                onClick={() => onSeverity(key)}
+                style={{
+                  flex: 1,
+                  padding: 11,
+                  border: `1.5px solid ${on ? color : C.border}`,
+                  borderRadius: RADIUS.input,
+                  background: on ? color : "#fff",
+                  color: on ? "#fff" : C.secondary,
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  letterSpacing: ".06em",
+                  cursor: "pointer",
+                }}
+              >
+                {key}
+              </button>
+            );
+          })}
         </div>
       </div>
 
       {/* Submit */}
-      <button
-        onClick={onSubmit}
-        disabled={!canSubmit}
-        className={`w-full py-3 rounded-lg text-sm font-bold transition-colors ${
-          canSubmit
-            ? "bg-amber-600 text-white hover:bg-amber-700"
-            : "bg-gray-100 text-gray-400 cursor-not-allowed"
-        }`}
-      >
-        {canSubmit ? "Report Pothole" : "Set location to submit"}
-      </button>
+      <SubmitButton canSubmit={canSubmit} onClick={onSubmit} label="Submit report · रिपोर्ट भेजें" />
     </div>
   );
 }
@@ -1246,6 +1250,7 @@ export default function ReportPanel({
   const [selectedSubType, setSelectedSubType] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
   const appLocale = useLocaleStore((s) => s.locale);
+  const { showHindi } = useBilingual();
   const [locale, setLocale] = useState<VoiceLocale>(appLocale === "HI" ? "hi-IN" : "en-IN");
   const [createdIncident, setCreatedIncident] = useState<AccidentReport | null>(null);
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
@@ -1273,6 +1278,15 @@ export default function ReportPanel({
     onSetFlag: setFlag,
     onSubType: (v, cat) => { setSelectedSubType(v); setSelectedCategory(cat); },
     onLocationCaptured: (loc, label) => setDispatcherLocation({ point: loc, label }),
+    // If the user dropped a map pin (manual location), use THAT for the
+    // dispatcher instead of device GPS. Prefer an existing dispatcher-captured
+    // pin, then the shared map pin; null → fall back to current GPS.
+    getManualLocation: () => {
+      const point = dispatcherLocation?.point ?? pinnedLocation;
+      if (!point) return null;
+      const label = dispatcherLocation?.label || pinnedLabel || `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+      return { lat: point.lat, lng: point.lng, label };
+    },
     onSubmitReady: (payload: DispatcherSubmitPayload) => {
       const loc = dispatcherLocation?.point ?? payload.location ?? pinnedLocation;
       if (!loc) return;
@@ -1293,6 +1307,9 @@ export default function ReportPanel({
     },
   });
 
+  // Responder/service lists from the Aggregator DPG — fetched once at mount
+  // so they're ready long before an incident reaches the matching stage.
+  const { data: responders, allDone: respondersLoaded } = useResponders();
   const appendReport = useEventLog((s) => s.appendReport);
   const appendAssessment = useEventLog((s) => s.appendAssessment);
   const appendDuplicateFlagged = useEventLog((s) => s.appendDuplicateFlagged);
@@ -1311,6 +1328,15 @@ export default function ReportPanel({
   // ones.
   const briefingSentForRef = useRef<string | null>(null);
   const sendDispatchBriefing = dispatcher.sendDispatchBriefing;
+
+  // Link this dispatcher call's captured Post-Call Analytics to the committed
+  // INC-… id (attachIncidentId is a stable ref-setter, so this fires once when
+  // the dispatcher incident is created).
+  const attachIncidentId = dispatcher.attachIncidentId;
+  useEffect(() => {
+    if (createdIncident?.reportMode === "DISPATCHER") attachIncidentId(createdIncident.id);
+  }, [createdIncident, attachIncidentId]);
+
   useEffect(() => {
     if (!createdIncident || createdIncident.reportMode !== "DISPATCHER") return;
     if (briefingSentForRef.current === createdIncident.id) return;
@@ -1443,6 +1469,7 @@ export default function ReportPanel({
       const result: AssessmentResult = await res.json();
       setAssessmentResult(result);
       appendAssessment(incident.id, result);
+      publishAssessment(incident, result);
     } catch (e) {
       // Engine unreachable — show honest error stub, never fabricate
       const stub: AssessmentResult = {
@@ -1458,6 +1485,7 @@ export default function ReportPanel({
       };
       setAssessmentResult(stub);
       appendAssessment(incident.id, stub);
+      publishAssessment(incident, stub); // honest stub is mirrored too (Classified By: rules)
     } finally {
       setPanelStatus("MATCHING");
     }
@@ -1465,6 +1493,7 @@ export default function ReportPanel({
 
   function proceedWithIncident(incident: AccidentReport) {
     appendReport(incident);
+    publishIncident(incident); // fire-and-forget Signals DPG mirror — never blocks the flow
     setCreatedIncident(incident);
     onAccidentSubmitted?.(incident);
     runAssessment(incident);
@@ -1572,14 +1601,30 @@ export default function ReportPanel({
     <>
       {/* Scrim */}
       <div
-        className="fixed inset-0 z-[1999] bg-black/30 backdrop-blur-[2px]"
+        className="fixed inset-0 z-[1999]"
+        style={{ background: "rgba(14,26,47,.4)", backdropFilter: "blur(2px)" }}
         onClick={isBusy ? undefined : onClose}
       />
 
       {/* Sheet */}
       <div
-        className="fixed bottom-0 left-0 right-0 z-[2000] flex flex-col bg-white rounded-t-2xl shadow-2xl"
-        style={{ maxHeight: "80vh" }}
+        className="ts-report-sheet fixed bottom-0 z-[2000] flex flex-col bg-white"
+        style={{
+          // Center horizontally with left:0/right:0 + margin auto rather than
+          // transform: translateX(-50%). The tsUp entry animation animates
+          // `transform` (translateY), which would OVERRIDE a translateX(-50%)
+          // centering for the whole 0.28s -- the sheet rendered shifted right,
+          // then snapped to center when the animation ended. margin-auto
+          // centering is independent of transform, so the slide-up is clean.
+          left: 0,
+          right: 0,
+          margin: "0 auto",
+          width: "min(880px, 96vw)",
+          maxHeight: "82%",
+          borderRadius: "18px 18px 0 0",
+          boxShadow: "0 -12px 48px rgba(14,26,47,.3)",
+          animation: "tsUp .28s ease",
+        }}
       >
         {/* ── Duplicate warning — overlays form content ── */}
         {dupMatch && pendingIncident && (
@@ -1633,91 +1678,59 @@ export default function ReportPanel({
             </div>
           </div>
         )}
-        {/* Handle */}
-        <div className="flex justify-center pt-2.5 pb-1 flex-shrink-0">
-          <div className="w-10 h-1 bg-gray-200 rounded-full" />
-        </div>
-
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 pb-2 flex-shrink-0">
-          <p className="text-sm font-bold text-gray-900">Report Incident</p>
+        {/* Header + drag handle */}
+        <div className="relative flex items-center flex-shrink-0" style={{ gap: 12, padding: "14px 20px 10px" }}>
+          <div style={{ position: "absolute", left: "50%", top: 7, transform: "translateX(-50%)", width: 44, height: 4, borderRadius: 2, background: C.border }} />
+          <div className="flex-1">
+            <span style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Report Incident</span>
+            {showHindi && <span style={{ fontSize: 13, color: C.muted, fontWeight: 500 }}> · घटना रिपोर्ट करें</span>}
+          </div>
           {!isBusy && (
             <button
               onClick={onClose}
               aria-label="Close report panel"
-              className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-gray-100 text-gray-400"
+              style={{ width: 30, height: 30, border: `1px solid ${C.border}`, borderRadius: 8, background: C.inset, color: C.secondary, fontSize: 14, cursor: "pointer", flex: "none" }}
             >
-              <svg className="w-4 h-4" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              ✕
             </button>
           )}
         </div>
 
-        {/* Mode tabs — hidden while processing */}
+        {/* Mode tabs — underline style, hidden while processing */}
         {panelStatus === "IDLE" || panelStatus === "ERROR" ? (
-          <div className="flex border-b border-gray-100 mx-1 flex-shrink-0">
-            {(["SOS", "TEXT", "VOICE", "DISPATCHER", "POTHOLE"] as ReportMode[]).map((m) => (
-              <button
-                key={m}
-                onClick={() => switchMode(m)}
-                className={`flex-1 py-2.5 text-xs font-bold tracking-widest uppercase border-b-2 transition-colors ${
-                  mode === m
-                    ? m === "SOS"
-                      ? "border-red-600 text-red-700 bg-red-50/50"
-                      : m === "POTHOLE"
-                      ? "border-amber-600 text-amber-700 bg-amber-50/50"
-                      : "border-[#0f2044] text-[#0f2044]"
-                    : "border-transparent text-gray-400 hover:text-gray-600"
-                }`}
-              >
-                <span className="flex flex-col items-center gap-1">
-                  {m === "SOS" && (
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="8" x2="12" y2="12" />
-                      <line x1="12" y1="16" x2="12.01" y2="16" />
-                    </svg>
-                  )}
-                  {m === "TEXT" && (
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                    </svg>
-                  )}
-                  {m === "VOICE" && (
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                      <line x1="12" y1="19" x2="12" y2="23" />
-                      <line x1="8" y1="23" x2="16" y2="23" />
-                    </svg>
-                  )}
-                  {m === "DISPATCHER" && (
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15a2 2 0 0 1-2 2H8l-4 3v-3H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                      <line x1="7" y1="8.5" x2="17" y2="8.5" />
-                      <line x1="7" y1="12" x2="13" y2="12" />
-                    </svg>
-                  )}
-                  {m === "POTHOLE" && (
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M2 20h20" />
-                      <path d="M2 4h20" />
-                      <path d="M7 20v-4" />
-                      <path d="M17 20v-4" />
-                      <ellipse cx="12" cy="16" rx="4" ry="2" />
-                      <path d="M10 16l1-4 2 2 1-4" />
-                    </svg>
-                  )}
-                  <span>
-                    {m === "POTHOLE" ? "Pothole"
-                      : m === "DISPATCHER" ? "Voice"
-                      : m === "VOICE" ? "Speech-to-Text"
-                      : m === "TEXT" ? "Text" : "SOS"}
-                  </span>
-                </span>
-              </button>
-            ))}
+          <div className="flex flex-shrink-0" style={{ gap: 4, padding: "0 20px 12px", borderBottom: `1px solid ${C.hairline}` }}>
+            {([
+              { key: "SOS" as ReportMode, en: "SOS", hi: "एसओएस", color: C.red },
+              { key: "TEXT" as ReportMode, en: "Text", hi: "लिखें", color: C.blue },
+              { key: "VOICE" as ReportMode, en: "Speech-to-text", hi: "बोलकर लिखें", color: C.blue },
+              { key: "DISPATCHER" as ReportMode, en: "Voice", hi: "वॉइस", color: C.blue },
+              { key: "POTHOLE" as ReportMode, en: "Pothole", hi: "गड्ढा", color: "#B06712" },
+            ]).map((tab) => {
+              const on = mode === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => switchMode(tab.key)}
+                  className="flex flex-col items-center"
+                  style={{
+                    flex: 1,
+                    padding: "8px 6px 10px",
+                    border: "none",
+                    borderBottom: `2.5px solid ${on ? tab.color : "transparent"}`,
+                    background: "transparent",
+                    cursor: "pointer",
+                    fontSize: 12.5,
+                    fontWeight: on ? 700 : 500,
+                    color: on ? tab.color : C.muted,
+                    lineHeight: 1.2,
+                    gap: 1,
+                  }}
+                >
+                  <span>{tab.en}</span>
+                  {showHindi && <span style={{ fontSize: 10.5, fontWeight: 500, color: on ? tab.color : C.faint }}>{tab.hi}</span>}
+                </button>
+              );
+            })}
           </div>
         ) : null}
 
@@ -1733,36 +1746,44 @@ export default function ReportPanel({
           ) : (panelStatus === "MATCHING" || panelStatus === "COMPLETE") &&
             createdIncident &&
             assessmentResult ? (
-            <div className="p-4 flex flex-col gap-5">
+            <div className="flex flex-col" style={{ gap: 12, padding: "4px 20px 20px" }}>
               {/* Assessment result — always shown */}
               <AssessmentCard result={assessmentResult} incidentId={createdIncident.id} />
 
-              {/* Divider */}
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-gray-200" />
-                <span className="text-[10px] font-black tracking-widest text-gray-400 uppercase">
-                  Nearest Services
-                </span>
-                <div className="flex-1 h-px bg-gray-200" />
-              </div>
-
-              {/* Matching + routing — MatchingPanel fetches Places + Routes API internally */}
-              <MatchingPanel
-                hospitals={HOSPITALS}
-                policeStations={POLICE_STATIONS}
-                ambulanceStations={AMBULANCE_STATIONS}
-                fireStations={FIRE_STATIONS}
-                towingStations={TOWING_STATIONS}
-                incident={createdIncident}
-                assessment={assessmentResult}
-                onReady={() => setPanelStatus("COMPLETE")}
-              />
+              {/* Matching + routing — responder lists come from the Aggregator DPG;
+                  MatchingPanel fetches hospital candidates + Routes API internally */}
+              {respondersLoaded && responders.policeStations.length > 0 ? (
+                <MatchingPanel
+                  hospitals={responders.hospitals}
+                  policeStations={responders.policeStations}
+                  ambulanceStations={responders.ambulanceStations}
+                  fireStations={responders.fireStations}
+                  towingStations={responders.towingStations}
+                  incident={createdIncident}
+                  assessment={assessmentResult}
+                  onReady={() => setPanelStatus("COMPLETE")}
+                />
+              ) : respondersLoaded ? (
+                <div style={{ background: C.saffronSoftBg, border: `1px solid ${C.saffronSoftBorder}`, borderRadius: 11, padding: "11px 15px" }}>
+                  <p style={{ fontSize: 12.5, fontWeight: 600, color: C.saffronSoftText }}>Responder registry unavailable</p>
+                  <p style={{ fontSize: 11.5, color: C.saffronSoftText, marginTop: 2 }}>
+                    The Aggregator DPG could not be reached, so hospital/police matching cannot run.
+                    The incident is logged — retry once the registry is back.
+                  </p>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2" style={{ padding: "8px 4px" }}>
+                  <span className="inline-block w-3.5 h-3.5 rounded-full animate-spin" style={{ border: "2px solid #d1d5db", borderTopColor: C.secondary }} />
+                  <p style={{ fontSize: 12.5, color: C.secondary }}>Loading responder registry…</p>
+                </div>
+              )}
 
               <button
                 onClick={onClose}
-                className="w-full bg-[#0f2044] text-white py-3 rounded-lg text-sm font-bold hover:bg-[#1a3567] transition-colors"
+                className="w-full"
+                style={{ marginTop: 2, padding: 14, border: "none", borderRadius: 12, background: C.navy800, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" }}
               >
-                Close
+                Close{showHindi && " · बंद करें"}
               </button>
             </div>
           ) : panelStatus === "POTHOLE_DONE" ? (
@@ -1794,7 +1815,7 @@ export default function ReportPanel({
               onSend={handleSOS}
             />
           ) : mode === "DISPATCHER" ? (
-            <div className="p-4">
+            <div style={{ padding: "16px 20px 20px" }}>
               <DispatcherSection
                 dispatcher={dispatcher}
                 locale={locale}

@@ -193,6 +193,16 @@ _DISPATCH_WAIT_S = float(os.environ.get("DISPATCH_BRIEFING_WAIT_S", "30"))
 # whatever the frontend does.
 _POST_BRIEFING_DRAIN_MARGIN_S = float(os.environ.get("DISPATCH_BRIEFING_DRAIN_MARGIN_S", "1.0"))
 
+# A short, data-independent "please hold" line spoken into the silent gap
+# between the post-submit acknowledgment and the ETA readout (#2). The frontend
+# matching flow, then Gemini Flash + Google TTS, take a few seconds (and can
+# wait up to _DISPATCH_WAIT_S for dispatch_update), leaving audible silence.
+# Deliberately says NOTHING about responders/timing (that data isn't ready yet
+# -- Hard Rules 1/2/5), and deliberately does NOT repeat the submit ack's
+# "checking which services are responding" wording, so the two don't read as a
+# doubled line back to back.
+_ENGLISH_HOLD_LINE = "Please stay with me for just a moment while I put this together for you."
+
 _RECONNECT_APOLOGY = {
     "hi-IN": "मुझे क्षमा कीजिए, तकनीकी समस्या आ गई है। कृपया दोबारा बोलें।",
     "en-IN": "I'm sorry, there was a brief technical problem. Could you please say that again?",
@@ -305,29 +315,14 @@ def _find_same_type_subtype(vehicle_type: str) -> Optional[str]:
 
 _FLAG_NAMES = ["Conscious", "Breathing", "Trapped", "Heavy bleeding", "Fire", "Hazardous material"]
 
-# Maps severity_engine.local_extract's signal keys (its lexicon already
-# includes Hindi phrases -- see local_extract.py's _FIRE_PHRASES etc.) onto
-# this feature's flag vocabulary. Used as a deterministic backstop: confirmed
-# live that the model sometimes never calls update_form_field for a
-# condition the caller mentioned, even while its own spoken summary shows it
-# understood the mention -- so hazard flags are not left depending solely on
-# the model remembering to make a separate tool call, same "rule-first,
-# LLM-optional" pattern this project already uses for the text-based /assess
-# pipeline (see engine.py's _merge_signals, which this mirrors: OR-only,
-# never downgrades something already confirmed).
-#
-# Deliberately does NOT include local_extract's "vulnerableVictim" signal --
-# confirmed live that it's a broad "at-risk victim" category (child,
-# pregnant, elderly, disabled, OR unconscious -- see local_extract.py's
-# _VULNERABLE_PHRASES), not specifically bleeding, so mapping it to the
-# "Heavy bleeding" flag produced a false positive the instant a caller said
-# "unconscious" with no bleeding mentioned at all. Only signals with a clean,
-# unambiguous 1:1 correspondence to a real flag belong here.
-_LOCAL_SIGNAL_TO_FLAG = {
-    "fire": "Fire",
-    "entrapment": "Trapped",
-    "hazmat": "Hazardous material",
-}
+# Note: the local-signal -> flag backstop that used to live here has moved into
+# local_extract.extract_signals_locally's "flag_determinations" output (which
+# now covers hazards AND vitals, affirmed OR explicitly ruled out), consumed by
+# _apply_local_signals_from_transcript. That output deliberately maps NO flag
+# from the broad "vulnerableVictim" signal (child/pregnant/elderly/unconscious),
+# preserving the rule that only a clean 1:1 correspondence becomes a flag --
+# mapping it to "Heavy bleeding" once produced a false positive the instant a
+# caller said "unconscious" with no bleeding at all.
 
 # Speech-to-Text sometimes emits bracketed non-speech annotations for
 # silence/background noise (observed live: a literal "{background}" token in
@@ -386,53 +381,87 @@ class DispatcherState:
     submitted: bool = False
     caller_transcript: str = ""  # accumulated raw transcript of what the caller has said
     description_set_explicitly: bool = False  # True once update_form_field(description) is called
+    vulnerable_victim: bool = False  # child / pregnant / elderly / disabled person at risk (local_extract)
 
 
-# Additional structured fields to ask about per curated category (beyond the
-# baseline incidentType/location/description required for every incident --
-# see _compute_still_missing). Keyed by the 11 curated categories in
-# category_groups.json. Deliberately a data map, not model judgment -- the
+# Structured fields to ask about per curated category (beyond the baseline
+# incidentType/location/description required for every incident -- see
+# _compute_still_missing). Deliberately a data map, not model judgment -- the
 # model's job is to phrase the question naturally, not decide what to ask.
+#
+# GROUPED (2026-07): related fields are grouped so they can be asked as ONE
+# combined question instead of several separate turns. Each group has a list of
+# field-items (with an individual EN hint) and, for multi-field groups, a
+# "combined" EN hint. _compute_still_missing asks the combined question only when
+# ALL of a group's fields are still missing (the common first-ask); if #6's
+# widened extraction (or a prior answer) already filled some, the group
+# dissolves into the individual per-field questions for just the remaining ones,
+# so a field the caller effectively already answered is never re-asked. Every
+# individual hint AND every combined hint has a canonical Hindi phrasing in
+# dispatcher_hindi._CANONICAL_QUESTIONS (coverage asserted in tests.py).
+#
+# PRUNED (#2): a category only lists fields that actually apply to it (no vehicle
+# count for a medical/casualty case, no injury field for a lone breakdown);
+# everything else the caller implies in their narrative is auto-filled by #6 and
+# therefore dropped from the questions asked out loud.
+
+# Field-items (individual hints, used when a group is only partially missing).
+_H_VEHICLES = {"field": "vehiclesInvolved", "hint": "how many vehicles were involved"}
+_H_CASUALTIES = {"field": "casualties", "hint": "how many people are injured"}
+_H_TRAPPED = {"field": "flag:Trapped", "hint": "whether anyone is trapped"}
+_H_FIRE = {"field": "flag:Fire", "hint": "whether there is fire or a fuel leak"}
+_H_HAZMAT = {"field": "flag:Hazardous material", "hint": "whether hazardous material is involved"}
+_H_CONSCIOUS = {"field": "flag:Conscious", "hint": "whether the person is conscious"}
+_H_BREATHING = {"field": "flag:Breathing", "hint": "whether the person is breathing"}
+_H_BLEEDING = {"field": "flag:Heavy bleeding", "hint": "whether there is heavy bleeding"}
+
+# Combined hints (asked as ONE question when ALL of a group's fields are missing).
+_COMBINED_COUNT_INJURY_TRAPPED = "how many vehicles were involved, and whether anyone is injured or trapped"
+_COMBINED_FIRE_HAZMAT = "whether there is any fire or a hazardous-material leak"
+_COMBINED_VITALS = "whether the person is conscious and breathing, and whether there is heavy bleeding"
+_COMBINED_INJURY_TRAPPED = "whether anyone is injured or trapped"
+_COMBINED_COUNT_INJURY = "how many vehicles were involved, and whether anyone is injured"
+
+
+def _group(fields: list[dict], combined: Optional[str] = None) -> dict:
+    g = {"fields": fields}
+    if combined:
+        g["combined"] = combined
+    return g
+
+
 REQUIRED_FIELDS: dict[str, list[dict]] = {
     "Vehicle Collisions": [
-        {"field": "vehiclesInvolved", "hint": "how many vehicles were involved"},
-        {"field": "casualties", "hint": "how many people are injured"},
-        {"field": "flag:Trapped", "hint": "whether anyone is trapped inside a vehicle"},
-        {"field": "flag:Fire", "hint": "whether there is fire or a fuel leak"},
+        _group([_H_VEHICLES, _H_CASUALTIES, _H_TRAPPED], _COMBINED_COUNT_INJURY_TRAPPED),
+        _group([_H_FIRE, _H_HAZMAT], _COMBINED_FIRE_HAZMAT),
     ],
     "Medical & Casualty": [
-        {"field": "flag:Conscious", "hint": "whether the person is conscious"},
-        {"field": "flag:Breathing", "hint": "whether the person is breathing"},
-        {"field": "flag:Heavy bleeding", "hint": "whether there is heavy bleeding"},
-        {"field": "casualties", "hint": "how many people are affected"},
+        _group([_H_CONSCIOUS, _H_BREATHING, _H_BLEEDING], _COMBINED_VITALS),
+        _group([_H_CASUALTIES]),
     ],
     "Fire & Hazmat": [
-        {"field": "flag:Hazardous material", "hint": "whether hazardous material is involved"},
-        {"field": "flag:Trapped", "hint": "whether anyone is trapped or still inside"},
-        {"field": "casualties", "hint": "how many people are affected"},
+        # Fire is a given (it's the category), so ask about hazmat + injury/trapped.
+        _group([_H_CASUALTIES, _H_TRAPPED], _COMBINED_INJURY_TRAPPED),
+        _group([_H_HAZMAT]),
     ],
     "Weather & Terrain Hazards": [
-        {"field": "flag:Trapped", "hint": "whether anyone is trapped or stranded"},
-        {"field": "vehiclesInvolved", "hint": "how many vehicles are affected"},
+        _group([_H_VEHICLES, _H_CASUALTIES, _H_TRAPPED], _COMBINED_COUNT_INJURY_TRAPPED),
     ],
     "Infrastructure & Structures": [
-        {"field": "vehiclesInvolved", "hint": "how many vehicles are affected"},
-        {"field": "casualties", "hint": "whether anyone is hurt"},
+        _group([_H_VEHICLES, _H_CASUALTIES], _COMBINED_COUNT_INJURY),
     ],
     "Breakdown & Cargo": [
-        {"field": "vehiclesInvolved", "hint": "how many vehicles are affected"},
+        _group([_H_VEHICLES]),
     ],
     "Crime & Security": [
-        {"field": "casualties", "hint": "whether anyone is hurt"},
+        _group([_H_CASUALTIES]),
     ],
     "Wildlife & Rare Situations": [
-        {"field": "casualties", "hint": "whether anyone is hurt"},
-        {"field": "vehiclesInvolved", "hint": "how many vehicles are involved"},
+        _group([_H_VEHICLES, _H_CASUALTIES], _COMBINED_COUNT_INJURY),
     ],
 }
 DEFAULT_REQUIRED_FIELDS: list[dict] = [
-    {"field": "vehiclesInvolved", "hint": "how many vehicles were involved, if any"},
-    {"field": "casualties", "hint": "how many people are injured, if any"},
+    _group([_H_VEHICLES, _H_CASUALTIES], _COMBINED_COUNT_INJURY),
 ]
 
 _TOOL_DECLARATIONS = [
@@ -630,21 +659,23 @@ def _system_instruction(language_code: str) -> str:
 
 LANGUAGE: Conduct this entire conversation in {lang_name} only. If the caller speaks a different language, gently continue in {lang_name} rather than switching -- never randomly switch languages yourself.{hindi_reinforcement}
 
-TONE: Calm, warm, and genuinely concerned -- like a serious, caring human dispatcher handling an emergency, not a neutral form-filling bot, and absolutely NOT an upbeat customer-service agent. This is a safety call, not a friendly chat -- your delivery must sound measured, sincere, and a little subdued, never cheerful, chipper, energetic, or excited, even when you are simply acknowledging routine details. If in doubt, err toward quieter and more serious rather than lively. This warmth must come through on EVERY call, not only when the caller explicitly mentions an injury or sounds distressed -- even a caller who reports a routine-sounding incident calmly is still someone dealing with a road accident, and should hear a human who cares, not a checklist. Never let two or more responses in a row go by with a purely neutral, transactional acknowledgment ("Okay." / "Noted.") -- always warm it up at least a little, for example (English, said quietly and sincerely, not brightly): "Thank you for telling me, I'm noting that down" / "I understand, let's get this sorted quickly" / "Alright, I have that noted" -- and when the caller mentions an injury, bleeding, or sounds frightened, go further with real concern: "I'm sorry to hear that, help is on the way" / "That sounds frightening, please try to stay calm" / "I understand, we'll get you help as quickly as we can". In Hindi, the same range applies, spoken with the same quiet seriousness and always in feminine grammatical form: "ठीक है, धन्यवाद, मैं इसे नोट कर रही हूँ" / "समझ गई, चलिए इसे जल्दी सुलझाते हैं" for routine acknowledgments, and for real distress: "मुझे यह सुनकर दुख हुआ, मदद आ रही है" / "कृपया घबराइए मत, हम आपकी मदद कर रहे हैं" / "मैं समझती हूँ, हम जल्द से जल्द सहायता भेज रहे हैं". Vary the phrasing -- never repeat the exact same acknowledgment twice in one call. Every tool response you receive includes a "tone_reminder" -- follow it every single time, not just when you happen to remember to. This warmth must never come at the cost of the rest of this prompt: still ask one question at a time, still keep every response to 1-2 short sentences, still speak a little slower than normal conversational pace with clear pronunciation, and still never repeat a sentence you have already said unless the caller explicitly asks you to. Gathering the information needed to send help quickly is still the priority -- empathy should feel human and serious, not slow the call down and not sound upbeat.
+TONE: You are a trained, professional emergency-helpline operator -- calm, composed, and clearly in control, while being genuinely and audibly concerned for the caller. This is a serious safety call: not a friendly chat, and absolutely never an upbeat customer-service call. Your delivery is measured, steady, and quietly reassuring -- the voice of someone who handles emergencies for a living and is going to get this person help. Never cheerful, chirpy, energetic, or excited, even when acknowledging routine details; when in doubt, err toward quieter and more serious. This professional warmth must come through on EVERY call, not only when the caller mentions an injury or sounds distressed -- even a calm, routine-sounding report is from someone dealing with a road accident, and they should hear a competent human who cares, not a checklist. Never let two or more responses in a row be a bare, transactional acknowledgment ("Okay." / "Noted.") -- always ground it with a brief, sincere line, for example (said quietly, with composure, never brightly): "Thank you, I've got that" / "Understood -- let's get this sorted quickly" / "You've reached the right place; we'll get help to you." When the caller reports an injury, bleeding, someone trapped, or sounds frightened, lead with real, steady concern before your next question: "I'm sorry to hear that -- I'm getting help arranged for you" / "That sounds frightening; stay with me and try to keep calm" / "I understand -- we'll get help to you as quickly as we can." Vary the phrasing -- never repeat the exact same acknowledgment twice in one call. Every tool response you receive includes a "tone_reminder" -- follow it every single time, not just when you happen to remember to. None of this may slow the call down: still ask one question at a time, still keep every response to 1-2 short sentences, still speak a little slower than a normal conversational pace with clear pronunciation, and still never repeat a sentence you have already said unless the caller explicitly asks you to. Gathering what is needed to send help fast is the priority -- your empathy should sound like competent reassurance, never hesitation or padding.
 
-OPENING (the very first thing you do, before the caller says anything, and only ever once for the whole call): as soon as the call connects, say this exact sentence, word for word, with nothing before it and nothing added: "{opening_line}" You will be told the caller's detected location (or that none was detected) in the same message that starts the call -- do not call get_current_location for this, it has already been resolved for you. If a location was given, briefly mention it ("I have your location as X, is that right?") and ask what happened, all in this same first turn. If no location was detected, tell the caller to use the map-pin button to mark their location instead -- do not try to guess a location from a spoken description. Once you have done this opening, it is complete -- never say the welcome sentence again for the rest of the call, no matter what happens, even if it feels like the conversation is starting over. Move straight to gathering information about the incident.
+OPENING (the very first thing you do, before the caller says anything, and only ever once for the whole call): as soon as the call connects, say this exact sentence, word for word, with nothing before it and nothing added: "{opening_line}" You will be told the caller's detected location (or that none was detected) in the same message that starts the call -- do not call get_current_location for this, it has already been resolved for you. If a location was given, briefly mention it ("I have your location as X, is that right?") and ask what happened, all in this same first turn. In that same opening, also find out — gently and naturally, as part of asking what happened, not as a cold separate interrogation — WHO you are speaking with in relation to the incident: are they themselves involved or injured, a bystander or passer-by who witnessed it, or someone reporting on another person's behalf who may not be at the scene. This matters for how you interpret everything they say next (a bystander may not know injury details; a third party may not be able to see the scene at all). If no location was detected, tell the caller to use the map-pin button to mark their location instead -- do not try to guess a location from a spoken description. Once you have done this opening, it is complete -- never say the welcome sentence again for the rest of the call, no matter what happens, even if it feels like the conversation is starting over. Move straight to gathering information about the incident.
 
-INCIDENT TYPE: Never guess or invent an incident type yourself. Always call search_incident_type with a description of what the caller told you -- it automatically records a confident match for you, so once you've called it you do not need a separate step to confirm the type unless the caller says it's wrong. Refer to the incident only using the exact subType name it returns. If it doesn't sound right to the caller, call search_incident_categories to browse alternatives, then call update_form_field with field=incidentType and the exact subType you both agreed on.
+INCIDENT TYPE: Never guess or invent an incident type yourself. Always call search_incident_type with a description of what the caller told you -- it automatically records a confident match for you, so once you've called it you do not need a separate step to confirm the type unless the caller says it's wrong. Refer to the incident only using the exact subType name it returns. If it doesn't sound right to the caller, call search_incident_categories to browse alternatives, then call update_form_field with field=incidentType and the exact subType you both agreed on. Recording that corrected type via update_form_field IS the confirmation -- do NOT then ask the caller to confirm the type yet again; just acknowledge it briefly and move straight on to the next question.
 
 FORM FILLING: Call update_form_field immediately every time the caller gives you a new piece of information -- INCLUDING conditions mentioned in passing, not just direct answers to your questions. If the caller mentions fire, hazmat, anyone trapped, consciousness, breathing, or bleeding ANYWHERE in what they say (even inside a general description), call update_form_field with field=flag for that condition right away -- do not wait for a dedicated question about it.
 
-DESCRIPTION FIELD -- SPECIAL RULE: call update_form_field with field=description as soon as the caller has said ENOUGH for even a rough one-sentence summary -- do not wait until you have every detail or until the end of the call. Call it again, replacing the old value, whenever you learn something that should be added to the summary. ALWAYS write text_value in ENGLISH, no matter what language the conversation itself is in -- translate and summarize what the caller told you, never copy their words verbatim in Hindi or any other language. This is the one field that must always be English regardless of conversation language.
+DESCRIPTION FIELD -- SPECIAL RULE: call update_form_field with field=description as soon as the caller has said ENOUGH for even a rough one-sentence summary -- do not wait until you have every detail or until the end of the call. Call it again, replacing the old value, whenever you learn something that should be added to the summary. ALWAYS write text_value in ENGLISH, no matter what language the conversation itself is in -- translate and summarize what the caller told you, never copy their words verbatim in Hindi or any other language. This is the one field that must always be English regardless of conversation language. Include WHO is reporting once you know it (for example "Caller is the injured driver", "Bystander reporting", or "Third party reporting on behalf of someone at the scene") -- there is no separate form field for this, so it belongs in this English description.
 
-FOLLOW-UP QUESTIONS -- THIS IS A HARD RULE, NOT A SUGGESTION: every tool response includes "next_question", the ONE specific thing to ask about next, or null if nothing is left. This is precomputed for you deterministically -- it is not your judgment call. After any brief acknowledgment, your very next question must be about EXACTLY the topic named in "next_question", worded naturally for the conversation but not substituted for a different topic. Never ask about anything else, never invent your own question (for example, do not ask about consciousness or breathing unless "next_question" specifically says so), never skip ahead to a topic that isn't in "next_question" yet, and never ask about something already answered. Keep asking about the same "next_question" topic (rephrasing if needed) until it is answered and the next tool response gives you a new one, or null. This must produce the exact same sequence of questions regardless of language -- if you find yourself wanting to ask something "next_question" doesn't mention, don't.
+FOLLOW-UP QUESTIONS -- THIS IS A HARD RULE, NOT A SUGGESTION: every tool response includes "next_question", the ONE specific thing to ask about next, or null if nothing is left. This is precomputed for you deterministically -- it is not your judgment call. After any brief acknowledgment, your very next question must be about EXACTLY the topic named in "next_question", worded naturally for the conversation but not substituted for a different topic. Never ask about anything else, never invent your own question (for example, do not ask about consciousness or breathing unless "next_question" specifically says so), never skip ahead to a topic that isn't in "next_question" yet, and never ask about something already answered. Keep asking about the same "next_question" topic (rephrasing if needed) until it is answered and the next tool response gives you a new one, or null. This must produce the exact same sequence of questions regardless of language -- if you find yourself wanting to ask something "next_question" doesn't mention, don't. Note that "next_question" sometimes names TWO OR THREE closely-related things at once (for example "how many vehicles were involved, and whether anyone is injured or trapped") -- when it does, ask them together as ONE natural combined question, not as separate turns; but never split it into asking about a topic "next_question" does not currently mention.
 
 SPEAK ONCE PER CALLER TURN -- exactly once, never zero times and never twice: when one statement from the caller gives you several pieces of information, make ALL of your tool calls for it first (update_form_field for each piece, search_incident_type if needed), and only THEN speak -- one single spoken response covering your acknowledgment and the one next question. Never speak in between your own tool calls, and never speak twice in a row for the same caller statement. If you receive a tool result after you have already spoken your acknowledgment and question for this caller turn, say NOTHING further -- just wait for the caller's answer. But the other direction is equally important: every caller statement MUST get exactly one spoken response from you -- if you have not yet responded to the caller's latest statement, you MUST speak; never leave the caller waiting in silence. Only your greeting at the start of the call does not count as a response to anything.
 
-FINAL CONFIRMATION: Before calling submit_incident, verbally summarize everything collected (incident type, key facts, location) and ask "Would you like me to submit this report?" Only call submit_incident after the caller clearly confirms. If it comes back still missing something, ask for it and try again.
+SUBMITTING (routine reports): When "next_question" comes back null and "fast_track" is false, everything required has been collected. Do NOT read the caller a full summary of the report. Give ONE brief confirmation -- a single short sentence letting them know you have everything you need, ending with a quick check before you file it, for example "I have everything I need for your report now -- shall I go ahead and submit it?" As soon as they confirm (a simple yes / please do / that's right), call submit_incident in that same turn. If they want to correct something, fix just that one thing and confirm briefly again. Keep this to one short line -- it is a quick check, never a long read-back. Only if submit_incident reports something still missing, ask for just that one thing and try again.
+
+FAST-TRACK (injuries or life-threatening emergencies) -- this OVERRIDES the SUBMITTING confirmation above: every tool response includes "fast_track". When it is true, the caller has already reported an injury or a life-threatening condition -- someone hurt, unconscious, not breathing, bleeding heavily, trapped, a fire, or a vulnerable person (a child, a pregnant woman, an elderly or disabled person) at risk -- so "next_question" deliberately stops asking the routine secondary questions and goes null as soon as you have the incident type, location, and a short description. In that case do NOT ask for permission or confirmation and do NOT gather anything more. Instead, warmly and briefly reassure the caller that help is being arranged for them RIGHT NOW -- phrased as something happening this very moment, for example "I'm getting help arranged for you right now -- stay with me", or if someone is hurt "I'm getting an ambulance arranged for you right now -- stay with me" -- and in that SAME turn call submit_incident. Crucial honesty (Hard Rules): say help is being ARRANGED / that you are getting it organised right now, and NEVER that a vehicle has been dispatched, is already on its way, is being tracked, or will arrive in any number of minutes -- the real responder details are only worked out after you submit, and you will be given them to read out at the very end. This still only creates a notification record.
 
 AFTER SUBMISSION: when submit_incident succeeds, follow its "next_step": tell the caller their report has been registered and that you are checking which emergency services are responding -- ask them to stay on the line for a moment. This is the LAST thing you say. Do not say goodbye, do not ask any further question, and do not call any more tools -- after this one sentence, your part of the call is complete; say nothing else.
 """
@@ -763,6 +794,42 @@ class DispatcherSession:
             logger.debug("Could not send bytes on /ws/dispatcher (socket likely closed)", exc_info=True)
             return False
 
+    def _is_critical(self) -> bool:
+        """True when an injury or life-threatening condition is already known --
+        anyone reported hurt (casualties > 0), someone unconscious, not breathing,
+        bleeding heavily, trapped, a fire, or a vulnerable person at risk (child /
+        pregnant / elderly / disabled). Drives the fast-track (#1/#4): skip the
+        routine multi-fact safety questions AND the final confirmation and get the
+        report submitted as soon as the three essentials (type, location,
+        description) are in, so help can be arranged without delay. Reads only
+        latched state (flags never un-set once set, casualties/vulnerable only
+        ever become true), so once critical it stays critical. Polarity note:
+        Conscious/Breathing are 'true = good', so DISCUSSED-but-not-active means
+        the caller confirmed the bad state (unconscious / not breathing) -- same
+        convention _tone_reminder and dispatch_briefing use. This remains a
+        notification record only (Hard Rule 5): fast-tracking submission never
+        implies auto-dispatch/tracking. Kept in lockstep with _tone_reminder's
+        injury_reported set (plus Fire and vulnerable_victim, which escalate
+        urgency even without a stated casualty count)."""
+        return (
+            (self.state.casualties or 0) > 0
+            or self.state.vulnerable_victim
+            or "Trapped" in self.state.flags
+            or "Fire" in self.state.flags
+            or "Heavy bleeding" in self.state.flags
+            or ("Conscious" in self.state.flags_discussed and "Conscious" not in self.state.flags)
+            or ("Breathing" in self.state.flags_discussed and "Breathing" not in self.state.flags)
+        )
+
+    def _field_unanswered(self, field: str) -> bool:
+        if field.startswith("flag:"):
+            return field.split(":", 1)[1] not in self.state.flags_discussed
+        if field == "vehiclesInvolved":
+            return self.state.vehicles_involved is None
+        if field == "casualties":
+            return self.state.casualties is None
+        return False
+
     def _compute_still_missing(self) -> list[str]:
         missing = []
         if not self.state.sub_type:
@@ -771,17 +838,25 @@ class DispatcherSession:
             missing.append("the location (call get_current_location)")
         if not self.state.description:
             missing.append("a short description of what happened")
-        required = REQUIRED_FIELDS.get(self.state.category, DEFAULT_REQUIRED_FIELDS) if self.state.category else DEFAULT_REQUIRED_FIELDS
-        for item in required:
-            f = item["field"]
-            if f.startswith("flag:"):
-                flag_name = f.split(":", 1)[1]
-                if flag_name not in self.state.flags_discussed:
-                    missing.append(item["hint"])
-            elif f == "vehiclesInvolved" and self.state.vehicles_involved is None:
-                missing.append(item["hint"])
-            elif f == "casualties" and self.state.casualties is None:
-                missing.append(item["hint"])
+        # Fast-track (#4): once a life-threatening condition is known, stop
+        # asking the routine secondary safety/count questions -- the essentials
+        # above are all that gate submission, and getting help moving fast wins.
+        if self._is_critical():
+            return missing
+        groups = REQUIRED_FIELDS.get(self.state.category, DEFAULT_REQUIRED_FIELDS) if self.state.category else DEFAULT_REQUIRED_FIELDS
+        for group in groups:
+            fields = group["fields"]
+            still = [item for item in fields if self._field_unanswered(item["field"])]
+            if not still:
+                continue
+            # Combined question only when EVERY field in the group is still
+            # missing (the common first-ask). Once #6/a prior answer has filled
+            # some, the group dissolves to the individual questions for just the
+            # remaining fields -- never re-asking one already answered.
+            if "combined" in group and len(still) == len(fields):
+                missing.append(group["combined"])
+            else:
+                missing.extend(item["hint"] for item in still)
         return missing
 
     def _tone_reminder(self) -> str:
@@ -837,6 +912,10 @@ class DispatcherSession:
             "still_missing": missing,
             "next_question": missing[0] if missing else None,
             "tone_reminder": self._tone_reminder(),
+            # #4: when true, a life-threatening condition is already known -- the
+            # model skips the summarize-and-confirm step and submits as soon as
+            # next_question is null (see FAST-TRACK in the system instruction).
+            "fast_track": self._is_critical(),
         }
 
     async def _apply_local_signals_from_transcript(self) -> None:
@@ -861,24 +940,46 @@ class DispatcherSession:
         # still has a last-resort fallback for the rare case the model never
         # does, but it is no longer the first thing that happens here.
         signals = local_extract.extract_signals_locally(self.state.caller_transcript)
-        for signal_key, flag_name in _LOCAL_SIGNAL_TO_FLAG.items():
-            if signals.get(signal_key) and flag_name not in self.state.flags:
+        # Safety-flag determinations from the narrative (hazards AND vitals),
+        # each already resolved to affirm/negate by local_extract. A determined
+        # flag -- whether present (True) or explicitly ruled out (False) -- is
+        # marked flags_discussed so _compute_still_missing stops asking about it
+        # (the caller effectively answered it in their narrative). Guarded by
+        # "not already discussed" so this NEVER downgrades or overrides a value
+        # the model already recorded via update_form_field, or an earlier
+        # determination -- same OR-only, never-downgrade discipline the old
+        # affirm-only loop had. (local_extract deliberately maps no flag from its
+        # broad "vulnerableVictim" signal -- see this file's git history for why
+        # child/pregnant/elderly must not become a "Heavy bleeding" false
+        # positive -- so that exclusion is preserved here by construction.)
+        for flag_name, value in signals.get("flag_determinations", {}).items():
+            if flag_name not in _FLAG_NAMES or flag_name in self.state.flags_discussed:
+                continue
+            self.state.flags_discussed.add(flag_name)
+            if value:
                 self.state.flags.add(flag_name)
-                self.state.flags_discussed.add(flag_name)
-                await self._safe_send_json({
-                    "type": "form_update", "field": "flag",
-                    "value": {"flag_name": flag_name, "flag_active": True},
-                })
-        if self.state.vehicles_involved is None and signals.get("estimatedVehiclesInvolved"):
-            self.state.vehicles_involved = signals["estimatedVehiclesInvolved"]
+            else:
+                self.state.flags.discard(flag_name)
             await self._safe_send_json({
-                "type": "form_update", "field": "vehiclesInvolved", "value": self.state.vehicles_involved,
+                "type": "form_update", "field": "flag",
+                "value": {"flag_name": flag_name, "flag_active": bool(value)},
             })
+        # Casualties -- 0 is a real value now ("no one hurt" -> 0), so guard on
+        # "is not None", not truthiness, so a confirmed zero still drops the
+        # "how many injured?" question instead of leaving it None/unasked.
         if self.state.casualties is None and signals.get("estimatedCasualties") is not None:
             self.state.casualties = signals["estimatedCasualties"]
             await self._safe_send_json({
                 "type": "form_update", "field": "casualties", "value": self.state.casualties,
             })
+        # Vulnerable victim (child / pregnant / elderly / disabled at risk) --
+        # OR-only latch, never un-set. Deliberately no form_update event and no
+        # flag (mirrors the flag-determination note above: local_extract maps no
+        # safety flag from this broad signal on purpose). It only feeds
+        # _is_critical so the fast-track fires for an at-risk person even when no
+        # explicit casualty count or hazard flag has been stated yet.
+        if not self.state.vulnerable_victim and signals.get("vulnerableVictim"):
+            self.state.vulnerable_victim = True
         # Incident-type backstop, same rule-first pattern as the flag/count
         # backstops above (real reported bug this closes: the caller described
         # a car-on-car collision, the model recorded the DESCRIPTION but never
@@ -898,6 +999,21 @@ class DispatcherSession:
                     logger.info("Incident-type backstop applied from transcript: %s",
                                 result["subType"])
                 await self._apply_classification(result)
+
+        # Narrative vehicle count -- LAST, deliberately after the incident-type
+        # backstop. That backstop's vehicle-pair / same-type-collision overrides
+        # set an implied count of 2 for a two-vehicle collision ("a car hit a
+        # truck", "one car hit another car"), and _apply_classification only
+        # fills vehicles_involved when it is still None. Extracting a count here
+        # FIRST would let a singular narrative match ("one car ...") beat that
+        # implied 2 and record the wrong count; running last means the override
+        # wins for collisions, while a genuine single-vehicle narrative ("one
+        # car broke down") still gets its 1.
+        if self.state.vehicles_involved is None and signals.get("estimatedVehiclesInvolved"):
+            self.state.vehicles_involved = signals["estimatedVehiclesInvolved"]
+            await self._safe_send_json({
+                "type": "form_update", "field": "vehiclesInvolved", "value": self.state.vehicles_involved,
+            })
 
     # ── Tools ──────────────────────────────────────────────────────────────
 
@@ -1596,6 +1712,21 @@ class DispatcherSession:
         _end_conversation_and_deliver_briefing (the sole caller) is what
         guarantees the call still ends gracefully no matter what happens
         here; this function does not need its own top-level catch-all."""
+        # #2: play a short "please hold" line into the silent gap FIRST, before
+        # waiting on dispatch_update / Flash / the main TTS -- so it fills the
+        # wait right after the post-submit ack. It carries no ETA/responder data
+        # (none exists yet), and its wording deliberately does not repeat the
+        # ack, so the two never read as a doubled line. Non-fatal: any failure
+        # falls back to on-screen text and the briefing still proceeds.
+        hold_duration_s = 0.0
+        try:
+            hold_audio = await synthesize_speech(_ENGLISH_HOLD_LINE)
+            await self._safe_send_json({"type": "status", "state": "briefing"})
+            await self._send_audio_chunks(hold_audio)
+            hold_duration_s = len(hold_audio) / 2 / _TTS_SAMPLE_RATE_HZ
+        except Exception:
+            logger.warning("Hold-line synthesis/send failed -- sending it as text instead", exc_info=True)
+            await self._safe_send_json({"type": "tts_text", "text": _ENGLISH_HOLD_LINE})
         try:
             await asyncio.wait_for(self._dispatch_ready.wait(), timeout=_DISPATCH_WAIT_S)
             logger.info("========================\n"
@@ -1651,8 +1782,14 @@ class DispatcherSession:
         # never plausibly race the browser's playback, on top of (not
         # instead of) the frontend already handling this correctly.
         audio_duration_s = len(audio) / 2 / _TTS_SAMPLE_RATE_HZ  # 16-bit mono PCM -> 2 bytes/sample
-        await asyncio.sleep(audio_duration_s + _POST_BRIEFING_DRAIN_MARGIN_S)
-        logger.info("Call ended (briefing delivered, %.1fs after sending the final chunk)", audio_duration_s)
+        # Include the hold line's duration: it's queued ahead of the briefing on
+        # the client, so total client-side playback is hold + briefing. The
+        # frontend drives the real drain from its own queue; this only keeps the
+        # server-side WebSocket open long enough that its own close can't race
+        # that playback.
+        await asyncio.sleep(hold_duration_s + audio_duration_s + _POST_BRIEFING_DRAIN_MARGIN_S)
+        logger.info("Call ended (briefing delivered, %.1fs of audio after the final chunk)",
+                    hold_duration_s + audio_duration_s)
 
     async def _send_audio_chunks(self, audio: bytes) -> None:
         """Sends already-synthesized PCM16/24kHz audio to the browser as a

@@ -75,8 +75,15 @@ logger = logging.getLogger("dispatcher_hindi")
 _TEXT_MODEL = os.environ.get("GEMINI_TEXT_MODEL", "gemini-2.5-flash")
 # Tighter than a typical chat timeout on purpose -- this is a live phone call,
 # not a background job; a slow attempt should fail fast into the retry/apology
-# path rather than leave the caller in silence for 20s.
-_GEMINI_TIMEOUT_S = float(os.environ.get("GEMINI_TEXT_TIMEOUT_S", "12"))
+# path rather than leave the caller stuck on "Thinking..." for many seconds.
+# Lowered 12 -> 7 (2026-07) after "sometimes gets stuck on thinking" reports: a
+# normal conversational turn at thinking_budget=0 completes in ~1-3s, so 7s is
+# ample headroom, and capping it means a hung/slow Vertex call aborts into the
+# single retry quickly instead of hanging the caller. The closing briefing is a
+# genuinely longer single generation (up to _BRIEFING_MAX_OUTPUT_TOKENS) and
+# keeps its own, longer timeout below so it is never cut off.
+_GEMINI_TIMEOUT_S = float(os.environ.get("GEMINI_TEXT_TIMEOUT_S", "7"))
+_BRIEFING_TIMEOUT_S = float(os.environ.get("GEMINI_BRIEFING_TIMEOUT_S", "15"))
 # Each round is a full network round-trip to Vertex. The prompt now demands
 # ALL of a turn's tool calls happen together in one round (see FORM FILLING),
 # so 4 is generous headroom (typically 1 tool round + 1 final-text round).
@@ -153,6 +160,45 @@ _OPENER_COMMA_RE = re.compile(
     r"^(ओह|अरे|हाँ|ठीक है|सुनिए|अच्छा|समझ गया|सबसे पहले)\s*,\s*"
 )
 
+# Internal tool-result / system-note tokens that must NEVER be spoken aloud.
+# Real reported bug: the agent read fields like "tone_reminder" out to the
+# caller. These only ever appear in tool results / the parenthesized system
+# notes the model is instructed to ACT ON, not voice -- a natural Hindi operator
+# reply never contains a snake_case English identifier or a parenthetical, so
+# stripping them can't remove legitimate speech. Prompted against too, but this
+# is the deterministic guarantee (same rule-first pattern as _render_for_speech).
+_META_LEAK_RE = re.compile(
+    r"(?i)\b(?:"
+    r"tone[_ ]?reminder|next[_ ]?question|fast[_ ]?track|"
+    r"incident[_ ]?type|form[_ ]?update|update[_ ]?form[_ ]?field|"
+    r"search[_ ]?incident[_ ]?(?:type|categories)|submit[_ ]?incident|"
+    r"get[_ ]?current[_ ]?location|request[_ ]?location|location[_ ]?result|"
+    r"dispatch[_ ]?update|state[_ ]?block|flag[_ ]?active|"
+    r"system[_ ]?(?:update|note)|tool[_ ]?result"
+    r")\b"
+)
+
+
+def _strip_meta_leak(text: str) -> str:
+    """Remove any leaked internal/meta content before it reaches Bulbul --
+    parenthesized system notes and tool-result field names (tone_reminder,
+    next_question, fast_track, ...) must never be voiced. Returns text unchanged
+    unless it actually contains a parenthetical or a known meta token."""
+    if "(" not in text and not _META_LEAK_RE.search(text):
+        return text
+    # System notes and tone_reminder are parenthesized -- drop every ( ... )
+    # group (repeat to handle nesting). The model is told to use "..."/"—" for
+    # pauses, not parentheses, so this never touches legitimate speech.
+    prev = None
+    while prev != text:
+        prev = text
+        text = re.sub(r"\([^()]*\)", " ", text)
+    text = _META_LEAK_RE.sub(" ", text)          # any lingering token names
+    text = re.sub(r"\s+[:=]\s+", " ", text)       # dangling "label :" separators
+    text = re.sub(r"\s+([।.!?,…])", r"\1", text)  # space left before punctuation
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip()
+
 # ── Single-round fast path: canonical next-question phrasings ─────────────────
 # Latency: a tool-using turn used to cost TWO sequential Gemini round trips
 # (~1.1-1.4s median EACH, measured live on this project's Vertex credentials,
@@ -180,22 +226,29 @@ _OPENER_COMMA_RE = re.compile(
 # in tests.py so a future hint edit fails loudly instead of silently
 # disabling the fast path for that question.
 _CANONICAL_QUESTIONS: dict[str, str] = {
+    # Individual per-field questions (asked when a group is only PARTIALLY
+    # missing -- #6 or a prior answer already filled the rest).
     "how many vehicles were involved": "कुल कितनी गाड़ियाँ इसमें शामिल थीं?",
-    "how many vehicles were involved, if any": "कुल कितनी गाड़ियाँ इसमें शामिल थीं?",
-    "how many vehicles are affected": "कुल कितनी गाड़ियाँ इसमें शामिल हैं?",
-    "how many vehicles are involved": "कुल कितनी गाड़ियाँ इसमें शामिल थीं?",
     "how many people are injured": "क्या किसी को चोट लगी है?",
-    "how many people are injured, if any": "क्या किसी को चोट लगी है?",
-    "how many people are affected": "कितने लोग प्रभावित हैं?",
-    "whether anyone is hurt": "क्या किसी को चोट लगी है?",
-    "whether anyone is trapped inside a vehicle": "क्या कोई गाड़ी के अंदर फँसा हुआ है?",
-    "whether anyone is trapped or still inside": "क्या कोई अंदर फँसा हुआ है?",
-    "whether anyone is trapped or stranded": "क्या कोई फँसा हुआ है?",
+    "whether anyone is trapped": "क्या कोई फँसा हुआ है?",
     "whether there is fire or a fuel leak": "क्या कहीं आग लगी है या ईंधन का रिसाव हो रहा है?",
+    "whether hazardous material is involved": "क्या कोई खतरनाक पदार्थ भी शामिल है?",
     "whether the person is conscious": "क्या वह व्यक्ति होश में है?",
     "whether the person is breathing": "क्या उसकी साँस ठीक से चल रही है?",
     "whether there is heavy bleeding": "क्या ज़्यादा खून बह रहा है?",
-    "whether hazardous material is involved": "क्या कोई खतरनाक पदार्थ भी शामिल है?",
+    # Combined questions (asked as ONE question when ALL of a group's fields are
+    # still missing -- the common first-ask). Must stay in sync with the
+    # _COMBINED_* constants in dispatcher_live.py.
+    "how many vehicles were involved, and whether anyone is injured or trapped":
+        "कुल कितनी गाड़ियाँ थीं, और क्या किसी को चोट लगी या कोई फँसा हुआ है?",
+    "whether there is any fire or a hazardous-material leak":
+        "क्या कहीं आग लगी है या कोई खतरनाक पदार्थ / ईंधन का रिसाव है?",
+    "whether the person is conscious and breathing, and whether there is heavy bleeding":
+        "क्या वह व्यक्ति होश में है और साँस ले रहा है, और क्या ज़्यादा खून बह रहा है?",
+    "whether anyone is injured or trapped":
+        "क्या किसी को चोट लगी या कोई फँसा हुआ है?",
+    "how many vehicles were involved, and whether anyone is injured":
+        "कुल कितनी गाड़ियाँ थीं, और क्या किसी को चोट लगी है?",
 }
 
 # The only tools whose results the fast path can safely skip showing the
@@ -217,6 +270,29 @@ _FAST_PATH_TOOLS = frozenset({"search_incident_type", "update_form_field"})
 # right rather than leaving it to Bulbul's default number-to-words handling.
 _HINDI_OPENING_LINE = "भारत की एक शून्य तीन तीन हाईवे हेल्पलाइन में आपका स्वागत है।"
 
+# Spoken right after the greeting on the opening turn ONLY if the model returned
+# nothing usable -- so the greeting (and a first question) are heard no matter
+# what the model does.
+_OPENING_FALLBACK_QUESTION = "कृपया बताइए, अभी क्या हुआ है और आप इस समय कहाँ हैं?"
+
+# A short "please hold" line (#2), spoken via Bulbul into the silent gap between
+# the post-submit acknowledgment and the ETA briefing (dispatch_update wait +
+# Gemini briefing generation + Bulbul synthesis). Carries NO ETA/responder data
+# (none exists yet -- Hard Rules 1/2/5), male grammatical form to match the
+# configured male voice (SARVAM_TTS_SPEAKER=shubh, per CLAUDE.md), and worded so
+# it does not simply repeat the submit ack's "सेवाएँ देखी जा रही हैं".
+_HINDI_HOLD_LINE = "बस एक पल रुकिए... मैं आपके लिए ज़रूरी जानकारी तैयार कर रहा हूँ।"
+
+# An explicit ambulance mention from the CALLER on a road-accident first-response
+# helpline signals real medical urgency, so it is treated as critical -- the
+# fast-track then fires (stop asking routine secondary questions and submit as
+# soon as the essentials are in) instead of continuing to interrogate while the
+# caller is begging for help. Matches "बुलेंस" (the distinctive core of every
+# Devanagari ambulance spelling -- एम्बुलेंस / एंबुलेंस / ऐम्बुलेंस / अंबुलेंस) and the
+# Latin word (Saaras sometimes emits it). Hindi-scoped by design; the shared
+# _is_critical (English) is untouched.
+_AMBULANCE_REQUEST_RE = re.compile(r"(?:बुलेंस|ambulance)", re.IGNORECASE)
+
 
 def _hindi_system_prompt() -> str:
     opening_line = _HINDI_OPENING_LINE
@@ -232,31 +308,41 @@ def _hindi_system_prompt() -> str:
 
 शुरुआत में विविधता — हर बार अलग चुनें, कभी लगातार दो जवाबों में एक जैसी शुरुआत न करें, कभी हर बार "जी" या "ठीक है" से शुरू न करें: "ओह...", "अच्छा...", "समझ गया...", "ठीक है...", "सबसे पहले...", "मैं समझ सकता हूँ...", "कृपया घबराइए मत...", "मैं आपकी सहायता के लिए यहाँ हूँ..." — इनमें से चुनें या मिलती-जुलती अपनी शैली बनाएं।
 
-भावना गंभीरता के हिसाब से — हर टूल के नतीजे में "tone_reminder" आता है, हर बार उसे मानें। चोट, फँसा होना, या खतरे का ज़िक्र होने पर आवाज़ में सच्ची फ़िक्र झलके — धीमी, गंभीर बोली, ठहराव के साथ पहले सहानुभूति फिर सवाल। स्थिति सामान्य होने पर (मामूली टक्कर, बिना चोट के) शांत, पेशेवर, संक्षिप्त रहें — ज़रूरत से ज़्यादा भावुक हुए बिना, जैसे एक अनुभवी ऑपरेटर हर कॉल को उसकी असली गंभीरता के हिसाब से संभालता है।
+पेशेवर लहज़ा और भावना — आप एक अनुभवी, प्रशिक्षित हेल्पलाइन ऑपरेटर हैं: शांत, संयमित और स्थिति पर पकड़ रखने वाले, पर आवाज़ में caller के लिए सच्ची फ़िक्र साफ़ झलके — जैसे कोई ऐसा इंसान जो रोज़ आपात स्थितियाँ संभालता है और आपको मदद ज़रूर दिलाएगा। कभी खुशमिज़ाज़, तेज़ या उत्साहित न लगें, और न ही रूखे या मशीनी — बस भरोसेमंद और सक्षम। हर टूल के नतीजे में "tone_reminder" आता है, हर बार उसे मानें — पर "tone_reminder", "next_question", "fast_track", "incidentType" जैसे अंदरूनी शब्द, कोष्ठक () में लिखा कोई भी निर्देश, या "SYSTEM UPDATE" जैसी बातें सिर्फ आपके मार्गदर्शन के लिए हैं; इन पर अमल करें पर इन्हें कभी ज़ोर से बोलकर caller को न सुनाएं। caller सिर्फ आपकी स्वाभाविक हिंदी बातचीत सुने, कोई तकनीकी शब्द या फ़ील्ड नाम नहीं। चोट, फँसा होना या खतरे का ज़िक्र होने पर पहले सच्ची, स्थिर सहानुभूति — धीमी, गंभीर बोली, ठहराव के साथ — फिर सवाल; जैसे "मुझे यह सुनकर दुख हुआ... मैं आपके लिए मदद का इंतज़ाम कर रहा हूँ।" स्थिति सामान्य होने पर (मामूली टक्कर, बिना चोट के) शांत, पेशेवर और संक्षिप्त रहें — ज़रूरत से ज़्यादा भावुक हुए बिना, जैसे एक अनुभवी ऑपरेटर हर कॉल को उसकी असली गंभीरता के हिसाब से संभालता है।
 
 हर जवाब की बनावट — 1 से 3 छोटे वाक्य: पहले caller ने अभी जो बताया उसकी सच्ची स्वीकृति (ऊपर बताए ठहराव और शुरुआत के साथ), फिर ठीक ONE सवाल — कभी एक साथ दो सवाल नहीं, कभी सिर्फ सवाल बिना स्वीकृति के नहीं, formal भाषा कभी नहीं जैसे "कृपया घटना का विवरण प्रदान करें।" (एक अपवाद: टूल कॉल के साथ लिखी स्वीकृति में कोई सवाल नहीं होता — नीचे "काम का क्रम" देखें।)
 
 आम सवालों की सहज हिंदी (next_question के अंग्रेज़ी संकेत के लिए इस्तेमाल करें):
 चोट/casualties → "क्या किसी को चोट लगी है?" (हाँ पर "कितने लोग घायल हैं?")
-trapped → "क्या कोई गाड़ी के अंदर फँसा हुआ है?"
+trapped → "क्या कोई फँसा हुआ है?"
 fire/fuel leak → "क्या कहीं आग लगी है या ईंधन का रिसाव हो रहा है?"
 conscious → "क्या वह होश में है?"   breathing → "क्या साँस ठीक से चल रही है?"
 heavy bleeding → "क्या ज़्यादा खून बह रहा है?"   hazmat → "क्या कोई खतरनाक पदार्थ भी शामिल है?"
 vehicles involved → "कुल कितनी गाड़ियाँ इसमें शामिल थीं?"
+कभी-कभी next_question में दो-तीन जुड़ी बातें एक साथ आती हैं — उन्हें एक ही स्वाभाविक सवाल में पूछें, अलग-अलग नहीं:
+गाड़ियाँ+चोट+फँसा → "कुल कितनी गाड़ियाँ थीं, और क्या किसी को चोट लगी या कोई फँसा हुआ है?"
+गाड़ियाँ+चोट → "कुल कितनी गाड़ियाँ थीं, और क्या किसी को चोट लगी है?"
+चोट+फँसा → "क्या किसी को चोट लगी या कोई फँसा हुआ है?"
+आग+hazmat → "क्या कहीं आग लगी है या कोई खतरनाक पदार्थ / ईंधन का रिसाव है?"
+होश+साँस+खून → "क्या वह व्यक्ति होश में है और साँस ले रहा है, और क्या ज़्यादा खून बह रहा है?"
 
 काम का क्रम — हर टर्न में, बिना अपवाद:
-1. पहले caller ने अभी जो बताया उसके लिए ज़रूरी सभी टूल कॉल एक साथ करें — पहली बार घटना बताने पर search_incident_type (उनके असली शब्दों के साथ, कभी अपना अनुवाद या सारांश नहीं), और हर नई जानकारी (चोट, फँसा होना, आग, गाड़ियों की संख्या, विवरण) के लिए update_form_field। "नहीं" भी जानकारी है — रिकॉर्ड करें (flag_active=false), सिर्फ आगे न बढ़ें। उसी बार में text में एक छोटी (1–2 वाक्य) सहानुभूति-भरी स्वीकृति भी लिखें — ऊपर बताए ठहराव और शुरुआत के साथ, पर उसमें कोई सवाल बिल्कुल नहीं: अगला सवाल सिस्टम आपकी स्वीकृति के तुरंत बाद खुद जोड़ देता है।
+1. पहले caller ने अभी जो बताया उसके लिए ज़रूरी सभी टूल कॉल एक साथ करें — पहली बार घटना बताने पर search_incident_type (उनके असली शब्दों के साथ, कभी अपना अनुवाद या सारांश नहीं), और हर नई जानकारी (चोट, फँसा होना, आग, गाड़ियों की संख्या, विवरण) के लिए update_form_field। "नहीं" भी जानकारी है — रिकॉर्ड करें (flag_active=false), सिर्फ आगे न बढ़ें। अगर caller एक ही वाक्य में कई बातें एक साथ कह दे (जैसे "कार और कार की टक्कर, चार लोग घायल, एम्बुलेंस चाहिए") — तो भी सब कुछ इसी एक ही राउंड में करें: search_incident_type और सभी ज़रूरी update_form_field एक साथ, अभी, एक ही जवाब में। कभी पहले सिर्फ search_incident_type बुलाकर उसके नतीजे का इंतज़ार करके अगले राउंड में update न करें — घटना के सारे तथ्य caller के वाक्य में पहले से मौजूद हैं; उन्हें दर्ज करने के लिए आपको search के नतीजे की ज़रूरत नहीं। उसी बार में text में एक छोटी (1–2 वाक्य) सहानुभूति-भरी स्वीकृति भी लिखें — ऊपर बताए ठहराव और शुरुआत के साथ, पर उसमें कोई सवाल बिल्कुल नहीं: अगला सवाल सिस्टम आपकी स्वीकृति के तुरंत बाद खुद जोड़ देता है।
 2. अगर टूल के नतीजे वापस आकर आपसे दोबारा जवाब माँगा जाए, तो अब ऊपर बताई पूरी बनावट में बोलें — स्वीकृति + ठीक एक सवाल ("next_question" वाला ही)।
 
-OPENING (सिर्फ कॉल के पहले जवाब में, दोबारा कभी नहीं): यह वाक्य शब्दशः बोलें, बिना किसी और चीज़ के पहले: "{opening_line}" उसी जवाब में — अगर लोकेशन मिल चुकी है तो संक्षेप में पूछें कि क्या यह सही है, वरना caller से मैप-पिन बटन से लोकेशन भेजने को कहें — फिर पूछें क्या हुआ।
+OPENING (सिर्फ कॉल के पहले जवाब में): स्वागत वाक्य ("{opening_line}") सिस्टम द्वारा अपने-आप, आपके जवाब से पहले बोल दिया जाता है — इसे आप खुद कभी न बोलें और न दोहराएं। आपका पहला जवाब सीधे आगे बढ़े: अगर लोकेशन मिल चुकी है तो संक्षेप में पूछें कि क्या यह सही है, वरना caller से मैप-पिन बटन से लोकेशन भेजने को कहें — फिर पूछें क्या हुआ। उसी पहले सवाल में स्वाभाविक रूप से यह भी जान लें कि caller घटना से किस तरह जुड़ा है — क्या वह खुद घायल/शामिल है, या पास खड़ा चश्मदीद है, या किसी और की ओर से (शायद घटनास्थल से दूर) रिपोर्ट कर रहा है। यह अलग से ठंडा सवाल न बने; "क्या हुआ" पूछते समय ही सहज रूप से पता चल जाए। इससे आप उनकी बाकी बातों को सही संदर्भ में समझ पाएंगे (चश्मदीद को चोट का ब्योरा शायद न पता हो; दूर से रिपोर्ट करने वाला दृश्य देख ही न पा रहा हो)।
 
 caller बोलचाल की भाषा में बोलते हैं ("टायर फट गया", "गाड़ी पलट गई", "ठोक दिया", "आग पकड़ ली") — पूरे वाक्य और अब तक की पूरी बातचीत से मतलब समझें, कभी सिर्फ एक शब्द पकड़कर नहीं, कभी formal शब्दों में दोबारा बोलने को न कहें।
 
-घटना का प्रकार — अहम नियम: कभी खुद अंदाज़ा न लगाएं, हमेशा search_incident_type बुलाएं। ध्यान से सुनें कि caller ने कौन-कौन से वाहन बताए — "मेरी कार ट्रक से टकरा गई" में कार भी है और ट्रक भी, कभी सिर्फ Car vs. Car दर्ज न हो। मिलान संदिग्ध लगे तो एक छोटा स्पष्टीकरण सवाल पूछें, फिर दोबारा search_incident_type बुलाएं या search_incident_categories से सही करें।
+घटना का प्रकार — अहम नियम: कभी खुद अंदाज़ा न लगाएं, हमेशा search_incident_type बुलाएं। ध्यान से सुनें कि caller ने कौन-कौन से वाहन बताए — "मेरी कार ट्रक से टकरा गई" में कार भी है और ट्रक भी, कभी सिर्फ Car vs. Car दर्ज न हो। मिलान संदिग्ध लगे तो एक छोटा स्पष्टीकरण सवाल पूछें, फिर दोबारा search_incident_type बुलाएं या search_incident_categories से सही करें। update_form_field से सही प्रकार दर्ज कर देना ही पुष्टि है — इसके बाद caller से प्रकार की दोबारा पुष्टि न माँगें; बस संक्षेप में स्वीकार करके अगले सवाल पर जाएं।
 
-description फ़ील्ड हमेशा अंग्रेज़ी में लिखें (अनुवाद+सारांश करके) — यही एकमात्र चीज़ है जो हमेशा अंग्रेज़ी में लिखनी है। जल्दी एक छोटा सारांश सेट करें, नई जानकारी मिलने पर अपडेट करें।
+description फ़ील्ड हमेशा अंग्रेज़ी में लिखें (अनुवाद+सारांश करके) — यही एकमात्र चीज़ है जो हमेशा अंग्रेज़ी में लिखनी है। जल्दी एक छोटा सारांश सेट करें, नई जानकारी मिलने पर अपडेट करें। जब पता चल जाए कि रिपोर्ट कौन कर रहा है, तो उसे भी इसी अंग्रेज़ी description में शामिल करें (जैसे "Caller is the injured driver", "Bystander reporting", या "Third party reporting on behalf of someone at the scene") — इसके लिए कोई अलग फ़ॉर्म फ़ील्ड नहीं है।
 
-अगला सवाल — पक्का नियम: हर टूल के नतीजे में "next_question" आता है — बिल्कुल यही अगला विषय पूछें, कभी कोई और सवाल नहीं, कभी वह जो caller पहले ही बता चुका है दोबारा नहीं (जैसे उसने "दो लोग घायल हैं" कहा हो तो फिर कभी "क्या किसी को चोट लगी है?" न पूछें)। जब यह null हो, सब कुछ एक-दो वाक्यों में दोहराएं और पूछें "क्या यह जानकारी सही है?" — साफ़ हाँ मिलने पर ही submit_incident बुलाएं; कुछ छूट जाए तो पूछकर दोबारा कोशिश करें।
+अगला सवाल — पक्का नियम: हर टूल के नतीजे में "next_question" आता है — बिल्कुल यही अगला विषय पूछें, कभी कोई और सवाल नहीं, कभी वह जो caller पहले ही बता चुका है दोबारा नहीं (जैसे उसने "दो लोग घायल हैं" कहा हो तो फिर कभी "क्या किसी को चोट लगी है?" न पूछें)। कभी-कभी next_question में दो-तीन जुड़ी बातें एक साथ आती हैं — उन्हें एक ही सवाल में पूछें (ऊपर संयुक्त सवालों की सूची देखें), अलग-अलग नहीं।
+
+रिपोर्ट भेजना (सामान्य स्थिति) — जब next_question null हो और fast_track false हो, तो सारी ज़रूरी जानकारी मिल चुकी है। caller को पूरी जानकारी दोबारा न सुनाएं। बस एक छोटी पुष्टि लें — एक छोटा वाक्य कि आपके पास सारी ज़रूरी जानकारी आ गई है, साथ में भेजने से पहले एक छोटा सवाल, जैसे "मेरे पास आपकी रिपोर्ट के लिए सारी ज़रूरी जानकारी आ गई है — क्या मैं इसे भेज दूँ?" caller के हाँ कहते ही (हाँ / भेज दीजिए / ठीक है) उसी टर्न में submit_incident बुला दें। कुछ ठीक करना हो तो सिर्फ वही ठीक करके फिर छोटी पुष्टि लें। यह एक छोटी जाँच है, लंबा सारांश नहीं। अगर submit_incident बताए कि कुछ छूट गया है, तभी सिर्फ वही एक चीज़ पूछकर दोबारा कोशिश करें।
+
+fast_track (चोट या जान का ख़तरा) — यह ऊपर वाली पुष्टि पर भारी पड़ता है: हर टूल नतीजे में "fast_track" आता है। जब यह true हो — किसी को चोट लगी हो, कोई बेहोश हो, साँस न ले रहा हो, बहुत खून बह रहा हो, कोई फँसा हो, आग लगी हो, या कोई कमज़ोर/असुरक्षित व्यक्ति (बच्चा, गर्भवती महिला, बुज़ुर्ग या दिव्यांग) ख़तरे में हो — तो next_question बाकी सामान्य सवाल पूछना बंद कर देता है और घटना का प्रकार, लोकेशन व एक छोटा विवरण मिलते ही null हो जाता है। तब न कोई अनुमति या पुष्टि माँगें, न और जानकारी इकट्ठा करें। बस caller को थोड़े में, गर्मजोशी से भरोसा दिलाएं कि उनके लिए मदद अभी, इसी वक़्त इंतज़ाम की जा रही है — जैसे "मैं अभी आपके लिए मदद का इंतज़ाम कर रहा हूँ... आप मेरे साथ बने रहिए।", या किसी को चोट लगी हो तो "मैं अभी आपके लिए एम्बुलेंस का इंतज़ाम कर रहा हूँ... आप मेरे साथ बने रहिए।" — और उसी टर्न में तुरंत submit_incident बुला दें। ज़रूरी ईमानदारी (Hard Rules): कहें कि मदद का इंतज़ाम अभी किया जा रहा है, कभी न कहें कि कोई गाड़ी भेज दी गई है, रास्ते में है, ट्रैक हो रही है, या इतने मिनट में पहुँचेगी — असली समय submit के बाद तय होता है और आपको अंत में पढ़कर सुनाने को दिया जाएगा। यह फिर भी सिर्फ एक सूचना रिकॉर्ड है।
 
 submit के बाद: caller को बताएं रिपोर्ट दर्ज हो गई और सेवाएँ देखी जा रही हैं, एक पल रुकने को कहें, अलविदा न कहें। इसके बाद मिलने वाले SYSTEM UPDATE संदेश के निर्देशों का पूरी तरह पालन करें (उसमें सब कुछ विस्तार से लिखा होगा)।
 
@@ -282,6 +368,13 @@ class HindiDispatcherSession(DispatcherSession):
         # _collect_user_utterance() call that speech is already in progress,
         # so it doesn't wait for a speech_start event that already happened.
         self._resume_speech_active = False
+        # The fixed 1033 welcome greeting is spoken DETERMINISTICALLY as a prefix
+        # on the very first agent turn (see _agent_turn), not left to the model to
+        # reproduce -- real reported bug: the model was skipping the greeting
+        # entirely and opening straight with the location question. The line must
+        # be exact (1033 spelled digit-by-digit for TTS), so it can't depend on
+        # the model saying it verbatim. Flag is consumed on the first turn.
+        self._opening_line_pending = True
         # Tracks the opener (see _OPENERS) this call's last reply started
         # with, if any -- lets _render_for_speech guarantee no immediate
         # repeat, a hard mechanical backstop on top of prompting.
@@ -289,6 +382,9 @@ class HindiDispatcherSession(DispatcherSession):
         # Per-turn latency breakdown (see _mark); reset at the top of each
         # cycle in run()'s main loop.
         self._turn_stats: dict = {}
+        # Hindi-scoped fast-track trigger: latched True once the caller asks for
+        # an ambulance (see _AMBULANCE_REQUEST_RE / _is_critical below).
+        self._ambulance_requested = False
         self._gen_config = types.GenerateContentConfig(
             system_instruction=_hindi_system_prompt(),
             tools=[types.Tool(function_declarations=_TOOL_DECLARATIONS)],
@@ -310,6 +406,28 @@ class HindiDispatcherSession(DispatcherSession):
             max_output_tokens=_BRIEFING_MAX_OUTPUT_TOKENS,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
+
+    def _is_critical(self) -> bool:
+        # Hindi-scoped: an explicit ambulance request from the caller counts as
+        # critical (medical urgency) on top of every shared injury/hazard
+        # trigger, so the fast-track skips the routine secondary questions and
+        # submits once type + location + description are in -- instead of asking
+        # "how many injured / trapped / fire?" while the caller wants an
+        # ambulance NOW. Still submits only when the essentials are present, so
+        # a bare "send an ambulance" with no incident yet still gets a "what
+        # happened?" first. English (super's _is_critical) is unchanged.
+        return super()._is_critical() or self._ambulance_requested
+
+    async def _apply_local_signals_from_transcript(self) -> None:
+        # Run the shared deterministic backstop (type/casualties/flags/…), then
+        # add the Hindi-only ambulance-request latch on top.
+        await super()._apply_local_signals_from_transcript()
+        if (
+            not self._ambulance_requested
+            and self.state.caller_transcript
+            and _AMBULANCE_REQUEST_RE.search(self.state.caller_transcript)
+        ):
+            self._ambulance_requested = True
 
     def _mark(self, key: str, seconds: float) -> None:
         self._turn_stats[key] = self._turn_stats.get(key, 0.0) + seconds
@@ -339,16 +457,27 @@ class HindiDispatcherSession(DispatcherSession):
         # English side so far.
         keepalive_task = asyncio.create_task(self._keepalive())
         try:
-            # Resolve GPS upfront, exactly like the Live path — the pump is
-            # already running, so the browser's location_result can arrive.
+            # Resolve GPS upfront (needed to build the first turn's instruction);
+            # the pump is already running so the browser's location_result can
+            # arrive. Pre-connect Bulbul in parallel so the opening utterance's
+            # first chunk isn't delayed by the TLS+config handshake.
+            asyncio.create_task(self._preconnect_tts())
             location_result = await self._tool_get_current_location()
             if location_result.get("status") in ("ok", "already_have_location"):
                 location_note = f"Detected location: {location_result.get('label', '')}."
             else:
                 location_note = "No location was detected."
             self._turn_stats = {}
+            # The fixed 1033 greeting is prepended to this first turn's reply as
+            # ONE utterance inside _agent_turn (see _opening_line_pending), so the
+            # model must NOT greet -- it writes only the location/what-happened
+            # question.
             await self._agent_turn(
-                gemini_client, f"(The call has just connected. {location_note} Begin now.)"
+                gemini_client,
+                f"(The call has just connected. The 1033 welcome greeting is added "
+                f"automatically at the start of your reply, so do NOT greet or "
+                f"welcome yourself. {location_note} Begin now -- go straight to "
+                f"confirming the location and asking what happened.)",
             )
 
             while not self._ended.is_set() and not self.state.submitted:
@@ -530,7 +659,24 @@ class HindiDispatcherSession(DispatcherSession):
         asyncio.create_task(self._preconnect_tts())
         reply = await self._reason(gemini_client, user_text, config=config)
         completed = True
-        if reply:
+        if self._opening_line_pending:
+            # OPENING TURN: speak the fixed 1033 greeting AND the model's opening
+            # reply as ONE continuous, UNINTERRUPTIBLE Bulbul utterance. Being a
+            # single utterance is what guarantees the greeting is heard: a
+            # SEPARATE greeting utterance could be flushed by the NEXT turn's
+            # "interrupted" (sent at the top of every _speak_or_fallback) despite
+            # the playback-hold, which is why the greeting was going missing.
+            # allow_bargein=False means a caller talking over it can't cut it. It
+            # is still guaranteed even if the model returned nothing (fallback
+            # question). The prompt tells the model the greeting is added
+            # automatically, so its reply is just the location/what-happened
+            # question -- never the greeting itself.
+            self._opening_line_pending = False
+            body = self._render_for_speech(reply) if reply else _OPENING_FALLBACK_QUESTION
+            completed = await self._speak_or_fallback(
+                f"{_HINDI_OPENING_LINE} {body}", allow_bargein=False
+            )
+        elif reply:
             reply = self._render_for_speech(reply)
             completed = await self._speak_or_fallback(reply)
         await self._safe_send_json({"type": "turn_complete"})
@@ -547,6 +693,12 @@ class HindiDispatcherSession(DispatcherSession):
         follow-up-call script → goodbye, see dispatch_briefing.py) and tell
         the browser the call is complete. If the data never arrives, the
         briefing honestly skips the ETA section rather than inventing one."""
+        # #2: speak a short "please hold" line FIRST, before waiting on
+        # dispatch_update + generating the briefing, so it fills the silent gap
+        # right after the post-submit ack. Uses the same Bulbul-or-text path
+        # every reply uses; carries no ETA data.
+        if not self._ended.is_set():
+            await self._speak_or_fallback(_HINDI_HOLD_LINE)
         try:
             await asyncio.wait_for(self._dispatch_ready.wait(), timeout=_DISPATCH_WAIT_S)
         except asyncio.TimeoutError:
@@ -576,6 +728,11 @@ class HindiDispatcherSession(DispatcherSession):
         a known opener spoken with a flat comma instead of the pause
         punctuation actually asked for, and the same opener repeating on
         consecutive turns."""
+        # Defensive first: strip any leaked internal/meta content (tool-result
+        # fields like "tone_reminder", parenthesized system notes) so it never
+        # reaches Bulbul -- prompting alone can't guarantee the model never
+        # echoes them.
+        text = _strip_meta_leak(text)
         rendered = _OPENER_COMMA_RE.sub(lambda m: f"{m.group(1)}... ", text, count=1)
         opener = next((o for o in _OPENERS if rendered.startswith(o)), None)
         if opener is not None and opener == self._last_opener:
@@ -633,26 +790,37 @@ class HindiDispatcherSession(DispatcherSession):
                 ))
             self._history.append(types.Content(role="user", parts=response_parts))
 
-            # Single-round fast path (see _CANONICAL_QUESTIONS): if this first
-            # round produced a question-free acknowledgment alongside safe
-            # tool calls, the reply is "ack + canonical question for the
-            # deterministic next_question" -- composed here in code, skipping
-            # the second ~1.1-1.4s Gemini round trip entirely. Falls through
-            # to the normal second round whenever any guard fails.
-            if round_num == 0:
-                composed = self._compose_single_round_reply(
-                    text, {fc.name for fc in function_calls}
+            # Fast path (see _CANONICAL_QUESTIONS): if THIS round produced a
+            # question-free acknowledgment alongside safe tool calls, the reply
+            # is "ack + canonical question for the deterministic next_question"
+            # -- composed here in code, skipping the next ~1.1-1.4s Gemini round
+            # trip entirely. Falls through to another round whenever any guard
+            # fails.
+            #
+            # Issue 2: this now fires after ANY search/update round, not only
+            # round 0. On a dense multi-fact first utterance ("car vs car, 4
+            # injured, need ambulance urgently") the model sometimes splits its
+            # work -- classify in round 0, then update_form_field in round 1 --
+            # so round 0 has no ack to compose from. Composing after the update
+            # round too caps that case at 2 rounds instead of 3 (no separate
+            # spoken-reply round). The best case is still ONE round: the prompt
+            # asks the model to do all tool calls + the ack together in round 0,
+            # and the deterministic backstop (_apply_local_signals_from_transcript,
+            # run before this turn) has usually already recorded the facts, so
+            # the model's whole job collapses to "short ack".
+            composed = self._compose_single_round_reply(
+                text, {fc.name for fc in function_calls}
+            )
+            if composed is not None:
+                # Mirror the exact history shape a normal two-round turn leaves
+                # behind (model: fc+ack / user: results / model: spoken reply),
+                # so later turns -- and the model itself -- see the appended
+                # question as something it asked.
+                self._history.append(
+                    types.Content(role="model", parts=[types.Part(text=composed)])
                 )
-                if composed is not None:
-                    # Mirror the exact history shape a normal two-round turn
-                    # leaves behind (model: fc+ack / user: results / model:
-                    # spoken reply), so later turns -- and the model itself --
-                    # see the appended question as something it asked.
-                    self._history.append(
-                        types.Content(role="model", parts=[types.Part(text=composed)])
-                    )
-                    self._turn_stats["single_round"] = 0.0  # visible in [latency] logs
-                    return composed
+                self._turn_stats["single_round"] = 0.0  # visible in [latency] logs
+                return composed
         logger.warning("Gemini used %d tool rounds without a final answer", _MAX_TOOL_ROUNDS)
         return spoken_fallback or _RECONNECT_APOLOGY["hi-IN"]
 
@@ -671,7 +839,9 @@ class HindiDispatcherSession(DispatcherSession):
             which genuinely needs the model)."""
         if not fc_names or fc_names - _FAST_PATH_TOOLS:
             return None
-        ack = (ack or "").strip()
+        # Strip leaked meta BEFORE the guards so it neither reaches speech nor
+        # falsely trips the "?" guard (a leaked "(next_question: ...?)").
+        ack = _strip_meta_leak((ack or "").strip())
         if not ack or "?" in ack or self.state.submitted:
             return None
         missing = self._compute_still_missing()
@@ -686,13 +856,18 @@ class HindiDispatcherSession(DispatcherSession):
         return f"{ack} {question}"
 
     async def _generate_with_retry(self, gemini_client, config=None):
+        # The closing briefing (config is self._briefing_config) is a longer
+        # single generation, so it gets the longer briefing timeout; every
+        # normal conversational turn gets the tight one, so a stuck call fails
+        # fast rather than hanging the caller on "Thinking...".
+        timeout = _BRIEFING_TIMEOUT_S if config is self._briefing_config else _GEMINI_TIMEOUT_S
         for attempt in range(2):
             try:
                 return await asyncio.wait_for(
                     gemini_client.aio.models.generate_content(
                         model=_TEXT_MODEL, contents=self._history, config=config or self._gen_config,
                     ),
-                    timeout=_GEMINI_TIMEOUT_S,
+                    timeout=timeout,
                 )
             except Exception:
                 logger.exception("Gemini text call failed (attempt %d/2)", attempt + 1)
@@ -701,12 +876,18 @@ class HindiDispatcherSession(DispatcherSession):
 
     # ── Speaking (Bulbul) ────────────────────────────────────────────────────
 
-    async def _speak_or_fallback(self, text: str) -> bool:
+    async def _speak_or_fallback(self, text: str, allow_bargein: bool = True) -> bool:
         """Speak via Bulbul. Returns True if the reply completed normally
         (including the "TTS failed, shown as text" fallback -- that's still a
         completed turn), or False if the caller genuinely barged in and
         playback was cut short. On failure, the reply is surfaced as text
         (spec: 'display the Gemini response as text and log the error').
+
+        allow_bargein=False makes the utterance uninterruptible -- used for the
+        fixed 1033 opening greeting so a caller talking over it can never leave
+        it partially or never spoken (Issue 1). It also keeps the single-reader
+        invariant trivially: with barge-in off, self._stt is simply not read
+        during that utterance.
 
         Barge-in detection is done INLINE in this same coroutine (polling
         self._stt between chunks and during the trailing playback-hold wait)
@@ -753,7 +934,7 @@ class HindiDispatcherSession(DispatcherSession):
                     await self.websocket.send_bytes(chunk)
                 except Exception:
                     return True  # browser gone; run() will unwind via the pump
-                if armed_at is not None and now >= armed_at:
+                if allow_bargein and armed_at is not None and now >= armed_at:
                     if await self._caller_interrupted():
                         return await self._handle_bargein()
         except SarvamTTSError:
@@ -775,6 +956,9 @@ class HindiDispatcherSession(DispatcherSession):
                 remaining = playback_ends - time.monotonic()
                 if remaining <= 0:
                     break
+                if not allow_bargein:
+                    await asyncio.sleep(min(remaining, 0.2))
+                    continue
                 if await self._caller_interrupted(timeout=min(remaining, 0.2)):
                     return await self._handle_bargein()
         self._mark("tts_total", time.monotonic() - tts_start)

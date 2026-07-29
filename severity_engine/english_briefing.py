@@ -47,7 +47,7 @@ from google.cloud import texttospeech
 from google.genai import types
 from google.oauth2 import service_account
 
-from .dispatch_briefing import _CLOSING_EN, _facility_location, _responder_facts_en, _service, select_sops
+from .dispatch_briefing import _CLOSING_EN, _responder_facts_en, _service, select_sops
 from .google_credentials import load_service_account_info
 
 logger = logging.getLogger("english_briefing")
@@ -209,19 +209,26 @@ def _required_anchors(state, services: Optional[dict]) -> list:
     "unavailable"], ...) means every unavailable service must be named
     AND called out as unavailable, not just any one of them."""
     groups = [["regist"]]  # section 1: "registered"/"registration"
-    service_labels = {
-        "ambulance": "ambulance", "fire": "fire", "towing": "towing",
-        "hospital": "trauma", "police": "police",
+    # (present-case anchor, unavailable-case label word). Since the ETA phrasing
+    # was simplified to drop the origin location
+    # (dispatch_briefing._responder_facts_en, 2026-07), the facility location is
+    # no longer in the present-service lines, so the anchor is the service label
+    # word instead. Fire's PRESENT anchor is the bigram "fire service", not bare
+    # "fire": the word "fire" also appears in the fire-SOP safety line
+    # ("extinguish a large fire"), so a dropped fire responder line could
+    # otherwise be falsely "covered" by that SOP. The UNAVAILABLE case keeps the
+    # bare "fire" label paired with "unavailable" -- the SOP never says
+    # "unavailable", so that pairing is already unambiguous.
+    _service_anchors = {
+        "ambulance": ("ambulance", "ambulance"),
+        "fire": ("fire service", "fire"),
+        "towing": ("towing", "towing"),
+        "hospital": ("trauma", "trauma"),
+        "police": ("police", "police"),
     }
-    for key, label in service_labels.items():
+    for key, (present_anchor, absent_label) in _service_anchors.items():
         entry = _service(services, key)
-        if entry:
-            # The facility location is the one thing Flash is explicitly
-            # told to keep verbatim, so it's a reliable single-string
-            # anchor for "this section wasn't dropped".
-            groups.append([_facility_location(entry["name"]).lower()])
-        else:
-            groups.append([label, "unavailable"])
+        groups.append([present_anchor] if entry else [absent_label, "unavailable"])
     for sop in select_sops(state):
         groups.append([_SOP_ANCHORS.get(sop["key"], sop["en"][:20].lower())])
     groups.append(["two hours"])   # section 8
@@ -270,8 +277,8 @@ def _build_flash_prompt(state, services: Optional[dict]) -> str:
         "omit, or change any name or number, and never skip one even if it says details are "
         "currently unavailable (say that plainly if so -- never invent a name or time instead). "
         "Every time is an estimate and must sound like one (\"estimated\", \"approximately\"), and "
-        "every service is described as NOTIFIED / responding from its location — never as "
-        "\"dispatched and tracked\" (this system tracks no vehicle):\n"
+        "every service is described as NOTIFIED — never as \"dispatched and tracked\" (this system "
+        "tracks no vehicle):\n"
         + "\n".join(f"- {f}" for f in facts)
         + "\n\nPART 3 -- Then give the caller ALL of these safety instructions, in this order, in "
         "your own natural words while keeping the exact meaning of each one — do not skip any:\n"

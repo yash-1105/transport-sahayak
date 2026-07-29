@@ -1,28 +1,103 @@
 @import "tailwindcss";
 
+/* ── UI Redesign design tokens ─────────────────────────────────────────────── */
+/* Colour palette, radii and shadows from the design handoff. CSS custom
+   properties are the source of truth; the TS mirror in src/lib/design.ts is used
+   for inline styles that need JS values. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #F3F1EC;   /* page surface */
+  --foreground: #1C2434;   /* ink */
+
+  /* Navy */
+  --navy-900: #0E1A2F;
+  --navy-800: #14243E;
+  --navy-700: #173B77;
+  /* Accents */
+  --blue: #2456A6;
+  --red: #C6362C;
+  --saffron: #DD8A20;
+  --green: #1E7F4F;
+  /* Surfaces */
+  --surface-card: #FFFFFF;
+  --surface-inset: #FAF9F5;
+  --border: #E4E1D8;
+  --hairline: #EFECE4;
+  /* Text */
+  --text-body: #3B4658;
+  --text-secondary: #5B6572;
+  --text-muted: #8A8578;
+  --text-faint: #B4AFA2;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-plex-sans), var(--font-noto-devanagari), sans-serif;
+  --font-mono: ui-monospace, Menlo, monospace;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-plex-sans), var(--font-noto-devanagari), "Noto Sans Devanagari", sans-serif;
+}
+
+/* ── Design-system animations ──────────────────────────────────────────────── */
+@keyframes tsPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(198,54,44,.35); }
+  70%  { box-shadow: 0 0 0 16px rgba(198,54,44,0); }
+  100% { box-shadow: 0 0 0 0 rgba(198,54,44,0); }
+}
+@keyframes tsUp {
+  from { transform: translateY(28px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+/* ── Themed scrollbars ─────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #C9CDD6; border-radius: 4px; }
+
+/* ── Floating-panel row hovers ─────────────────────────────────────────────── */
+.ts-row:hover { background: #F6F4EE; }
+.ts-report-card:hover { background: #F6F4EE; border-color: #EFECE4 !important; }
+.ts-net-row:hover { background: #F6F4EE; }
+
+/* ── Responsive (mobile ≤ 640px) ───────────────────────────────────────────── */
+@media (max-width: 640px) {
+  /* Left panel → bottom drawer, map visible behind */
+  .ts-floating-panel {
+    left: 0 !important;
+    right: 0 !important;
+    top: auto !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    max-height: 52vh !important;
+    border-radius: 14px 14px 0 0 !important;
+  }
+  /* Report + post-report sheet → full width (centering is margin-auto; leave
+     `transform` alone so the tsUp slide-up animation still runs on mobile) */
+  .ts-report-sheet {
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-height: 90% !important;
+  }
+  /* SOS cards, severity 2-col and post-report two-up grids stack to one column */
+  .ts-sos-grid,
+  .ts-assess-grid,
+  .ts-twoup {
+    grid-template-columns: 1fr !important;
+  }
+  /* Severity right column loses its left divider when stacked */
+  .ts-assess-grid > div:last-child {
+    border-left: none !important;
+    padding-left: 0 !important;
+    border-top: 1px solid #EFECE4 !important;
+    padding-top: 12px !important;
+  }
+  /* Header nav: tighter, and let mode tabs scroll horizontally if needed */
+  .ts-nav { gap: 2px !important; padding: 2px !important; }
+  .ts-nav > button { padding: 5px 10px !important; }
 }
 
 /* ── Accessibility: keyboard focus ring ────────────────────────────────────── */
@@ -87,4 +162,113 @@ button, a, select, label, [role="button"] {
     margin: 1.5cm;
     size: A4 portrait;
   }
+}
+
+/* ── Login / auth screen (design_handoff_login) ────────────────────────────── */
+/* Split layout: animated navy brand panel + light form panel. All keyframes are
+   lg-prefixed to avoid colliding with the app's existing tsUp/tsPulse. */
+@keyframes lgGrid   { from { background-position: 0 0; }   to { background-position: 0 56px; } }
+@keyframes lgGhost  { from { opacity: 0; transform: translateY(20px); } to { opacity: .06; transform: translateY(0); } }
+@keyframes lgUp     { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes lgUpB    { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes lgRule   { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes lgShield { 0% { transform: scale(.6); opacity: 0; } 60% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
+@keyframes lgShieldRing { 0% { box-shadow: 0 0 0 0 rgba(232,134,43,.45); } 100% { box-shadow: 0 0 0 22px rgba(232,134,43,0); } }
+@keyframes lgFloat  { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes lgCity   { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes lgDraw   { from { stroke-dashoffset: 980; } to { stroke-dashoffset: 0; } }
+@keyframes lgFlow   { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -44; } }
+@keyframes lgBeacon { 0% { r: 5; opacity: .9; } 70% { r: 18; opacity: 0; } 100% { r: 18; opacity: 0; } }
+@keyframes lgTravel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+
+.lg-auth {
+  display: grid;
+  grid-template-columns: minmax(380px, 5fr) minmax(0, 7fr);
+  min-height: 100vh;
+}
+.lg-brand {
+  position: relative;
+  overflow: hidden;
+  max-height: 100vh;
+  background: linear-gradient(160deg, #14243E 0%, #0E1A2F 70%, #0B1526 100%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  padding: 52px 48px 40px;
+}
+.lg-form {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 32px;
+  max-height: 100vh;
+  overflow-y: auto;   /* the form column scrolls on short desktop windows */
+}
+
+/* blueprint grid overlay + ghost numeral */
+.lg-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+  background-size: 56px 56px;
+  animation: lgGrid 6s linear infinite;
+}
+.lg-ghost {
+  position: absolute;
+  right: -16px;
+  bottom: -44px;
+  font-size: 210px;
+  font-weight: 700;
+  line-height: 1;
+  color: #E8862B;
+  opacity: .06;                 /* resting value — held when motion is reduced */
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  animation: lgGhost 2.2s ease both;
+}
+.lg-shield {
+  animation:
+    lgShield .8s .2s cubic-bezier(.34,1.56,.64,1) both,
+    lgShieldRing 2.8s 1.4s ease-out infinite;
+}
+
+/* focus ring on the form inputs (scoped to the auth screen) */
+.lg-auth input:focus {
+  outline: none;
+  border-color: #2456A6 !important;
+  box-shadow: 0 0 0 3px rgba(36,86,166,.15);
+}
+
+/* CTA + guest hover/active (base visuals are inline) */
+.lg-cta { transition: transform .15s, box-shadow .15s; }
+.lg-cta:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 9px 26px rgba(198,54,44,.38); }
+.lg-cta:active:not(:disabled) { transform: translateY(0); }
+.lg-guest { transition: background .15s; }
+.lg-guest:hover { background: rgba(20,36,62,.06); }
+.lg-operator-link { transition: color .15s; }
+.lg-operator-link:hover { color: #5B6572; }
+
+/* Responsive: stack below ~860px — navy collapses to a compact header band. */
+@media (max-width: 860px) {
+  .lg-auth { display: block; height: 100vh; overflow-y: auto; }
+  .lg-brand { max-height: none; padding: 28px 24px 22px; }
+  .lg-form { max-height: none; overflow: visible; padding: 32px 22px 40px; }
+  .lg-brand-visual { display: none; }   /* route + chips hidden on mobile */
+  /* ≥44px hit targets on touch */
+  .lg-form input,
+  .lg-form .lg-cta,
+  .lg-form .lg-guest,
+  .lg-form .lg-seg { min-height: 44px; }
+}
+
+/* Motion: disable the looping (and entrance) animations — content still shows
+   at its resting state because those are set in the base styles, not only in
+   the keyframes. */
+@media (prefers-reduced-motion: reduce) {
+  .lg-auth *,
+  .lg-grid,
+  .lg-shield { animation: none !important; }
 }

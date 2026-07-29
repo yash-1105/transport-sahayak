@@ -78,9 +78,15 @@ TTS_SPEAKER = os.environ.get("SARVAM_TTS_SPEAKER", "shubh")
 TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.1"))
 # Real, documented Bulbul v3 config fields (not fabricated) -- v3 does NOT
 # support pitch/loudness/SSML, so those are deliberately not offered here.
-# 0.7: a modest bump from the SDK's own 0.6 default -- per Sarvam's own
-# parameter semantics, temperature governs expressiveness/naturalness for v3,
-# and per user feedback that the previous setting sounded robotic/flat.
+# temperature governs expressiveness/variability for v3. Lowered 0.7 -> 0.2
+# (2026-07) after "talks in multiple different voices randomly / changes its
+# tone and emotions" reports: at 0.7 each synthesis got noticeably different
+# prosody/energy/emotional colour, which -- with the same shubh speaker -- reads
+# as "different voices". A low temperature makes every utterance sound like the
+# same, consistent operator. The speaker itself was never changing (config sends
+# speaker=shubh on every connection); this was purely per-synthesis expressive
+# variance. Env-tunable (SARVAM_TTS_TEMPERATURE) -- raise a little only if it
+# sounds too flat; the priority now is a constant voice, not expressiveness.
 # min_buffer_size/max_chunk_length control how much text Bulbul buffers
 # before it starts streaming audio back. A previous iteration lowered these
 # (30/90) purely to shave time-to-first-audio-chunk when LATENCY was the
@@ -88,7 +94,7 @@ TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.1"))
 # per-turn latency is no longer the dominant complaint and prosody continuity
 # (fewer, larger synthesis segments = less per-segment "reset", a plausible
 # contributor to a choppy/robotic-sounding cadence) matters more.
-TTS_TEMPERATURE = float(os.environ.get("SARVAM_TTS_TEMPERATURE", "0.7"))
+TTS_TEMPERATURE = float(os.environ.get("SARVAM_TTS_TEMPERATURE", "0.2"))
 TTS_MIN_BUFFER_CHARS = int(os.environ.get("SARVAM_TTS_MIN_BUFFER_CHARS", "50"))
 TTS_MAX_CHUNK_CHARS = int(os.environ.get("SARVAM_TTS_MAX_CHUNK_CHARS", "150"))
 # Optional Saaras v3 VAD tuning for barge-in robustness -- unset by default
@@ -100,6 +106,22 @@ STT_INTERRUPT_MIN_SPEECH_FRAMES = os.environ.get("SARVAM_STT_INTERRUPT_MIN_FRAME
 _STT_RECONNECT_ATTEMPTS = 3
 _STT_KEEPALIVE_IDLE_S = 5.0
 _TTS_PING_INTERVAL_S = 20.0
+# Voice-consistency guard for LONG utterances (the closing briefing): a single
+# long Bulbul synthesis has been observed to drift off the configured `speaker`
+# partway through (the closing reverting to Bulbul's default voice). Multi-turn
+# CONVERSATIONS never show this -- they are many SHORT text/flush cycles on one
+# config'd connection, which proves the per-connection config carries fine
+# across syntheses; the only thing different about the briefing is that it's
+# ONE long synthesis. So speak() splits a long utterance into sentence-level
+# pieces, each its own short text/flush on the SAME connection (so it keeps the
+# identical speaker/pace/temperature config, re-applied on any reconnect), and
+# streams them back-to-back as one continuous audio stream (sentence-boundary
+# gaps read as natural pauses). Conversational replies are already short -> one
+# piece -> unchanged. Env-tunable; keep it comfortably above a normal reply's
+# length so ordinary turns are never chunked.
+_MAX_SYNTH_CHARS = int(os.environ.get("SARVAM_TTS_MAX_SYNTH_CHARS", "180"))
+# Split on sentence enders, including the Devanagari danda (।).
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[।.!?…])\s+")
 # 100ms of PCM16/16kHz silence — sent while the caller's mic is gated (the
 # frontend only transmits during "listening") so Sarvam doesn't idle-close.
 _SILENCE_CHUNK = b"\x00" * (_SAMPLE_RATE_IN // 10 * 2)
@@ -111,6 +133,35 @@ class SarvamCredentialsError(RuntimeError):
 
 class SarvamTTSError(RuntimeError):
     """Raised when Bulbul synthesis fails for one utterance."""
+
+
+def _split_for_synthesis(text: str) -> list:
+    """Split a long utterance into <= _MAX_SYNTH_CHARS sentence-level pieces so
+    no single Bulbul synthesis is long enough to drift off the configured
+    voice. Short text returns [text] (or [] if empty) -- ordinary conversational
+    replies are never chunked. Sentence boundaries are preferred; a single
+    sentence longer than the cap is hard-split so a piece is never oversized."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= _MAX_SYNTH_CHARS:
+        return [text]
+    pieces: list = []
+    cur = ""
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        s = sentence.strip()
+        if not s:
+            continue
+        if cur and len(cur) + 1 + len(s) > _MAX_SYNTH_CHARS:
+            pieces.append(cur)
+            cur = ""
+        cur = f"{cur} {s}".strip() if cur else s
+        while len(cur) > _MAX_SYNTH_CHARS:  # a lone over-long sentence
+            pieces.append(cur[:_MAX_SYNTH_CHARS].strip())
+            cur = cur[_MAX_SYNTH_CHARS:].strip()
+    if cur:
+        pieces.append(cur)
+    return pieces
 
 
 def require_api_key() -> str:
@@ -349,7 +400,32 @@ class BulbulStream:
                     logger.debug("Bulbul ping failed (reconnect on next speak)")
 
     async def speak(self, text: str) -> AsyncIterator[bytes]:
-        """Synthesize one utterance, yielding PCM16/24kHz chunks as they arrive."""
+        """Synthesize one utterance, yielding PCM16/24kHz chunks as they arrive.
+
+        A LONG utterance (the closing briefing) is split into sentence-level
+        pieces (see _split_for_synthesis) and synthesized as several short
+        text/flush cycles on the SAME config'd connection, streamed back-to-back
+        as one continuous audio stream. This keeps the entire utterance on the
+        identical `speaker`/pace/temperature config (a single long synthesis was
+        drifting off it partway) while matching the many-short-syntheses shape
+        that multi-turn conversations already use with a consistent voice. Short
+        utterances are one piece -- unchanged."""
+        if self._closed:
+            raise SarvamTTSError("BulbulStream is closed")
+        pieces = _split_for_synthesis(text)
+        if len(pieces) > 1:
+            logger.info(
+                "Bulbul: splitting a %d-char utterance into %d syntheses (voice consistency)",
+                len(text), len(pieces),
+            )
+        for piece in pieces:
+            async for chunk in self._speak_one(piece):
+                yield chunk
+
+    async def _speak_one(self, text: str) -> AsyncIterator[bytes]:
+        """One Bulbul text/flush synthesis on the current connection (reconnects
+        + re-sends config once if the socket is stale). speak() calls this once
+        per piece so the config (speaker=shubh + all params) always applies."""
         if self._closed:
             raise SarvamTTSError("BulbulStream is closed")
         last_error: Optional[Exception] = None

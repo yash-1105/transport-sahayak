@@ -15,7 +15,7 @@
 | 3 | **No phantom infrastructure.** If a feature needs field equipment that doesn't exist (GPS terminals, in-vehicle radios), don't build it. |
 | 4 | **Sample data must be labelled** — in code (`"sample": true` on every record) AND in the UI (amber banner on all four synthetic layers). |
 | 5 | **Dispatch alert = notification record only.** Who was notified, what was sent, when. No acknowledgement, crew status, or en-route status ever implied. |
-| 6 | **Google Places data is never persisted** beyond place IDs (Google ToS §3.2.4). All place details fetched on demand with `cache: "no-store"`. |
+| 6 | **Google Places is an ingestion source only** (2026-07 DPG refactor, per explicit user decision — supersedes the earlier "never persisted beyond place IDs" rule). Places content is persisted ONLY inside the Aggregator DPG's responder registry, limited to the minimum served fields (place ID, name, coordinates, address, phone, facility type) and stamped `Last Synced At` with a 24h re-sync TTL (Google ToS caching discipline — flag any longer retention). The frontend NEVER calls Google Places directly and never renders a live Places response; open-now status is deliberately never persisted. |
 
 ---
 
@@ -26,7 +26,7 @@
 | Framework | Next.js 16 App Router + TypeScript |
 | Styling | Tailwind CSS v4 |
 | Map | `@vis.gl/react-google-maps` + Google Maps JS API (`ssr: false` dynamic import via `MapLoader.tsx`) |
-| POI data | Google Places API (New) — live hospitals, police, mechanics, pharmacies, fuel |
+| POI / responder data | **Aggregator DPG** (responder domain of the local Signals instance) — sole source of ALL responder/service entities (curated + synthetic + Google-synced). Google Places API (New) feeds it via the sync pipeline only (`src/lib/aggregator/googleSync.ts`) |
 | Routing / drive times | Google Routes API (New) — `computeRouteMatrix` + `computeRoutes`, `TRAFFIC_AWARE` |
 | Reverse geocoding | Nominatim / OpenStreetMap (public endpoint, no key needed) |
 | Voice input | Browser Web Speech API — `en-IN`, `hi-IN`, `as-IN` locales |
@@ -146,6 +146,21 @@ Real reported bug: a Hindi caller who said "मेरी कार किसी 
   - What this does **not** do: rewrite Gemini's actual word choice or semantic content — that remains entirely the reasoning model's job, informed by the prompt above. Nothing here can be verified by ear (no one in this loop can listen to the output); confidence rests on Sarvam's own documented claim that punctuation drives its prosody inference, not on a subjective "sounds more human" check.
 - **Pronunciation**: raw digit strings and mixed-script codes read badly through TTS. The opening line's "1033" was being read as a cardinal number ("one thousand thirty-three") because it was left as the literal digits `1033` — fixed by hardcoding `_HINDI_OPENING_LINE` (a Hindi-only constant in `dispatcher_hindi.py`, deliberately NOT importing `dispatcher_live.py`'s shared `_OPENING_LINE["hi-IN"]`, to keep English's copy completely untouched) with `1033` spelled digit-by-digit as "एक शून्य तीन तीन" — how phone/helpline numbers are actually read aloud in any language. The system prompt also now tells the model to phonetically spell out any other numeric/mixed-script code it needs to say (e.g. a highway route number like "NH-27") rather than embedding raw Latin text mid-Hindi-sentence, since a Hindi TTS engine handles code-switched text unreliably. If pronunciation issues persist, get the *exact* mispronounced word/phrase from the user before guessing further — "a few words wrong" without examples is otherwise unfalsifiable.
 
+## Signals DPG mirror (`signals/` + `/api/signals/*`) — publish-only, never a dependency
+
+The app mirrors its records into a locally running **Signals DPG** instance
+(the `signals-dpg` TypeScript repo — Fastify, port 2742) on the `road_safety`
+network, and renders that instance's aggregator dashboard in the map's
+**Network** tab. Full architecture + bootstrap runbook: `signals/README.md`.
+Rules that must never be violated when touching this integration:
+
+- **Publish/mirror only — the app must stay byte-identical in behavior with Signals down or unconfigured.** All publishing goes through `src/lib/signalsPublisher.ts` (fire-and-forget, every chain ends `.catch()`, nothing awaited by UI code) and the `/api/signals/*` route handlers (always HTTP 200 with a `source` discriminator: `signals` / `no_key` / `unavailable` / `no_registry`). No existing feature reads from Signals — only the Network tab does, with honest degraded cards.
+- **`signals/road_safety.network.json` is the schema source of truth** — Signals validates it at boot (boot failure = invalid file). The instance runs `ALLOW_EXTRA_SCHEMA_DATA=false` and the schemas are `additionalProperties:false`, so the mappers in `src/lib/signalsClient.ts` must emit exactly the schema's fields and **omit** null-valued optionals (a `null` fails type checks; absence doesn't).
+- **Dispatch mirrors as an action stuck at status `created` — by design, never "advance" it** (hard rule 5). Signals' `update-status` may only be called by the *target* item's owner; a responder-side status change would fabricate an acknowledgement. `metric_categories` maps `created` → the `create` bucket, so the dashboard reads "Notifications Sent" honestly.
+- **Two-DPG separation (2026-07 refactor; identity tiers corrected to upstream semantics 2026-07-21):** the **responder registry** (responder domain) holds EVERY responder/service entity — curated hospitals/police, synthetic ambulance/fire/towing posts, and Google-Places-synced POIs. Upstream-accurate description: entities are **stored in the Signals instance** (the stack's only system of record) and **attributed to the Aggregator org** via their owner's `onboarded_by_org_id` — upstream's Aggregator DPG is a read-only coordinator over Signals, NOT an entity store, so never describe this as "data stored in the Aggregator DPG". Registry **writes** (bootstrap + Google sync, `SIGNALS_REGISTRY_API_KEY`) run under a dedicated `network_service`-typed org (`transport-sahayak-ingest`); the aggregator org itself only reads (dashboard). The POC reads responders EXCLUSIVELY from `GET /api/aggregator/responders` (mapped server-side to the app's existing TS interfaces in `src/lib/aggregator/client.ts`); `data/*.json` responder files are ingestion fixtures for `scripts/bootstrap-aggregator.mjs` ONLY and must never be imported by `src/`. Google ingestion: `src/lib/aggregator/googleSync.ts` (corridor fan-out, 24h TTL, auto-triggered when stale by the responders route; manual `POST /api/aggregator/sync`). **Signals (control_room domain)** owns only the incident lifecycle; dispatch actions target registry responder items, resolved live by Facility ID in `publish-dispatch` (5-min cached map — no registry file). Every matchable hospital exists in the registry by construction, since matching reads its candidates from it. Long-term, real facilities would own their items as participants; the ingestion service is the POC stand-in.
+- **The event log (`src/store/eventLog.ts`) stays pure** — publish hooks live at the call sites (`ReportPanel.proceedWithIncident`/`runAssessment`, `MatchingPanel.DispatchSection`), not inside store actions. Per-incident publish status lives in `src/store/signalsSyncStore.ts` (drives the "Signals ✓ / unavailable" badge — "✓" only after Signals acknowledged the create).
+- Env: `SIGNALS_API_URL` / `SIGNALS_API_KEY` / `SIGNALS_AGG_ORG_ID` / `SIGNALS_REGISTRY_API_KEY` (the ingestion-service key, `network_service` org — also required for responder serving) — all server-side only (never `NEXT_PUBLIC_`). Without keys the Signals mirror is off AND map/matching layers are empty (`source:"no_key"`); a brief Aggregator outage serves the last-good in-memory payload (`source:"aggregator_cached"`).
+
 ## API Key Architecture (two keys, never mix them)
 
 | Key | Env var | Reaches browser? | Restrictions |
@@ -172,7 +187,8 @@ src/
     api/
       assess/route.ts          — POST: Anthropic severity assessment
       severity/route.ts        — (legacy alias for assess)
-      places/nearby/route.ts   — GET: Google Places Nearby Search (New API)
+      aggregator/responders/route.ts — GET: ALL responder/service data (from the Aggregator DPG)
+      aggregator/sync/route.ts       — POST: Google Places → Aggregator ingestion run
       routes/matrix/route.ts   — POST: Routes API computeRouteMatrix (NDJSON)
       routes/single/route.ts   — POST: Routes API computeRoutes + polyline decode
 
@@ -188,7 +204,7 @@ src/
 
   hooks/
     useI18n.ts                 — useT() hook, reads from useLocaleStore
-    usePlaces.ts               — fetches all Google Places layers, LAYER_TO_PLACE_TYPE map
+    useResponders.ts           — fetches ALL responder layers from the Aggregator DPG, LAYER_TO_PLACE_TYPE map
     useVoiceInput.ts           — Web Speech API hook
 
   i18n/
@@ -294,7 +310,7 @@ Three modes — all produce the same `AccidentReport` object:
 1. Duplicate check (`dedup.ts`) — 500m / 10-min window, user can proceed or skip
 2. Severity assessment → POST `/api/assess` → `claude-sonnet-4-6`; falls back to `heuristicAssess()` on 401/network error (shown as amber "Heuristic fallback" card — this is by design)
 3. Hospital + police matching (`MatchingPanel.tsx`) — 3-phase async:
-   - Phase 1: fetch `/api/places/nearby?type=hospital` (Google Places)
+   - Phase 1: fetch `/api/aggregator/responders?for_matching=1` (Aggregator DPG — Google-synced hospital candidates, specialty clinics filtered server-side)
    - Phase 2: POST `/api/routes/matrix` — one batch Route Matrix call for nearest 10 hospitals (TRAFFIC_AWARE)
    - Phase 3: parallel `/api/routes/single` for #1 hospital + nearest police (polyline + distance)
 4. Dispatch alert preview → confirm → record logged
@@ -304,7 +320,7 @@ Three modes — all produce the same `AccidentReport` object:
 
 ## Hospital Matching Logic (`candidates.ts` + `MatchingPanel.tsx`)
 
-1. **Candidate set:** curated hospitals (`data/hospitals.json`) + Google Places hospitals near incident (radius 30 km)
+1. **Candidate set:** curated + Google-synced hospitals, both served by the Aggregator DPG (`/api/aggregator/responders?for_matching=1`; `data/hospitals.json` is an ingestion fixture only)
 2. **Dedup:** same facility if within 500m OR name token overlap (≥2 matching words >3 chars, excluding "hospital", "medical", "centre", "center", "district")
 3. **Curated** keeps `traumaLevel`, `specialty[]`, `capabilitySource: "curated"`
 4. **Google-only** gets `traumaLevel: null`, `capabilitySource: "unverified"`, shows "⚠ Unverified" pill in UI
@@ -427,6 +443,24 @@ ENGLISH_TTS_TIMEOUT_S=10
 # client library) via this same variable, not a new one.
 GOOGLE_SERVICE_ACCOUNT_JSON_BASE64=   # or GOOGLE_SERVICE_ACCOUNT_JSON, or a local file for dev — see google_credentials.py
 ```
+
+---
+
+## Citizen + Volunteer Accounts (Phase 1)
+
+Email/password accounts with two user-owned datasets, added 2026-07. **Client-only auth** — the app is an `ssr:false` SPA, so there is NO `@supabase/ssr`, no middleware, no server auth routes. Authenticated users read/write their **own** rows directly from the browser, scoped by RLS.
+
+- **Two Supabase clients, kept separate on purpose:** `src/lib/supabase.ts` (untouched) is the **server-side** client the existing pothole/accident route handlers use. `src/lib/supabaseBrowser.ts` (new) is the **browser** client for auth + own-row reads/writes (`persistSession` + `autoRefreshToken`, `detectSessionInUrl:false`). Both read the same `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` — **no new secrets, no service-role key.**
+- **Tables (RLS: owner-only select/insert/update via `auth.uid()`):** `public.profiles` — citizen safety profile, 1:1 with `auth.users`; `public.suraksha_mitra` — volunteer ("Suraksha Mitra") registration, 1:1. Migration: `supabase/migrations/20260727120000_citizen_volunteer_accounts.sql` (applied to the `transport-sahayak` project via `supabase db push`). Types in `src/lib/database.types.ts` are **generated** (`supabase gen types typescript --linked --schema public`) plus a hand-maintained convenience-alias block at the bottom (`ProfileRow`/`SurakshaMitraRow`/…) derived from the generated `Database` type.
+- **These are REAL user records — never tagged `sample: true`** (that label is for the synthetic seed layers only). The `data/suraksha-mitras.json` **synthetic patrol-post layer is a separate, unrelated dataset** that merely shares the name — keep them distinct. Medical + emergency-contact PII stays behind auth and is **never shown on the public map**. Nothing here fakes "contact notified" or "volunteer activated" — the volunteer form is **registration (a record) only**.
+- **Prototype auth: NO OTP / NO email verification.** `signUp` returns a live session immediately and seeds a `profiles` shell (upsert). **Email confirmation is DISABLED** on the hosted project (verified via the Management API: `mailer_autoconfirm: true`; mirrored in `supabase/config.toml`). If it were ever re-enabled, `signUp` returns no session and the form honestly says "check your inbox" rather than pretending to sign in.
+- **Presentation — full-screen gate (2026-07):** the app is fronted by `src/components/auth/AuthGate.tsx`, wrapped around MapView in `MapLoader.tsx` (`<AuthGate><MapView/></AuthGate>`), so the map + responder/route fetches only mount **past** the gate. Gate logic (`useAuthStore`): `!configured` → render children (NO gate — app works exactly as before without Supabase keys); `!ready` → branded navy splash (prevents a signed-in user flashing the gate — this short-circuits **before** the guest check, so it's SSR/hydration-safe); `user || isGuest` → the app; else → the landing/auth screen (brand hero + `AuthForm` + a quieter "Continue as guest" bypass).
+- **Guest mode:** `isGuest` + `continueAsGuest()` in the store, persisted in `sessionStorage` (`ts_guest`) so a mid-emergency refresh doesn't re-gate. Auto-cleared whenever a real session appears (in the `getSession`/`onAuthStateChange` hydration) and in `signOut()`. **Guests can report incidents** — incident/pothole/accident writes go through the anon `/api/*` routes (server-side `src/lib/supabase.ts`), never the authed browser client, so reporting is deliberately NOT tied to having an account.
+- **Post-signup onboarding:** `needsOnboarding` + `beginOnboarding()`/`finishOnboarding()`. Every `onSignedUp` (the gate's `AuthForm` AND the header `AuthModal`) calls `beginOnboarding()`; returning **sign-in never triggers it**. `src/components/auth/OnboardingFlow.tsx` (mounted by AuthGate, real users only) orchestrates the EXISTING sheets as-is: welcome → `SafetyProfileSheet` (Skip available) → "Become a Suraksha Mitra?" offer → `SurakshaMitraSheet` or Maybe later → `finishOnboarding()`.
+- **Shared form:** the email/password + signup/signin-tabs logic lives ONCE in `src/components/auth/AuthForm.tsx`; both `AuthModal` (thin `Sheet` wrapper, header) and `AuthGate` (full-screen) render it — do not fork the auth flow.
+- **UI (all mirror ReportPanel's sheet/field styling via `src/components/auth/ui.tsx`):** `AuthGate` (full-screen gate + splash), `AuthForm` (shared form), `AuthModal` (header modal), `OnboardingFlow`, `AuthControl` (header, next to EN/हिं toggle — guest → "Sign in" pill that upgrades and re-runs onboarding; signed-in → user chip + dropdown; sign-out clears guest and returns to the gate), `SafetyProfileSheet`, `SurakshaMitraSheet`. Reopening a form prefills saved values.
+- **Operator ("admin") role — Network tab is operator-only (2026-07):** `isOperator` is **derived** (never stored/settable) from the signed-in Supabase user's email being in `OPERATOR_EMAILS` (`NEXT_PUBLIC_OPERATOR_EMAILS`, default `yashsingh1105@gmail.com`) — see `isOperatorEmail()` / `useIsOperator()` in `authStore.ts`. A signup can never grant it; the operator's password lives only in Supabase. The **Network tab** (Signals/Aggregator dispatch dashboard) shows ONLY for operators: the nav segment is hidden for citizens/guests AND the render is guarded (`tab === "NETWORK" && isOperator`), with a `useEffect` that bounces a non-operator off NETWORK to SERVICES. The gate has a quiet bottom-right **"Operator access"** entry → `OperatorSignIn.tsx` (compact, navy-stripped, no signup tab); it validates the email against the allowlist before sign-in (a citizen's creds never create a session there) and re-checks after. In the header, an operator gets an "Operator" shield chip with **Sign out only** (no safety-profile / Suraksha Mitra items — staff, not a citizen). Visibility-only change: Network data already comes via server-side Signals keys, so there's nothing to lock at the data layer. Citizen + guest flows are unchanged.
+- **Out of scope for Phase 1 (later):** facility onboarding, roster map layers, SOS wiring, volunteer base lat/lng map-pin (columns exist but are left blank).
 
 ---
 

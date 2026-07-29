@@ -50,6 +50,10 @@ export interface UseVoiceDispatcherCallbacks {
   onSubType: (subType: string, category: string) => void;
   onLocationCaptured: (loc: GeoPoint, label: string) => void;
   onSubmitReady: (payload: DispatcherSubmitPayload) => void;
+  /** A manually-set incident location (map pin), or null if none is set. When
+   * present it is used for the dispatcher's location instead of device GPS, so
+   * a user who dropped a pin before starting isn't overridden by geolocation. */
+  getManualLocation?: () => { lat: number; lng: number; label: string } | null;
 }
 
 /** One responder entry for the post-submission voice briefing — the SAME
@@ -83,6 +87,41 @@ export interface UseVoiceDispatcher {
    * displaying so the agent can announce them and close the call. No-op if
    * the call already ended. */
   sendDispatchBriefing: (services: DispatchBriefingServices) => void;
+  /** Link this call's captured metrics to the committed INC-… id. Called by
+   * ReportPanel once it creates the incident in the dispatcher submit path. */
+  attachIncidentId: (id: string) => void;
+}
+
+// ── Post-Call Analytics capture (client-side) ─────────────────────────────────
+// Accumulated across the call lifecycle from the WS events the hook already
+// receives. HONESTY (Hard Rules): the time-to-dispatch clock stops at the
+// `submitted` event — nothing here ever times the post-submit briefing / SOPs /
+// ETAs. POSTed fire-and-forget to /api/call-metrics on call end (every call,
+// any caller; reads are operator-gated in the UI).
+interface CallMetricsState {
+  posted: boolean;
+  incidentId: string | null;
+  locale: VoiceLocale;
+  startedAt: number | null; // ms epoch — start() pressed
+  readyAt: number | null; // ms epoch — `ready` (call connected = clock start)
+  dispatchedAt: number | null; // ms epoch — `submitted` (info collection done)
+  callerTurns: number;
+  agentTurns: number;
+  questionsAsked: number; // agent turns DURING info collection (before dispatch)
+  productiveTurns: number; // agent turns whose caller exchange yielded a form_update
+  fields: { field: string; at_ms: number }[];
+  transcript: { role: string; at_ms: number; text: string }[];
+  reconnects: number;
+  pendingProductive: boolean; // a form_update landed since the last turn_complete
+}
+
+function freshMetrics(locale: VoiceLocale): CallMetricsState {
+  return {
+    posted: false, incidentId: null, locale,
+    startedAt: Date.now(), readyAt: null, dispatchedAt: null,
+    callerTurns: 0, agentTurns: 0, questionsAsked: 0, productiveTurns: 0,
+    fields: [], transcript: [], reconnects: 0, pendingProductive: false,
+  };
 }
 
 const ERROR_MSGS: Record<string, string> = {
@@ -179,6 +218,61 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
   const playbackCtxRef = useRef<AudioContext | null>(null);
   const nextStartTimeRef = useRef(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+
+  // Post-Call Analytics accumulator (see CallMetricsState). Null until start().
+  const metricsRef = useRef<CallMetricsState | null>(null);
+
+  // Relative timeline (ms) for the per-turn drill-down: measured from call
+  // connect (`ready`), falling back to start().
+  const atMs = useCallback((): number => {
+    const m = metricsRef.current;
+    if (!m) return 0;
+    return Date.now() - (m.readyAt ?? m.startedAt ?? Date.now());
+  }, []);
+
+  // Finalize + POST the call's metrics exactly once, on the first end signal
+  // (call_complete = dispatched; stop/unmount = abandoned/error). Only calls
+  // that actually CONNECTED (readyAt set) are recorded — a call that never
+  // connected is an infra failure, not a dispatcher-performance data point.
+  const finalizeMetrics = useCallback((forcedOutcome?: "dispatched" | "abandoned" | "error") => {
+    const m = metricsRef.current;
+    if (!m || m.posted || m.readyAt == null) return;
+    m.posted = true;
+    const endedAt = Date.now();
+    const outcome =
+      forcedOutcome ?? (m.dispatchedAt ? "dispatched" : statusRef.current === "error" ? "error" : "abandoned");
+    const body = {
+      incident_id: m.incidentId,
+      locale: m.locale,
+      outcome,
+      started_at: m.startedAt ? new Date(m.startedAt).toISOString() : null,
+      ready_at: m.readyAt ? new Date(m.readyAt).toISOString() : null,
+      dispatched_at: m.dispatchedAt ? new Date(m.dispatchedAt).toISOString() : null,
+      ended_at: new Date(endedAt).toISOString(),
+      // CORE metric — clock stops at `submitted`, never times the briefing.
+      time_to_dispatch_ms: m.dispatchedAt && m.readyAt ? m.dispatchedAt - m.readyAt : null,
+      call_duration_ms: m.startedAt ? endedAt - m.startedAt : null,
+      caller_turns: m.callerTurns,
+      agent_turns: m.agentTurns,
+      total_turns: m.callerTurns + m.agentTurns,
+      questions_asked: m.questionsAsked,
+      productive_turns: m.productiveTurns,
+      fields_collected: m.fields,
+      reconnects: m.reconnects,
+      transcript: m.transcript,
+    };
+    // Fire-and-forget — analytics must never affect the call UX.
+    void fetch("/api/call-metrics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      keepalive: true, // let it complete even if the page is unloading
+    }).catch(() => { /* best-effort */ });
+  }, []);
+
+  const attachIncidentId = useCallback((id: string) => {
+    if (metricsRef.current) metricsRef.current.incidentId = id;
+  }, []);
 
   const callbacksRef = useRef(callbacks);
   callbacksRef.current = callbacks;
@@ -302,9 +396,12 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
         /* socket already going away */
       }
     }
+    // Metrics: derive outcome (dispatched if `submitted` fired, else abandoned /
+    // error). Idempotent — a no-op if call_complete already finalized.
+    finalizeMetrics();
     teardown();
     setStatus("ended");
-  }, [teardown]);
+  }, [teardown, finalizeMetrics]);
 
   const handleServerEvent = useCallback(
     (event: ServerEvent, isStale: () => boolean) => {
@@ -322,6 +419,10 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           // until a real "status":"listening" arrives, which only happens
           // once the greeting's turn has actually completed.
           reconnectAttemptRef.current = 0;
+          // Metrics: call connected — this is the time-to-dispatch clock start.
+          if (metricsRef.current && metricsRef.current.readyAt == null) {
+            metricsRef.current.readyAt = Date.now();
+          }
           setStatus("connecting");
           break;
         case "status": {
@@ -376,6 +477,9 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           // never clipped.
           const remainingS = remainingPlaybackSeconds();
           const wasBriefing = statusRef.current === "briefing";
+          // Metrics: the full call is over and it dispatched. Finalize now
+          // (ended_at = now); the drain setTimeout below only handles audio.
+          finalizeMetrics("dispatched");
           console.info(`[dispatcher] call_complete received — draining ${remainingS.toFixed(1)}s of queued audio, then ending`);
           setTimeout(() => {
             if (wasBriefing) {
@@ -401,6 +505,12 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           }
           break;
         case "form_update": {
+          // Metrics: a new field was collected → this caller exchange advanced
+          // data collection (productive). Record the field + its timeline mark.
+          if (metricsRef.current && event.field) {
+            metricsRef.current.fields.push({ field: event.field, at_ms: atMs() });
+            metricsRef.current.pendingProductive = true;
+          }
           if (event.field === "incidentType") {
             const v = event.value as { subType?: string; category?: string } | undefined;
             if (v?.subType && v?.category) cb.onSubType(v.subType, v.category);
@@ -419,6 +529,19 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
         case "request_location": {
           const requestId = event.requestId;
           if (!requestId) break;
+          // Prefer a MANUALLY-set location (map pin) over device GPS. If the
+          // user dropped a pin before starting, use it and never call
+          // geolocation (which would override their choice with current GPS).
+          const manual = cb.getManualLocation?.();
+          if (manual) {
+            if (metricsRef.current) {
+              metricsRef.current.fields.push({ field: "location", at_ms: atMs() });
+              metricsRef.current.pendingProductive = true;
+            }
+            cb.onLocationCaptured({ lat: manual.lat, lng: manual.lng }, manual.label);
+            wsRef.current?.send(JSON.stringify({ type: "location_result", requestId, lat: manual.lat, lng: manual.lng, label: manual.label }));
+            break;
+          }
           if (!navigator.geolocation) {
             wsRef.current?.send(JSON.stringify({ type: "location_error", requestId, message: "Geolocation not supported" }));
             break;
@@ -435,6 +558,11 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
                   label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
                 }
                 if (isStale()) return;
+                // Metrics: location resolved counts as a collected field.
+                if (metricsRef.current) {
+                  metricsRef.current.fields.push({ field: "location", at_ms: atMs() });
+                  metricsRef.current.pendingProductive = true;
+                }
                 cb.onLocationCaptured({ lat, lng }, label);
                 wsRef.current?.send(JSON.stringify({ type: "location_result", requestId, lat, lng, label }));
               })();
@@ -453,6 +581,11 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           // submittedRef only marks that a socket close from here on is a
           // normal call end, never a reconnectable drop (see ws.onclose).
           submittedRef.current = true;
+          // Metrics: info collection is complete — STOP the time-to-dispatch
+          // clock here. Nothing after this (briefing/SOPs/ETAs) is ever timed.
+          if (metricsRef.current && metricsRef.current.dispatchedAt == null) {
+            metricsRef.current.dispatchedAt = Date.now();
+          }
           if (event.incident) cb.onSubmitReady(event.incident);
           break;
         case "error":
@@ -460,9 +593,35 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           setError(event.message ?? "Voice dispatcher error.");
           setStatus("error");
           break;
-        case "transcript":
-          // Internal only — never rendered, per spec (no STT UI in this tab).
+        case "transcript": {
+          // Internal only — never RENDERED in this tab (no STT UI). Captured for
+          // Post-Call Analytics: attribute caller vs agent turns + keep the text
+          // for the operator-only drill-down transcript.
+          const m = metricsRef.current;
+          if (m && typeof event.text === "string") {
+            const role = event.role === "user" || event.role === "caller" ? "caller" : "agent";
+            if (role === "caller") m.callerTurns += 1;
+            m.transcript.push({ role, at_ms: atMs(), text: event.text });
+          }
           break;
+        }
+        case "turn_complete": {
+          // Metrics: one agent turn just finished. If the caller exchange it
+          // belongs to produced a new form_update (pendingProductive), the turn
+          // was productive (advanced collection); otherwise it was a re-ask /
+          // clarification. questions_asked counts agent turns DURING info
+          // collection (before dispatch).
+          const m = metricsRef.current;
+          if (m) {
+            m.agentTurns += 1;
+            if (m.dispatchedAt == null) m.questionsAsked += 1;
+            if (m.pendingProductive) {
+              m.productiveTurns += 1;
+              m.pendingProductive = false;
+            }
+          }
+          break;
+        }
         case "tts_text":
           // Hindi/Sarvam path only: speech synthesis failed server-side, so
           // the agent's reply arrives as text to display instead of audio.
@@ -472,7 +631,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           break;
       }
     },
-    [flushPlayback, stop]
+    [flushPlayback, stop, finalizeMetrics, atMs]
   );
 
   const startCapture = useCallback(
@@ -561,6 +720,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
       }
 
       setStatus(isReconnect ? "reconnecting" : "connecting");
+      if (isReconnect && metricsRef.current) metricsRef.current.reconnects += 1;
       const ws = new WebSocket(wsUrl);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -687,6 +847,7 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
       submittedRef.current = false;
       reconnectAttemptRef.current = 0;
       localeRef.current = locale;
+      metricsRef.current = freshMetrics(locale); // start a fresh metrics record
       const sessionId = ++sessionIdRef.current;
       setError(null);
       setAgentText(null);
@@ -695,7 +856,9 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
     [supported, connect]
   );
 
-  useEffect(() => () => teardown(), [teardown]);
+  // On unmount (operator navigates away / panel closes mid-call): flush metrics
+  // for an abandoned call, then tear down.
+  useEffect(() => () => { finalizeMetrics(); teardown(); }, [teardown, finalizeMetrics]);
 
-  return { supported, status, error, offline, agentText, start, stop, sendDispatchBriefing };
+  return { supported, status, error, offline, agentText, start, stop, sendDispatchBriefing, attachIncidentId };
 }

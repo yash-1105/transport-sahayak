@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import type {
   AccidentReport,
   AssessmentResult,
@@ -19,6 +19,7 @@ import type {
   RouteEstimatedPayload,
   EventLogEntry,
   GooglePlace,
+  DispatchRecord,
 } from "@/lib/types";
 import {
   buildCandidates,
@@ -40,6 +41,12 @@ import {
 import { generateHospitalAlert, generatePoliceAlert } from "@/lib/dispatch";
 import { useRoutingStore, type SimulatedVehicleKind } from "@/store/routingStore";
 import { useEventLog } from "@/store/eventLog";
+import { useSignalsSync } from "@/store/signalsSyncStore";
+import { publishDispatch } from "@/lib/signalsPublisher";
+import { C, RADIUS } from "@/lib/design";
+
+// Caps section-label style shared across the post-report cards.
+const CAPS: React.CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: ".09em", textTransform: "uppercase", color: C.muted };
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -65,151 +72,79 @@ function toIST(iso: string): string {
 
 // ── Subcomponents ─────────────────────────────────────────────────────────────
 
-function RankBadge({ n }: { n: 1 | 2 | 3 }) {
-  const cls =
-    n === 1 ? "bg-[#0f2044] text-white" :
-    n === 2 ? "bg-gray-200 text-gray-700" :
-              "bg-gray-100 text-gray-500";
-  return (
-    <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-[11px] font-black flex-shrink-0 ${cls}`}>
-      {n}
-    </span>
-  );
-}
-
-function CapabilityPill({ h }: { h: HospitalCandidate }) {
-  if (h.capabilitySource === "unverified") {
-    return (
-      <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold flex-shrink-0">
-        ⚠ Unverified
-      </span>
-    );
-  }
-  if (!h.traumaCapable) {
-    return (
-      <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 font-semibold flex-shrink-0">
-        No trauma
-      </span>
-    );
-  }
-  const cls =
-    h.traumaLevel === 1 ? "bg-red-100 text-red-800" :
-    h.traumaLevel === 2 ? "bg-orange-100 text-orange-800" :
-                          "bg-yellow-100 text-yellow-800";
-  return (
-    <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold flex-shrink-0 ${cls}`}>
-      Level {h.traumaLevel} Trauma
-    </span>
-  );
-}
-
-function TrafficDistTag({ roadKm, roadMin, straightKm }: {
-  roadKm: number | null;
-  roadMin: number | null;
-  straightKm: number;
-}) {
-  if (roadKm !== null && roadMin !== null) {
-    return (
-      <span className="text-xs text-gray-700 font-medium">
-        {roadKm.toFixed(1)} km &middot;{" "}
-        <span className="text-green-800 font-semibold">{Math.round(roadMin)} min</span>
-        <span className="text-gray-400 font-normal"> current traffic</span>
-      </span>
-    );
-  }
-  return (
-    <span className="text-xs text-gray-400 italic">
-      Traffic data unavailable
-    </span>
-  );
-}
-
-function BedsField() {
-  return (
-    <div className="flex items-center gap-1.5 text-[11px] text-gray-400 italic">
-      <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 7h6l2 3h10v7H3V7z" />
-      </svg>
-      Beds available: Awaiting hospital capacity feed
-    </div>
-  );
-}
-
 function HospitalCard({ ranked, isTop }: { ranked: RankedHospital; isTop: boolean }) {
   const h = ranked.hospital;
+  const hasTraffic = ranked.roadDistanceKm !== null && ranked.roadDurationMin !== null;
   return (
-    <div className={`rounded-xl border p-3 flex flex-col gap-2 ${isTop ? "border-[#0f2044] bg-blue-50/40" : "border-gray-200 bg-white"}`}>
-      <div className="flex items-start gap-2">
-        <RankBadge n={ranked.rank} />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-gray-900 leading-tight">{h.name}</p>
-          <p className="text-[11px] text-gray-400">
-            {h.type}{h.district ? ` · ${h.district}` : ""}
-            {h.capabilitySource === "unverified" && (
-              <span className="text-amber-600 ml-1">· Google Places</span>
-            )}
-          </p>
-        </div>
-        <CapabilityPill h={h} />
-      </div>
-
-      <div className="flex items-center gap-1.5 pl-8">
-        <svg className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <TrafficDistTag
-          roadKm={ranked.roadDistanceKm}
-          roadMin={ranked.roadDurationMin}
-          straightKm={ranked.straightLineKm}
-        />
-      </div>
-
-      {h.capabilitySource === "curated" && (
-        <div className="pl-8"><BedsField /></div>
-      )}
-
-      {ranked.specialtyMatches.length > 0 && (
-        <div className="pl-8 flex flex-wrap gap-1">
-          {ranked.specialtyMatches.map((s) => (
-            <span key={s} className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 font-medium">
-              {s}
+    <div
+      className="flex items-center"
+      style={{
+        gap: 12,
+        padding: "12px 14px",
+        borderRadius: 12,
+        border: isTop ? `1.5px solid ${C.blue}` : `1px solid ${C.border}`,
+        background: isTop ? "#F7FAFE" : "#fff",
+      }}
+    >
+      <span
+        className="inline-flex items-center justify-center flex-none"
+        style={{
+          width: 24, height: 24, borderRadius: "50%",
+          background: isTop ? C.navy800 : C.page,
+          color: isTop ? "#fff" : C.secondary,
+          fontSize: 12, fontWeight: 700,
+        }}
+      >
+        {ranked.rank}
+      </span>
+      <span className="flex-1" style={{ minWidth: 0 }}>
+        <span className="flex items-center" style={{ gap: 8 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{h.name}</span>
+          {h.capabilitySource === "unverified" ? (
+            <span style={{ fontSize: 10.5, fontWeight: 600, background: C.saffronSoftBg, border: `1px solid ${C.saffronSoftBorder}`, color: C.saffronSoftText, borderRadius: RADIUS.pill, padding: "2px 8px", flex: "none" }}>
+              Unverified
             </span>
-          ))}
-        </div>
-      )}
-
-      <div className="pl-8 border-t border-gray-100 pt-2">
-        <p className="text-xs text-gray-600 leading-relaxed">{ranked.reasoning}</p>
-      </div>
+          ) : h.traumaCapable ? (
+            <span style={{ fontSize: 10.5, fontWeight: 600, background: C.redSoftBg, border: `1px solid ${C.redSoftBorder}`, color: C.redSoftText, borderRadius: RADIUS.pill, padding: "2px 8px", flex: "none" }}>
+              Level {h.traumaLevel} Trauma
+            </span>
+          ) : null}
+        </span>
+        <span style={{ display: "block", fontSize: 12, color: C.muted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {ranked.reasoning}
+        </span>
+      </span>
+      <span className="text-right flex-none">
+        {hasTraffic ? (
+          <>
+            <span style={{ display: "block", fontSize: 14, fontWeight: 700, color: C.blue }}>{Math.round(ranked.roadDurationMin!)} min</span>
+            <span style={{ display: "block", fontSize: 11.5, color: C.muted }}>{ranked.roadDistanceKm!.toFixed(1)} km · current traffic</span>
+          </>
+        ) : (
+          <span style={{ fontSize: 11.5, color: C.faint, fontStyle: "italic" }}>Traffic data unavailable</span>
+        )}
+      </span>
     </div>
   );
 }
 
 function PoliceCard({ ps }: { ps: NearestPolice }) {
+  const hasTraffic = ps.roadDistanceKm !== null && ps.roadDurationMin !== null;
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-1.5">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-bold text-gray-900">{ps.station.name}</p>
-          <p className="text-[11px] text-gray-400">{ps.station.district} · {ps.station.circle} circle</p>
-        </div>
-        <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#0f2044]/10 text-[#0f2044] font-semibold flex-shrink-0">
-          Nearest PS
-        </span>
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: "13px 15px" }}>
+      <div style={{ ...CAPS, fontSize: 10.5, letterSpacing: ".08em" }}>Nearest police station</div>
+      <div style={{ fontSize: 13.5, fontWeight: 600, marginTop: 4, color: C.ink }}>{ps.station.name}</div>
+      <div style={{ fontSize: 12, color: C.muted, marginTop: 1 }}>{ps.station.district} · {ps.station.circle} circle</div>
+      <div style={{ fontSize: 12.5, marginTop: 6, color: C.body }}>
+        {hasTraffic ? (
+          <><b style={{ color: C.blue }}>{Math.round(ps.roadDurationMin!)} min</b> · {ps.roadDistanceKm!.toFixed(1)} km</>
+        ) : (
+          <span style={{ color: C.faint, fontStyle: "italic" }}>Traffic data unavailable</span>
+        )}
+        {ps.station.phone && (
+          <> · <a href={`tel:${ps.station.phone}`} style={{ color: C.blue }}>{ps.station.phone}</a></>
+        )}
       </div>
-      <div className="flex items-center gap-1.5">
-        <svg className="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <TrafficDistTag
-          roadKm={ps.roadDistanceKm}
-          roadMin={ps.roadDurationMin}
-          straightKm={ps.straightLineKm}
-        />
-      </div>
-      {ps.station.phone && (
-        <p className="text-[11px] text-gray-400">Phone: {ps.station.phone}</p>
-      )}
     </div>
   );
 }
@@ -289,62 +224,69 @@ function EtaCountdownCard({
   const remainingMin = Math.max(0, etaMinutes - elapsedMin);
   const overdue = elapsedMin >= etaMinutes;
   const progressPct = etaMinutes > 0 ? Math.min(100, (elapsedMin / etaMinutes) * 100) : 100;
-  const barColor = overdue ? "#dc2626" : progressPct > 75 ? "#d97706" : cfg.accent;
+
+  // Soft card palette per vehicle kind (design handoff shows the green ambulance
+  // variant; fire/towing reuse the same layout with their own accent).
+  const soft = {
+    AMBULANCE: { bg: C.greenSoftBg, border: C.greenSoftBorder, accent: C.green, sub: "#4E8265", track: "#CBE5D6" },
+    FIRE: { bg: C.redSoftBg, border: C.redSoftBorder, accent: C.red, sub: C.redSoftText, track: "#F0CFCB" },
+    TOWING: { bg: "#F2F1ED", border: C.border, accent: "#57534e", sub: C.muted, track: "#DDD9CE" },
+  }[kind];
+  const barColor = overdue ? C.red : progressPct > 75 ? C.saffron : soft.accent;
 
   return (
-    <div className={`rounded-xl border ${cfg.border} ${cfg.bg} p-3 flex flex-col gap-2`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className={`text-[10px] font-black tracking-widest uppercase ${cfg.text}`}>{cfg.label}</p>
-          <p className="text-sm font-bold text-gray-900 mt-0.5">{cfg.serviceNoun} inbound from {location}</p>
-          <p className="text-[11px] text-gray-400">{subtitle}</p>
+    <section style={{ background: soft.bg, border: `1px solid ${soft.border}`, borderRadius: RADIUS.card, padding: "14px 16px" }}>
+      <div className="flex items-start" style={{ gap: 14 }}>
+        <div className="flex-1" style={{ minWidth: 0 }}>
+          <div style={{ ...CAPS, fontSize: 10.5, letterSpacing: ".08em", color: soft.sub }}>{cfg.label}</div>
+          <div style={{ fontSize: 14.5, fontWeight: 600, color: soft.accent, marginTop: 3 }}>
+            {cfg.serviceNoun} inbound from {location}
+            <span style={{ fontWeight: 500, color: soft.sub }}> · {subtitle}</span>
+          </div>
+          <div style={{ fontSize: 12.5, color: soft.sub, marginTop: 2 }}>
+            ~{Math.round(etaMinutes)} min · {distanceKm.toFixed(1)} km — {source === "road" ? "based on current road distance" : `straight-line estimate (${cfg.speedKmph} km/h)`}
+          </div>
         </div>
-        <div className="text-right flex-shrink-0">
-          <p className="text-2xl font-black tabular-nums leading-none" style={{ color: barColor }}>
+        <div className="text-right flex-none">
+          <div style={{ fontSize: 26, fontWeight: 700, color: barColor, fontVariantNumeric: "tabular-nums" }}>
             {overdue ? "0:00" : fmtClock(remainingMin)}
-          </p>
-          <p className="text-[9px] text-gray-400 uppercase tracking-wide mt-0.5">
-            {overdue ? "window elapsed" : "min : sec remaining"}
-          </p>
+          </div>
+          <div style={{ fontSize: 10, letterSpacing: ".08em", color: soft.sub }}>
+            {overdue ? "WINDOW ELAPSED" : "MIN : SEC REMAINING"}
+          </div>
         </div>
       </div>
 
-      {/* Countdown bar — fills as the calculated estimate window elapses.
-          It times a static estimate; it does not track the vehicle's
-          real-world position. */}
-      <div className="h-2.5 w-full rounded-full bg-gray-200 overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-1000 ease-linear"
-          style={{ width: `${progressPct}%`, background: barColor }}
-        />
+      {/* Countdown bar — times a static estimate; not a live position feed. */}
+      <div style={{ marginTop: 10, height: 6, borderRadius: 3, background: soft.track, overflow: "hidden" }}>
+        <div className="transition-all duration-1000 ease-linear" style={{ width: `${progressPct}%`, height: "100%", background: barColor, borderRadius: 3 }} />
       </div>
 
-      <p className="text-sm text-gray-800">
-        Estimated arrival <span className="font-semibold" style={{ color: cfg.accent }}>~{Math.round(etaMinutes)} min</span> from {location}
-        <span className="text-gray-500"> · {distanceKm.toFixed(1)} km</span>
-      </p>
-      <p className="text-[11px] text-gray-500">
-        {source === "road" ? "based on current road distance" : `straight-line estimate (${cfg.speedKmph} km/h)`}
-      </p>
       {overdue && (
-        <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        <p style={{ fontSize: 11, color: C.saffronSoftText, background: C.saffronSoftBg, border: `1px solid ${C.saffronSoftBorder}`, borderRadius: 6, padding: "4px 8px", marginTop: 7 }}>
           Estimated window elapsed — this does not confirm arrival or delay; we have no live position feed for this vehicle.
         </p>
       )}
-      <p className="text-[10px] font-medium" style={{ color: cfg.accent }}>
+      <div style={{ fontSize: 11, color: soft.sub, marginTop: 7 }}>
         Calculated estimate — not live tracking. We do not track vehicles.
-      </p>
-    </div>
+      </div>
+    </section>
   );
 }
 
 function RouteLegend({ color, dash, label }: { color: string; dash?: boolean; label: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <svg width="24" height="4" className="flex-shrink-0">
-        <line x1="0" y1="2" x2="24" y2="2" stroke={color} strokeWidth="3" strokeDasharray={dash ? "5 3" : undefined} />
-      </svg>
-      <span className="text-[11px] text-gray-600">{label}</span>
+    <div className="flex items-center" style={{ gap: 8, fontSize: 12.5, color: C.body }}>
+      <span
+        className="flex-none"
+        style={{
+          width: 22,
+          height: 3,
+          borderRadius: 2,
+          background: dash ? `repeating-linear-gradient(90deg,${color} 0 5px,transparent 5px 9px)` : color,
+        }}
+      />
+      {label}
     </div>
   );
 }
@@ -401,34 +343,60 @@ function MessageBox({ text, open, onToggle }: { text: string; open: boolean; onT
 
 function SentCard({ record }: { record: SentRecord }) {
   const [showMsg, setShowMsg] = useState(false);
-  const icon = record.role === "HOSPITAL" ? "🏥" : "🚔";
-  const roleLabel = record.role === "HOSPITAL" ? "Hospital notified" : "Police notified";
+  const isHospital = record.role === "HOSPITAL";
+  const roleLabel = isHospital ? "Hospital notified" : "Police notified";
+  const tag = isHospital
+    ? { bg: C.greenSoftBg, bd: C.greenSoftBorder, tx: C.greenSoftText }
+    : { bg: C.blueSoftBg, bd: C.blueSoftBorder, tx: C.blueSoftText };
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-3 flex flex-col gap-2">
-      <div className="flex items-start gap-2">
-        <div className="w-7 h-7 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0 text-sm">{icon}</div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <p className="text-xs font-bold text-gray-900">{record.to}</p>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-800 font-semibold">{roleLabel}</span>
-          </div>
-          <p className="text-[11px] text-gray-400 mt-0.5">Sent {toIST(record.sentAt)} · SMS / Push</p>
-        </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
-          <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-          <span className="text-[10px] font-bold text-green-700">Sent</span>
-        </div>
+    <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.hairline}` }}>
+      <div className="flex items-center" style={{ gap: 9 }}>
+        <span className="flex-1" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{record.to}</span>
+        <span style={{ fontSize: 10.5, fontWeight: 600, background: tag.bg, border: `1px solid ${tag.bd}`, color: tag.tx, borderRadius: RADIUS.pill, padding: "2px 9px", flex: "none" }}>
+          {roleLabel}
+        </span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: C.green, flex: "none" }}>✓ Sent</span>
       </div>
-      <div className="flex items-start gap-2 px-1 py-1.5 bg-amber-50 border border-amber-200 rounded-lg">
-        <span className="text-amber-600 text-[11px] flex-shrink-0 mt-0.5">⊙</span>
-        <p className="text-[11px] text-amber-800 leading-snug">
-          <span className="font-semibold">Awaiting acknowledgement</span> — filled by the deployed production system when the recipient responds.
-        </p>
+      <div style={{ fontSize: 11.5, color: C.muted, marginTop: 3 }}>
+        SMS / Push · {toIST(record.sentAt)} — awaiting acknowledgement from recipient ·{" "}
+        <button onClick={() => setShowMsg((v) => !v)} style={{ color: C.blue }}>
+          {showMsg ? "Hide message text" : "Show exact message text"}
+        </button>
       </div>
-      <MessageBox text={record.messageText} open={showMsg} onToggle={() => setShowMsg((v) => !v)} />
+      {showMsg && (
+        <pre style={{ marginTop: 8, fontSize: 10, fontFamily: "ui-monospace,Menlo,monospace", color: C.body, background: C.inset, border: `1px solid ${C.border}`, borderRadius: RADIUS.input, padding: 12, whiteSpace: "pre-wrap", lineHeight: 1.5, overflow: "auto", maxHeight: 240 }}>
+          {record.messageText}
+        </pre>
+      )}
     </div>
+  );
+}
+
+// Honest per-incident mirror indicator: "Signals ✓" only after the local
+// Signals DPG acknowledged the item create; "unavailable" on failure; hidden
+// entirely when the mirror is not configured. Never implies delivery beyond
+// the acknowledged POST to the local instance.
+function SignalsSyncBadge({ incidentId }: { incidentId: string }) {
+  const entry = useSignalsSync((s) => s.byIncident[incidentId]);
+  if (!entry || entry.state === "disabled") return null;
+  if (entry.state === "published") {
+    return (
+      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200" title={`Mirrored to local Signals DPG (item ${entry.itemId})`}>
+        Signals ✓
+      </span>
+    );
+  }
+  if (entry.state === "unavailable") {
+    return (
+      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200" title="Signals DPG instance unreachable — incident reporting is unaffected">
+        Signals — unavailable
+      </span>
+    );
+  }
+  return (
+    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-50 text-gray-400 border border-gray-200">
+      Signals…
+    </span>
   );
 }
 
@@ -454,16 +422,60 @@ function DispatchSection({
     setPhase("PREVIEW");
   }
 
-  function handleSend() {
+  function sendNow(hMsg: string, pMsg: string) {
     const now = new Date().toISOString();
-    appendDispatch({ id: makeDispatchId(), reportId: incident.id, timestamp: now, dispatchedTo: "HOSPITAL", entityId: h1.hospital.id, entityName: h1.hospital.name, status: "NOTIFIED", routePlanningEstimateKm: h1.roadDistanceKm, messageText: hosMsg });
-    appendDispatch({ id: makeDispatchId(), reportId: incident.id, timestamp: now, dispatchedTo: "POLICE", entityId: ps.station.id, entityName: ps.station.name, status: "NOTIFIED", routePlanningEstimateKm: ps.roadDistanceKm, messageText: psMsg });
+    const hospitalDispatch: DispatchRecord = { id: makeDispatchId(), reportId: incident.id, timestamp: now, dispatchedTo: "HOSPITAL", entityId: h1.hospital.id, entityName: h1.hospital.name, status: "NOTIFIED", routePlanningEstimateKm: h1.roadDistanceKm, messageText: hMsg };
+    const policeDispatch: DispatchRecord = { id: makeDispatchId(), reportId: incident.id, timestamp: now, dispatchedTo: "POLICE", entityId: ps.station.id, entityName: ps.station.name, status: "NOTIFIED", routePlanningEstimateKm: ps.roadDistanceKm, messageText: pMsg };
+    appendDispatch(hospitalDispatch);
+    appendDispatch(policeDispatch);
+    // Fire-and-forget Signals DPG mirror. Google-Places hospitals pass their
+    // placeId so the server routes them to the "unverified" placeholder item —
+    // Google names are never persisted into Signals (hard rule 6).
+    publishDispatch(incident, hospitalDispatch, assessment.severity, h1.hospital.placeId ?? null);
+    publishDispatch(incident, policeDispatch, assessment.severity, null);
     setSent([
-      { id: h1.hospital.id, to: h1.hospital.name, role: "HOSPITAL", sentAt: now, messageText: hosMsg },
-      { id: ps.station.id, to: ps.station.name, role: "POLICE", sentAt: now, messageText: psMsg },
+      { id: h1.hospital.id, to: h1.hospital.name, role: "HOSPITAL", sentAt: now, messageText: hMsg },
+      { id: ps.station.id, to: ps.station.name, role: "POLICE", sentAt: now, messageText: pMsg },
     ]);
     setPhase("SENT");
   }
+
+  function handleSend() {
+    sendNow(hosMsg, psMsg);
+  }
+
+  // Auto-dispatch: the notification records are logged the moment matching
+  // delivers a target hospital + police station (i.e. right after severity
+  // assessment) — no manual confirm step. Still strictly a notification
+  // record (hard rule 5): nothing here implies delivery, acknowledgement or
+  // tracking. Guarded so a panel remount never double-dispatches — prior
+  // DISPATCH_SENT records for this incident are re-displayed instead.
+  const autoDispatchRef = useRef(false);
+  useEffect(() => {
+    if (autoDispatchRef.current) return;
+    autoDispatchRef.current = true;
+    const prior = useEventLog
+      .getState()
+      .entries.filter((e) => e.type === "DISPATCH_SENT")
+      .map((e) => e.payload as DispatchRecord)
+      .filter((d) => d.reportId === incident.id && (d.dispatchedTo === "HOSPITAL" || d.dispatchedTo === "POLICE"));
+    if (prior.length > 0) {
+      setSent(prior.map((d) => ({
+        id: d.entityId,
+        to: d.entityName,
+        role: d.dispatchedTo as "HOSPITAL" | "POLICE",
+        sentAt: d.timestamp,
+        messageText: d.messageText,
+      })));
+      setPhase("SENT");
+      return;
+    }
+    sendNow(
+      generateHospitalAlert(incident, assessment, h1.hospital.name, h1.roadDistanceKm, h1.roadDurationMin),
+      generatePoliceAlert(incident, assessment, ps.station.name, ps.roadDistanceKm, ps.roadDurationMin),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (phase === "READY") {
     return (
@@ -525,27 +537,19 @@ function DispatchSection({
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2.5 px-1">
-        <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
-          <svg className="w-3.5 h-3.5 text-green-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-        </div>
-        <div>
-          <p className="text-xs font-bold text-gray-900">2 notifications logged</p>
-          <p className="text-[11px] text-gray-400">{sent.length > 0 ? `Sent at ${toIST(sent[0].sentAt)}` : ""}</p>
-        </div>
+    <section style={{ border: `1px solid ${C.border}`, borderRadius: RADIUS.card, overflow: "hidden" }}>
+      <div className="flex items-center" style={{ gap: 10, padding: "12px 16px", borderBottom: `1px solid ${C.hairline}` }}>
+        <span className="inline-flex items-center justify-center flex-none" style={{ width: 22, height: 22, borderRadius: "50%", background: C.green, color: "#fff", fontSize: 12 }}>✓</span>
+        <span className="flex-1" style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>
+          {sent.length} notifications logged — dispatched on severity assessment
+        </span>
+        <span style={{ fontSize: 11.5, color: C.muted }}>{sent.length > 0 ? toIST(sent[0].sentAt) : ""}</span>
       </div>
       {sent.map((rec) => <SentCard key={rec.id + rec.role} record={rec} />)}
-      <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-3 flex flex-col gap-1.5">
-        <p className="text-[10px] font-black tracking-widest text-gray-400 uppercase">About this panel</p>
-        <p className="text-[11px] text-gray-600 leading-relaxed">
-          This log records that a notification was generated and what it said. It does not confirm delivery.{" "}
-          <span className="font-semibold">No &quot;en route&quot; status is shown</span> — the system has no real-time link to the ambulance or responding officer.
-        </p>
+      <div style={{ padding: "10px 16px", fontSize: 11.5, color: C.muted, background: C.inset, lineHeight: 1.5 }}>
+        This log records that a notification was generated. It does not confirm delivery — no &quot;en route&quot; status is shown; the system has no real-time link to responders.
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -710,16 +714,15 @@ export default function MatchingPanel({
     let alive = true;
 
     async function run() {
-      // ── Step 1: Fetch nearby hospitals from Places API ──────────────────────
+      // ── Step 1: Fetch matching-grade hospital candidates from the Aggregator
+      // DPG (Google-Places-synced entries; specialty clinics filtered
+      // server-side). Google Places itself is never queried here.
       let googlePlaces: GooglePlace[] = [];
       try {
-        const res = await fetch(
-          `/api/places/nearby?type=hospital&lat=${incident.location.lat}&lng=${incident.location.lng}&radius=30000&for_matching=1`,
-          { cache: "no-store" }
-        );
+        const res = await fetch(`/api/aggregator/responders?for_matching=1`, { cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
-          googlePlaces = (data.places ?? []) as GooglePlace[];
+          googlePlaces = (data.places?.hospital ?? []) as GooglePlace[];
         }
       } catch {
         // Non-fatal: proceed with curated only
@@ -972,18 +975,18 @@ export default function MatchingPanel({
   const isLoading = phase !== "done" && phase !== "error";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col" style={{ gap: 12 }}>
       {/* Incident location */}
-      <div className="flex items-start gap-2 px-1">
+      <div className="flex items-start" style={{ gap: 8 }}>
         <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 24 24" style={{ color: accentColor }}>
           <path d="M12 2a7 7 0 0 1 7 7c0 5-7 13-7 13S5 14 5 9a7 7 0 0 1 7-7zm0 4a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
         </svg>
-        <div>
-          <p className="text-[10px] font-black tracking-widest text-gray-400 uppercase">Incident location</p>
-          <p className="text-xs text-gray-800 font-medium leading-snug mt-0.5">{incident.locationLabel}</p>
-          <p className="text-[10px] text-gray-400 mt-0.5 font-mono">
-            {incident.location.lat.toFixed(5)} N, {incident.location.lng.toFixed(5)} E
-          </p>
+        <div style={{ minWidth: 0 }}>
+          <div className="flex items-center gap-2">
+            <span style={{ ...CAPS, fontSize: 10, letterSpacing: ".08em" }}>Incident location</span>
+            <SignalsSyncBadge incidentId={incident.id} />
+          </div>
+          <p style={{ fontSize: 12.5, color: C.body, fontWeight: 500, marginTop: 2 }}>{incident.locationLabel}</p>
         </div>
       </div>
 
@@ -991,7 +994,7 @@ export default function MatchingPanel({
       {isLoading && (
         <div className="flex flex-col gap-1.5">
           <LoadingStep
-            label={`Fetching nearby hospitals (Google Places)…${candidateCount > 0 ? ` ${candidateCount} candidates` : ""}`}
+            label={`Fetching hospital candidates (Aggregator DPG)…${candidateCount > 0 ? ` ${candidateCount} candidates` : ""}`}
             done={phasesDone.has("fetching_places")}
           />
           <LoadingStep
@@ -1068,92 +1071,65 @@ export default function MatchingPanel({
       {/* Hospital results */}
       {ranked.length > 0 && (
         <div>
-          <div className="flex items-center justify-between mb-2 px-1">
-            <p className="text-[10px] font-black tracking-widest uppercase" style={{ color: accentColor }}>
-              Matched Hospitals
-            </p>
-            <p className="text-[10px] text-gray-400">
-              {routeSource === "traffic"
-                ? "traffic time · trauma · specialty"
-                : "proximity · trauma · specialty"}
-            </p>
+          <div className="flex items-baseline" style={{ gap: 8, padding: "0 2px 8px" }}>
+            <span style={{ ...CAPS, flex: 1 }}>Matched hospitals · अस्पताल</span>
+            <span style={{ fontSize: 11, color: C.faint }}>
+              {routeSource === "traffic" ? "traffic time · trauma · specialty" : "proximity · trauma · specialty"}
+            </span>
           </div>
 
-          {/* Source note */}
-          {routeSource === "traffic" ? (
-            <div className="mb-2 px-3 py-1.5 bg-green-50 border border-green-200 rounded-lg">
-              <p className="text-[11px] text-green-800">
-                ✓ Drive times from Routes API — current traffic, vehicle leaving now.{" "}
-                <span className="text-green-600">We do not track ambulances.</span>
-              </p>
-            </div>
-          ) : routeSource === "straight_line" ? (
-            <div className="mb-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg">
-              <p className="text-[11px] text-amber-800">
-                ⚠ Traffic routing unavailable — ranked by straight-line distance. Set GOOGLE_MAPS_SERVER_KEY for live drive times.
-              </p>
-            </div>
-          ) : null}
-
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col" style={{ gap: 8 }}>
             {ranked.map((r) => (
               <HospitalCard key={r.hospital.id} ranked={r} isTop={r.rank === 1} />
             ))}
           </div>
+
+          {/* Source note */}
+          {routeSource === "traffic" ? (
+            <div style={{ fontSize: 11.5, color: C.greenSoftText, background: C.greenSoftBg, border: `1px solid ${C.greenSoftBorder}`, borderRadius: 9, padding: "8px 12px", marginTop: 8 }}>
+              ✓ Drive times from Routes API — current traffic, vehicle leaving now. We do not track ambulances.
+            </div>
+          ) : routeSource === "straight_line" ? (
+            <div style={{ fontSize: 11.5, color: C.saffronSoftText, background: C.saffronSoftBg, border: `1px solid ${C.saffronSoftBorder}`, borderRadius: 9, padding: "8px 12px", marginTop: 8 }}>
+              ⚠ Traffic routing unavailable — ranked by straight-line distance. Set GOOGLE_MAPS_SERVER_KEY for live drive times.
+            </div>
+          ) : null}
         </div>
       )}
 
-      {/* Police */}
-      {nearestPSWithRoute && (
-        <div>
-          <p className="text-[10px] font-black tracking-widest uppercase mb-2 px-1" style={{ color: accentColor }}>
-            Nearest Police Station
-          </p>
-          <PoliceCard ps={nearestPSWithRoute} />
+      {/* Two-up: nearest police + routes on map */}
+      {(nearestPSWithRoute || phase === "done") && (
+        <div className="ts-twoup" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {nearestPSWithRoute && <PoliceCard ps={nearestPSWithRoute} />}
+          {phase === "done" && (
+            <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, padding: "13px 15px" }}>
+              <div style={{ ...CAPS, fontSize: 10.5, letterSpacing: ".08em", marginBottom: 8 }}>Routes on map</div>
+              <div className="flex flex-col" style={{ gap: 6 }}>
+                {ranked[0] && <RouteLegend color="#2456A6" label={`Hospital — ${ranked[0].hospital.shortName}`} />}
+                <RouteLegend color="#14243E" dash label={`Police — ${nearestPS.station.name}`} />
+                {wantsAmbulance && nearestAmbulance && ambulanceEta?.source === "road" && (
+                  <RouteLegend color="#1E7F4F" dash label={`Ambulance — ${nearestAmbulance.station.name}`} />
+                )}
+                {wantsFire && nearestFire && fireEta?.source === "road" && (
+                  <RouteLegend color="#C6362C" dash label={`Fire — ${nearestFire.station.name}`} />
+                )}
+                {wantsTowing && nearestTowing && towingEta?.source === "road" && (
+                  <RouteLegend color="#57534e" dash label={`Recovery — ${nearestTowing.station.name}`} />
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Route legend */}
-      {phase === "done" && (
-        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 flex flex-col gap-2">
-          <p className="text-[10px] font-black tracking-widest text-gray-400 uppercase">Routes on map</p>
-          <div className="flex flex-col gap-1">
-            {ranked[0] && (
-              <RouteLegend color="#2563eb" label={`Hospital route — ${ranked[0].hospital.shortName}`} />
-            )}
-            <RouteLegend color="#1e3a8a" dash label={`Police route — ${nearestPS.station.name}`} />
-            {wantsAmbulance && nearestAmbulance && ambulanceEta?.source === "road" && (
-              <RouteLegend color="#16a34a" dash label={`Ambulance route — ${nearestAmbulance.station.name}`} />
-            )}
-            {wantsFire && nearestFire && fireEta?.source === "road" && (
-              <RouteLegend color="#dc2626" dash label={`Fire route — ${nearestFire.station.name}`} />
-            )}
-            {wantsTowing && nearestTowing && towingEta?.source === "road" && (
-              <RouteLegend color="#57534e" dash label={`Recovery route — ${nearestTowing.station.name}`} />
-            )}
-          </div>
-          <p className="text-[11px] text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-1.5 leading-relaxed">
-            Est. drive time from facility, current traffic — vehicle leaving now.
-            We do not track ambulances or police vehicles.
-          </p>
-        </div>
-      )}
-
-      {/* Dispatch */}
+      {/* Dispatch log */}
       {ranked.length > 0 && (
-        <>
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-gray-200" />
-            <span className="text-[10px] font-black tracking-widest text-gray-400 uppercase">Dispatch</span>
-            <div className="flex-1 h-px bg-gray-200" />
-          </div>
-          <DispatchSection
-            incident={incident}
-            assessment={assessment}
-            ranked={ranked}
-            nearestPS={nearestPSWithRoute}
-          />
-        </>
+        <DispatchSection
+          incident={incident}
+          assessment={assessment}
+          ranked={ranked}
+          nearestPS={nearestPSWithRoute}
+        />
       )}
     </div>
   );

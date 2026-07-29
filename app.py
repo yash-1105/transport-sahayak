@@ -10,7 +10,47 @@ No new deployment required — this runs alongside your POC on localhost.
 """
 import asyncio
 import logging
+import os
+from pathlib import Path
 from typing import Optional
+
+
+def _load_env_file(path: Path) -> None:
+    """Minimal, dependency-free .env loader for local `uvicorn app:app` runs.
+
+    python-dotenv is NOT a project dependency, and uvicorn does not read .env on
+    its own, so without this the backend process only ever saw whatever env vars
+    were exported in its launch shell -- meaning SARVAM_API_KEY (and the other
+    SARVAM_TTS_*/GEMINI_* knobs) sitting in the repo-root .env were invisible,
+    and the Hindi dispatcher reported "not configured on the server" even though
+    the key was right there in .env. (English kept working because its Google
+    credentials fall back to the on-disk service-account file and everything
+    else has a default.) CLAUDE.md documents .env as the intended local-uvicorn
+    config source, so this just makes that real.
+
+    Only sets keys NOT already present in os.environ, so a real exported env var
+    always wins; and it's a no-op in production (Railway sets real env vars and
+    ships no .env file). Parses simple KEY=VALUE lines only -- fine for the
+    single-line keys here; multi-line JSON blobs are not supported (this project
+    supplies Google creds via a file or the *_BASE64 single-line var instead)."""
+    if not path.is_file():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+
+
+# Load .env BEFORE importing severity_engine, so its module-level os.environ.get
+# reads (Gemini/Sarvam model names, TTS knobs, etc.) also see these values.
+_ROOT = Path(__file__).resolve().parent
+_load_env_file(_ROOT / ".env")
+_load_env_file(_ROOT / ".env.local")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware

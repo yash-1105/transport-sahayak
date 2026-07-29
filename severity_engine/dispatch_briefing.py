@@ -159,13 +159,19 @@ def _responder_facts_en(services: Optional[dict]) -> list:
     instead of vanishing. This also means the returned list is never empty
     or partial, so callers (english_briefing.py) no longer need an
     "if no facts at all" fallback branch."""
+    # ETA phrasing simplified (2026-07): the responder lines state just the
+    # estimated arrival time, no longer the "responds from {location}" ORIGIN
+    # facility -- the origin was internal detail the caller doesn't act on, and
+    # it made every line longer. Hospital/police below still NAME their facility
+    # because that names the DESTINATION (the trauma centre the caller may head
+    # to, the station that was notified), not an origin the responder comes from.
     facts = []
     amb = _service(services, "ambulance")
     if amb:
         eta = _eta_min(amb)
         facts.append(
-            f"The nearest ambulance service has been notified — it responds from {_facility_location(amb['name'])}"
-            + (f", estimated arrival at the caller's location in approximately {eta} minutes." if eta else ".")
+            "The nearest ambulance service has been notified"
+            + (f" — estimated arrival in approximately {eta} minutes." if eta else ".")
         )
     else:
         facts.append("Ambulance dispatch details are currently unavailable.")
@@ -174,8 +180,8 @@ def _responder_facts_en(services: Optional[dict]) -> list:
     if fire:
         eta = _eta_min(fire)
         facts.append(
-            f"The fire service has been notified — it responds from {_facility_location(fire['name'])}"
-            + (f", estimated arrival in approximately {eta} minutes." if eta else ".")
+            "The fire service has been notified"
+            + (f" — estimated arrival in approximately {eta} minutes." if eta else ".")
         )
     else:
         facts.append("Fire service dispatch details are currently unavailable.")
@@ -184,8 +190,8 @@ def _responder_facts_en(services: Optional[dict]) -> list:
     if tow:
         eta = _eta_min(tow)
         facts.append(
-            f"A towing and recovery service has been notified — it responds from {_facility_location(tow['name'])}"
-            + (f", estimated to reach the caller in approximately {eta} minutes." if eta else ".")
+            "A towing and recovery service has been notified"
+            + (f" — estimated arrival in approximately {eta} minutes." if eta else ".")
         )
     else:
         facts.append("Towing and recovery service dispatch details are currently unavailable.")
@@ -214,27 +220,31 @@ def _responder_facts_en(services: Optional[dict]) -> list:
 
 
 def _responder_facts_hi(services: Optional[dict]) -> list:
+    # ETA phrasing simplified (2026-07) -- same change as _responder_facts_en:
+    # each responder line now states just the estimated time, not the
+    # "{location} से आएगी" origin. Hospital/police still name their facility
+    # (the destination/notified station), not an origin.
     facts = []
     amb = _service(services, "ambulance")
     if amb:
         eta = _eta_min(amb)
         facts.append(
-            f"एम्बुलेंस सेवा को सूचित कर दिया गया है — यह {_facility_location(amb['name'])} से आएगी"
-            + (f", अनुमानित समय लगभग {hindi_minutes(eta)}।" if eta else "।")
+            "एम्बुलेंस सेवा को सूचित कर दिया गया है"
+            + (f" — अनुमानित समय लगभग {hindi_minutes(eta)}।" if eta else "।")
         )
     fire = _service(services, "fire")
     if fire:
         eta = _eta_min(fire)
         facts.append(
-            f"फायर ब्रिगेड को सूचित कर दिया गया है — यह {_facility_location(fire['name'])} से आएगी"
-            + (f", अनुमानित समय लगभग {hindi_minutes(eta)}।" if eta else "।")
+            "फायर ब्रिगेड को सूचित कर दिया गया है"
+            + (f" — अनुमानित समय लगभग {hindi_minutes(eta)}।" if eta else "।")
         )
     tow = _service(services, "towing")
     if tow:
         eta = _eta_min(tow)
         facts.append(
-            f"टो करने वाली गाड़ी (रिकवरी सेवा) को सूचित कर दिया गया है — यह {_facility_location(tow['name'])} से आएगी"
-            + (f", अनुमानित समय लगभग {hindi_minutes(eta)}।" if eta else "।")
+            "टो करने वाली गाड़ी (रिकवरी सेवा) को सूचित कर दिया गया है"
+            + (f" — अनुमानित समय लगभग {hindi_minutes(eta)}।" if eta else "।")
         )
     hos = _service(services, "hospital")
     if hos:
@@ -271,13 +281,18 @@ _CLOSING_EN = [
     "You may now safely disconnect this call. Take care, and we hope everyone remains safe.",
 ]
 
+# Trimmed to match _CLOSING_EN's fixed 3-line form (Hindi was never updated).
+# Removed the two leading lines — "आपकी घटना सफलतापूर्वक दर्ज कर ली गई है।"
+# (the incident-registered confirmation, which the post-submit ACK the model
+# already speaks says — this was the "submitted twice" bug) and "सभी आवश्यक
+# आपातकालीन सेवाओं को सूचित कर दिया गया है।" (already covered by the five
+# per-service responder facts) — and moved "अब आप यह कॉल समाप्त कर सकते हैं"
+# to the END, after the follow-up/callback instructions (it read backwards
+# before). Content/honesty otherwise unchanged.
 _CLOSING_HI = [
-    "आपकी घटना सफलतापूर्वक दर्ज कर ली गई है।",
-    "सभी आवश्यक आपातकालीन सेवाओं को सूचित कर दिया गया है।",
-    "अब आप यह कॉल समाप्त कर सकते हैं।",
     "अगले दो घंटों के भीतर हमारी टीम आपसे दोबारा संपर्क करेगी, ताकि यह पुष्टि की जा सके कि सहायता आपके पास पहुँच गई है और स्थिति कैसी है।",
     "यदि किसी कारणवश आपको यह फ़ॉलो-अप कॉल न मिले, तो कृपया सहायता पहुँचने के बाद, या कुछ घंटों बाद, इस हेल्पलाइन पर दोबारा कॉल करें, ताकि हम घटना को बंद कर सकें।",
-    "अपना ध्यान रखिए... हमें उम्मीद है कि सभी सुरक्षित रहेंगे।",
+    "अब आप यह कॉल सुरक्षित रूप से समाप्त कर सकते हैं। अपना ध्यान रखिए... हमें उम्मीद है कि सभी सुरक्षित रहेंगे।",
 ]
 
 

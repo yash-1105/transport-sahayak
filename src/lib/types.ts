@@ -40,6 +40,7 @@ export interface GooglePlace {
   isOpen: boolean | null; // null = opening-hours data unavailable
   phone: string | null;   // null = no listed number from Google; never fabricated
   placeType: GooglePlaceType;
+  distanceToCorridorKm?: number; // perpendicular distance to the expressway centreline
 }
 
 export type AccidentLayerType = "BLACKSPOT" | "POTHOLE" | "REPORTED_ACCIDENT";
@@ -326,6 +327,10 @@ export interface DbAccident {
   flags: string[];
   reported_date: string;
   created_at: string;
+  // Ambiguity/duplicate review status, joined server-side from incident_reviews
+  // (/api/accidents GET). 'ignored' incidents are excluded from the public
+  // density heatmap and dimmed in the operator list. Absent = unreviewed.
+  review_status?: "open" | "ignored" | "kept" | null;
 }
 
 // Row shape returned from Supabase (snake_case matches DB column names)

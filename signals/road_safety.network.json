@@ -1,0 +1,307 @@
+{
+  "display_name": "Road Safety",
+  "description": "Assam road-accident first-response network. Incidents recorded by the Transport Dept control room; dispatch notifications sent to response facilities. Dispatch actions are notification records only — no acknowledgement, crew status, or en-route status is ever implied.",
+  "schema_standard": "https://json-schema.org/draft/2020-12/schema",
+  "domains": [
+    {
+      "id": "control_room",
+      "description": "Transport Department control-room console recording road incidents.",
+      "minimum_cache_ttl_seconds": 300,
+      "status_rules": [
+        { "status": "at_risk",  "label": "Awaiting Dispatch", "when": { "count": { "buckets": ["create"], "eq": 0 } } },
+        { "status": "active",   "label": "Dispatch Active",   "when": { "days_since_last": { "buckets": ["create"], "lte": 1 } } },
+        { "status": "new",      "label": "New",               "when": { "item_age_days": { "lte": 1 } } },
+        { "status": "inactive", "label": "Older",             "when": "default" }
+      ],
+      "item_schemas": {
+        "incident_1.0": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "title": "Road Incident 1.0",
+          "display_name_field": "Location Label",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Incident ID",
+            "Reported At",
+            "Report Mode",
+            "Location Label",
+            "Description",
+            "Severity"
+          ],
+          "properties": {
+            "Incident ID": {
+              "type": "string",
+              "minLength": 1
+            },
+            "Reported At": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "Report Mode": {
+              "type": "string",
+              "enum": ["SOS", "TEXT", "VOICE", "DISPATCHER"]
+            },
+            "Location Label": {
+              "type": "string",
+              "minLength": 1
+            },
+            "Description": {
+              "type": "string",
+              "private": true
+            },
+            "Severity": {
+              "type": "string",
+              "enum": ["CRITICAL", "SERIOUS", "MINOR", "UNKNOWN"]
+            },
+            "Vehicles Involved": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "Estimated Casualties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "Flags": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "Severity Source": {
+              "type": "string",
+              "enum": ["AI", "RULE_BASED"]
+            },
+            "Severity Score": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4
+            },
+            "Assessed Severity": {
+              "type": "string",
+              "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+            },
+            "Severity Category": {
+              "type": "string"
+            },
+            "Sub Type": {
+              "type": "string"
+            },
+            "Impact Note": {
+              "type": "string"
+            },
+            "Recommended Agencies": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "Classified By": {
+              "type": "string",
+              "enum": ["operator", "rules", "llm"]
+            },
+            "Low Confidence": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "card": {
+        "title_field": "Location Label",
+        "avatar_from": "Location Label",
+        "default_fields": ["Severity", "Report Mode", "Reported At", "Estimated Casualties"]
+      },
+      "dashboard_tiles": {
+        "profile": [
+          { "field": "total_items", "label": "Incidents Recorded" },
+          { "field": "complete_profiles", "label": "Fully Detailed" },
+          { "field": "has_applications", "label": "With Dispatch Activity" }
+        ],
+        "user": [
+          { "field": "total_users", "label": "Reporting Consoles" },
+          { "field": "avg_items_per_user", "label": "Avg Incidents per Console" }
+        ]
+      }
+    },
+    {
+      "id": "responder",
+      "description": "Registry of response facilities: curated hospitals and police stations, plus clearly-labelled sample ambulance, fire and towing posts.",
+      "minimum_cache_ttl_seconds": 300,
+      "status_rules": [
+        { "status": "active",   "label": "Recently Notified",  "when": { "days_since_last": { "buckets": ["create"], "lte": 30 } } },
+        { "status": "new",      "label": "Newly Registered",   "when": { "item_age_days": { "lte": 30 } } },
+        { "status": "inactive", "label": "No Recent Activity", "when": "default" }
+      ],
+      "item_schemas": {
+        "responder_facility_1.0": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "title": "Responder Facility 1.0",
+          "display_name_field": "Facility Name",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "Facility ID",
+            "Facility Name",
+            "Facility Type"
+          ],
+          "properties": {
+            "Facility ID": {
+              "type": "string",
+              "minLength": 1
+            },
+            "Facility Name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "Facility Type": {
+              "type": "string",
+              "enum": ["HOSPITAL", "POLICE", "AMBULANCE_STATION", "FIRE_STATION", "TOWING_STATION", "MECHANIC", "PHARMACY", "FUEL_STATION"]
+            },
+            "District": {
+              "type": "string"
+            },
+            "Contact Number": {
+              "type": "string",
+              "private": true
+            },
+            "Trauma Level": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            },
+            "Specialties": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "Capability Source": {
+              "type": "string",
+              "enum": ["curated", "synthetic", "unverified"]
+            },
+            "Sample Data": {
+              "type": "boolean"
+            },
+            "Data Origin": {
+              "type": "string",
+              "enum": ["curated", "synthetic", "google_places"]
+            },
+            "Place ID": {
+              "type": "string"
+            },
+            "Attributes": {
+              "type": "object"
+            },
+            "Last Synced At": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "card": {
+        "title_field": "Facility Name",
+        "avatar_from": "Facility Name",
+        "default_fields": ["Facility Type", "District", "Trauma Level", "Sample Data"]
+      },
+      "dashboard_tiles": {
+        "profile": [
+          { "field": "total_items", "label": "Facilities Registered" },
+          { "field": "complete_profiles", "label": "Profiles Complete" },
+          { "field": "has_applications", "label": "Facilities Notified" }
+        ],
+        "user": [
+          { "field": "total_users", "label": "Registry Accounts" }
+        ]
+      }
+    }
+  ],
+  "instances": [
+    {
+      "instance_name": "Transport Sahayak Control Room (local)",
+      "instance_url": "http://localhost:2742",
+      "custom_item_schema_urls": {},
+      "domain_id": "control_room"
+    },
+    {
+      "instance_name": "Transport Sahayak Responder Registry (local)",
+      "instance_url": "http://localhost:2742",
+      "custom_item_schema_urls": {},
+      "domain_id": "responder"
+    }
+  ],
+  "actions": {
+    "dispatch": {
+      "description": "A dispatch notification record from the control room to a response facility. This records only that a notification was composed and logged — never acknowledgement, crew status, or en-route status.",
+      "interactions": [
+        {
+          "from_network": "road_safety",
+          "from_domain": "control_room",
+          "to_network": "road_safety",
+          "to_domain": "responder",
+          "requirement_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "Dispatch Notification Requirement",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "Incident ID",
+              "Dispatched To",
+              "Message Text"
+            ],
+            "properties": {
+              "Incident ID": {
+                "type": "string",
+                "minLength": 1
+              },
+              "Dispatched To": {
+                "type": "string",
+                "enum": ["HOSPITAL", "AMBULANCE", "POLICE"]
+              },
+              "Message Text": {
+                "type": "string",
+                "minLength": 1
+              },
+              "Route Planning Estimate Km": {
+                "type": "number",
+                "minimum": 0
+              },
+              "Assessed Severity": {
+                "type": "string"
+              },
+              "Google Place ID": {
+                "type": "string"
+              }
+            }
+          },
+          "event_schema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "Dispatch Notification Event",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status"],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["created"]
+              },
+              "remark": {
+                "type": "string"
+              }
+            }
+          },
+          "metric_categories": {
+            "create": ["created"]
+          }
+        }
+      ]
+    }
+  },
+  "id": "road_safety",
+  "dashboard_buckets": {
+    "by_status": {
+      "new": "New",
+      "active": "Dispatch Active",
+      "at_risk": "Awaiting Dispatch",
+      "inactive": "Older"
+    },
+    "by_initiated_action_status": {
+      "create": "Notifications Sent"
+    },
+    "by_received_action_status": {
+      "create": "Notifications Received"
+    }
+  }
+}

@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import AuthGate from "@/components/auth/AuthGate";
 
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
@@ -11,6 +12,12 @@ const MapView = dynamic(() => import("@/components/MapView"), {
   ),
 });
 
+// The full-screen auth gate wraps MapView, so the map (and its responder /
+// route fetches) only mount once the user is signed in or continues as a guest.
 export default function MapLoader() {
-  return <MapView />;
+  return (
+    <AuthGate>
+      <MapView />
+    </AuthGate>
+  );
 }

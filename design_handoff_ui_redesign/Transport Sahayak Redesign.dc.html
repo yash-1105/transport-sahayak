@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F3F1EC;font-family:'IBM Plex Sans','Noto Sans Devanagari',sans-serif}
+a{color:#2456A6;text-decoration:none}a:hover{color:#C6362C}
+input,textarea,button{font-family:inherit}
+@keyframes tsPulse{0%{box-shadow:0 0 0 0 rgba(198,54,44,.35)}70%{box-shadow:0 0 0 16px rgba(198,54,44,0)}100%{box-shadow:0 0 0 0 rgba(198,54,44,0)}}
+@keyframes tsUp{from{transform:translateY(28px);opacity:0}to{transform:translateY(0);opacity:1}}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:#C9CDD6;border-radius:4px}
+</style>
+</helmet>
+<div style="height:100vh;display:flex;flex-direction:column;overflow:hidden;background:#F3F1EC;color:#1C2434">
+  <!-- ============ TOP BAR ============ -->
+  <header style="height:60px;flex:none;background:linear-gradient(180deg,#14243E,#0E1A2F);display:flex;align-items:center;gap:20px;padding:0 16px;box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 2px 8px rgba(14,26,47,.25)">
+    <div style="display:flex;align-items:center;gap:11px;min-width:0">
+      <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#E8862B,#C6362C);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff;flex:none"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><line x1="12" y1="8.5" x2="12" y2="13.5"></line><line x1="9.5" y1="11" x2="14.5" y2="11"></line></svg></div>
+      <div style="line-height:1.15">
+        <div style="font-size:15px;font-weight:600;color:#fff">Transport Sahayak <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:500;color:#93A3BE;font-size:13px">· परिवहन सहायक</span></sc-if></div>
+        <div style="font-size:11px;color:#7D8DA9">Delhi–Dehradun Expressway — Road Accident First Response</div>
+      </div>
+    </div>
+    <nav style="margin-left:auto;display:flex;gap:4px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:3px">
+      <sc-for list="{{ navTabs }}" as="t" hint-placeholder-count="3">
+        <button onClick="{{ t.go }}" style="{{ t.style }}">
+          <span>{{ t.en }}</span>
+          <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="{{ t.hiStyle }}">{{ t.hi }}</span></sc-if>
+        </button>
+      </sc-for>
+    </nav>
+    <div style="margin-left:auto;display:flex;gap:2px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:2px">
+      <button onClick="{{ setEn }}" style="{{ langEnStyle }}">EN</button>
+      <button onClick="{{ setHi }}" style="{{ langHiStyle }}">हिं</button>
+    </div>
+  </header>
+
+  <main style="flex:1;position:relative;overflow:hidden">
+    <!-- ============ MAP (Services + Accidents) ============ -->
+    <sc-if value="{{ isMapScreen }}" hint-placeholder-val="{{ true }}">
+      <div data-screen-label="Map" style="position:absolute;inset:0;background:linear-gradient(135deg,#E9F1E3 0%,#F1EFE2 55%,#EAEDE0 100%);overflow:hidden">
+        <div style="position:absolute;left:-5%;top:30%;width:115%;height:2px;background:#DDD9CB;transform:rotate(-4deg)"></div>
+        <div style="position:absolute;left:-5%;top:58%;width:115%;height:2px;background:#DDD9CB;transform:rotate(3deg)"></div>
+        <div style="position:absolute;left:30%;top:-8%;width:2px;height:120%;background:#DDD9CB;transform:rotate(9deg)"></div>
+        <div style="position:absolute;left:74%;top:-8%;width:2px;height:120%;background:#DDD9CB;transform:rotate(-7deg)"></div>
+        <div style="position:absolute;left:56.5%;top:14%;width:4px;height:66%;background:repeating-linear-gradient(180deg,#8FA3C4 0 14px,transparent 14px 22px);transform:rotate(9deg);border-radius:2px;opacity:.9"></div>
+        <sc-for list="{{ cities }}" as="ct" hint-placeholder-count="6">
+          <div style="{{ ct.style }}">{{ ct.name }}</div>
+        </sc-for>
+        <sc-for list="{{ markers }}" as="m" hint-placeholder-count="8">
+          <div style="{{ m.style }}">{{ m.n }}</div>
+        </sc-for>
+        <div style="position:absolute;left:16px;bottom:14px;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#9AA294;background:rgba(255,255,255,.7);padding:4px 8px;border-radius:6px">map placeholder — google maps js renders here</div>
+        <div style="position:absolute;right:16px;top:16px;display:flex;flex-direction:column;gap:1px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(28,36,52,.1)">
+          <button style="width:36px;height:34px;border:none;background:#fff;font-size:17px;color:#3B4658;cursor:pointer">+</button>
+          <div style="height:1px;background:#EDEAE2"></div>
+          <button style="width:36px;height:34px;border:none;background:#fff;font-size:17px;color:#3B4658;cursor:pointer">−</button>
+          <div style="height:1px;background:#EDEAE2"></div>
+          <button style="width:36px;height:34px;border:none;background:#fff;font-size:12px;font-weight:600;color:#2456A6;cursor:pointer">N</button>
+        </div>
+        <button style="position:absolute;left:16px;bottom:52px;display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #E4E1D8;border-radius:99px;padding:8px 14px;font-size:12.5px;font-weight:500;color:#3B4658;cursor:pointer;box-shadow:0 2px 8px rgba(28,36,52,.1)">
+          <span style="width:8px;height:8px;border-radius:50%;background:#2456A6;display:inline-block"></span>Timeline<sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="color:#8A8578">· समयरेखा</span></sc-if>
+        </button>
+      </div>
+
+      <!-- ===== LEFT PANEL ===== -->
+      <sc-if value="{{ panelOpen }}" hint-placeholder-val="{{ true }}">
+        <aside data-screen-label="Side panel" style="position:absolute;left:14px;top:14px;bottom:14px;width:342px;background:#fff;border:1px solid #E4E1D8;border-radius:14px;box-shadow:0 8px 28px rgba(14,26,47,.12);display:flex;flex-direction:column;overflow:hidden">
+          <div style="padding:14px 16px 12px;border-bottom:1px solid #EFECE4;display:flex;align-items:flex-start;gap:10px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13.5px;font-weight:600">{{ panelTitleEn }}</div>
+              <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><div style="font-size:11.5px;color:#8A8578;margin-top:1px">{{ panelTitleHi }}</div></sc-if>
+            </div>
+            <button onClick="{{ togglePanel }}" title="Collapse panel" style="width:26px;height:26px;border:1px solid #E4E1D8;border-radius:7px;background:#FAF9F5;color:#5B6572;font-size:13px;cursor:pointer;flex:none">‹</button>
+          </div>
+          <sc-if value="{{ isServices }}" hint-placeholder-val="{{ true }}">
+            <div style="padding:10px 16px 4px">
+              <input placeholder="Search hospitals, police, fuel…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #E4E1D8;border-radius:9px;font-size:13px;background:#FAF9F5;outline:none;color:#1C2434">
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:8px 8px 12px">
+              <div style="font-size:10.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:#8A8578;padding:8px 10px 4px">Service layers <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:500">· सेवा परतें</span></sc-if></div>
+              <sc-for list="{{ cats }}" as="c" hint-placeholder-count="8">
+                <div onClick="{{ c.toggle }}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;cursor:pointer" style-hover="background:#F6F4EE">
+                  <span style="{{ c.dotStyle }}"></span>
+                  <span style="flex:1;min-width:0;line-height:1.2">
+                    <span style="display:block;font-size:13px;font-weight:500">{{ c.en }} <span style="{{ c.sampleStyle }}">sample</span></span>
+                    <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="display:block;font-size:11px;color:#8A8578">{{ c.hi }}</span></sc-if>
+                  </span>
+                  <span style="font-size:11px;color:#8A8578;background:#F3F1EC;border-radius:99px;padding:2px 8px;font-weight:500">{{ c.count }}</span>
+                  <span style="{{ c.swStyle }}"><span style="{{ c.knobStyle }}"></span></span>
+                </div>
+              </sc-for>
+              <div style="height:1px;background:#EFECE4;margin:10px 10px"></div>
+              <div style="font-size:10.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:#8A8578;padding:2px 10px 4px">Nearby facilities <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:500">· निकट सुविधाएँ</span></sc-if></div>
+              <sc-for list="{{ facilities }}" as="f" hint-placeholder-count="4">
+                <div style="display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;cursor:pointer" style-hover="background:#F6F4EE">
+                  <span style="{{ f.dotStyle }}"></span>
+                  <span style="flex:1;min-width:0;line-height:1.25">
+                    <span style="display:block;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f.name }}</span>
+                    <span style="display:block;font-size:11.5px;color:#8A8578">{{ f.meta }}</span>
+                  </span>
+                  <span style="font-size:12px;font-weight:600;color:#2456A6;flex:none">{{ f.dist }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ isAccidents }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;gap:8px;padding:12px 16px 6px">
+              <button onClick="{{ toggleDefects }}" style="{{ defChipStyle }}">◆ Road defects</button>
+              <button onClick="{{ toggleAcc }}" style="{{ accChipStyle }}">● Accidents</button>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:6px 8px 12px">
+              <sc-for list="{{ reports }}" as="r" hint-placeholder-count="4">
+                <div style="padding:11px 10px;border-radius:10px;cursor:pointer;border:1px solid transparent" style-hover="background:#F6F4EE;border-color:#EFECE4">
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="{{ r.sevStyle }}">{{ r.sev }}</span>
+                    <span style="font-size:13px;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.title }}</span>
+                    <span style="font-size:11px;color:#8A8578;flex:none">{{ r.time }}</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;margin-top:4px;padding-left:2px">
+                    <span style="font-size:12px;color:#5B6572;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.loc }}</span>
+                    <span style="{{ r.statusStyle }}">{{ r.status }}</span>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </aside>
+      </sc-if>
+      <sc-if value="{{ panelClosed }}" hint-placeholder-val="{{ false }}">
+        <button onClick="{{ togglePanel }}" style="position:absolute;left:14px;top:14px;display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E4E1D8;border-radius:10px;padding:9px 14px;font-size:12.5px;font-weight:600;color:#1C2434;cursor:pointer;box-shadow:0 4px 14px rgba(14,26,47,.12)">☰ {{ panelTitleEn }} ›</button>
+      </sc-if>
+    </sc-if>
+
+    <!-- ============ NETWORK ============ -->
+    <sc-if value="{{ isNetwork }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Network" style="position:absolute;inset:0;overflow-y:auto;background:#F3F1EC">
+        <div style="max-width:1060px;margin:0 auto;padding:26px 24px 90px">
+          <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap">
+            <div style="flex:1;min-width:260px">
+              <div style="font-size:19px;font-weight:700;letter-spacing:-.01em">Signals DPG — Network Dashboard</div>
+              <div style="font-size:12.5px;color:#8A8578;margin-top:3px">Computed at 5:25:15 PM — cached rollup, not live<sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"> · नेटवर्क डैशबोर्ड</sc-if></div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button style="padding:8px 14px;border:1px solid #E4E1D8;border-radius:9px;background:#fff;font-size:12.5px;font-weight:600;color:#2456A6;cursor:pointer" style-hover="border-color:#2456A6">Export CSV</button>
+              <button style="padding:8px 14px;border:1px solid #E4E1D8;border-radius:9px;background:#fff;font-size:12.5px;font-weight:600;color:#3B4658;cursor:pointer" style-hover="border-color:#8A8578">Refresh</button>
+            </div>
+          </div>
+          <div style="margin-top:14px;background:#FBF1E4;border:1px solid #EED9B8;border-radius:11px;padding:11px 15px;font-size:12.5px;color:#8A5A17;display:flex;gap:9px;align-items:baseline">
+            <span style="font-weight:700;flex:none">Local instance</span><span>Shows only what this console has published — not a live network feed.</span>
+          </div>
+          <sc-for list="{{ netSections }}" as="s" hint-placeholder-count="2">
+            <section style="margin-top:18px;background:#fff;border:1px solid #E4E1D8;border-radius:14px;overflow:hidden">
+              <div style="padding:15px 18px 0">
+                <span style="font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8A8578">{{ s.title }}</span>
+                <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-size:11px;color:#B4AFA2"> · {{ s.hi }}</span></sc-if>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:12px 18px 0">
+                <sc-for list="{{ s.tiles }}" as="tl" hint-placeholder-count="3">
+                  <div style="border:1px solid #EFECE4;border-radius:11px;padding:12px 14px;background:#FAF9F5">
+                    <div style="font-size:24px;font-weight:700;letter-spacing:-.02em">{{ tl.v }}</div>
+                    <div style="font-size:11.5px;color:#8A8578;margin-top:1px">{{ tl.l }}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="display:flex;gap:7px;flex-wrap:wrap;padding:12px 18px 4px">
+                <sc-for list="{{ s.chips }}" as="ch" hint-placeholder-count="4">
+                  <span style="{{ ch.style }}">{{ ch.l }} <b>{{ ch.v }}</b></span>
+                </sc-for>
+              </div>
+              <div style="padding:8px 8px 10px">
+                <sc-for list="{{ s.rows }}" as="rw" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px" style-hover="background:#F6F4EE">
+                    <span style="{{ rw.dotStyle }}"></span>
+                    <span style="flex:1;font-size:13px">{{ rw.t }}</span>
+                    <span style="{{ rw.sStyle }}">{{ rw.s }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ============ REPORT FAB ============ -->
+    <sc-if value="{{ fabVisible }}" hint-placeholder-val="{{ true }}">
+      <button onClick="{{ openSheet }}" style="position:absolute;right:22px;bottom:22px;display:flex;align-items:center;gap:10px;background:linear-gradient(135deg,#D14036,#B92C22);color:#fff;border:none;border-radius:99px;padding:14px 22px;font-size:14.5px;font-weight:700;cursor:pointer;box-shadow:0 8px 24px rgba(198,54,44,.4);animation:tsPulse 2.6s infinite" style-hover="transform:translateY(-1px)">
+        <span style="width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,.22);display:inline-flex;align-items:center;justify-content:center;font-size:15px;font-weight:600">+</span>
+        Report Incident<sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:500;opacity:.85">· रिपोर्ट करें</span></sc-if>
+      </button>
+    </sc-if>
+
+    <!-- ============ REPORT SHEET ============ -->
+    <sc-if value="{{ sheetOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ closeSheet }}" style="position:absolute;inset:0;background:rgba(14,26,47,.4);backdrop-filter:blur(2px)"></div>
+      <div data-screen-label="Report sheet" style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:min(880px,96%);max-height:82%;background:#fff;border-radius:18px 18px 0 0;box-shadow:0 -12px 48px rgba(14,26,47,.3);display:flex;flex-direction:column;animation:tsUp .28s ease">
+        <div style="display:flex;align-items:center;gap:12px;padding:14px 20px 10px;flex:none">
+          <div style="position:absolute;left:50%;top:7px;transform:translateX(-50%);width:44px;height:4px;border-radius:2px;background:#E4E1D8"></div>
+          <div style="flex:1">
+            <span style="font-size:15px;font-weight:700">Report Incident</span>
+            <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-size:13px;color:#8A8578;font-weight:500"> · घटना रिपोर्ट करें</span></sc-if>
+          </div>
+          <button onClick="{{ closeSheet }}" style="width:30px;height:30px;border:1px solid #E4E1D8;border-radius:8px;background:#FAF9F5;color:#5B6572;font-size:14px;cursor:pointer">✕</button>
+        </div>
+
+        <sc-if value="{{ notSubmitted }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;gap:4px;padding:0 20px 12px;flex:none;border-bottom:1px solid #EFECE4">
+            <sc-for list="{{ modeTabs }}" as="mt" hint-placeholder-count="5">
+              <button onClick="{{ mt.go }}" style="{{ mt.style }}">
+                <span style="{{ mt.dotStyle }}"></span>{{ mt.en }}
+                <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="{{ mt.hiStyle }}">{{ mt.hi }}</span></sc-if>
+              </button>
+            </sc-for>
+          </div>
+
+          <div style="flex:1;overflow-y:auto;padding:16px 20px 20px">
+            <sc-if value="{{ isSos }}" hint-placeholder-val="{{ true }}">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                <div style="background:#FBEAE8;border:1px solid #EFC7C3;border-radius:12px;padding:14px 16px">
+                  <div style="font-size:12.5px;font-weight:700;color:#A32B22;margin-bottom:8px">What SOS does</div>
+                  <div style="display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:#7A2620;line-height:1.45">
+                    <div>• Requests your GPS coordinates from the browser</div>
+                    <div>• Creates an incident flagged as high priority</div>
+                    <div>• Triggers automatic severity assessment</div>
+                    <div>• Appends an entry to the session event log</div>
+                  </div>
+                </div>
+                <div style="background:#FAF9F5;border:1px solid #EFECE4;border-radius:12px;padding:14px 16px">
+                  <div style="font-size:12.5px;font-weight:700;color:#5B6572;margin-bottom:8px">What SOS does NOT do</div>
+                  <div style="display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:#6B7480;line-height:1.45">
+                    <div>• Does not automatically call or alert emergency services</div>
+                    <div>• Does not transmit to any external system in real time</div>
+                    <div>• Dispatch is a separate, manual step</div>
+                  </div>
+                </div>
+              </div>
+              <button onClick="{{ sendSos }}" style="margin-top:16px;width:100%;padding:17px;border:none;border-radius:13px;background:linear-gradient(135deg,#D14036,#B92C22);color:#fff;font-size:16px;font-weight:700;letter-spacing:.08em;cursor:pointer;box-shadow:0 6px 20px rgba(198,54,44,.35)" style-hover="filter:brightness(1.06)">SEND SOS<sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"> · एसओएस भेजें</sc-if></button>
+            </sc-if>
+
+            <sc-if value="{{ isText }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:14px">
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Incident type <span style="font-weight:400;color:#8A8578">— auto-detects as you type</span></div>
+                  <input placeholder="Browse incident types…" style="width:100%;box-sizing:border-box;padding:11px 13px;border:1px solid #E4E1D8;border-radius:10px;font-size:13.5px;background:#FAF9F5;outline:none;color:#1C2434">
+                </div>
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Incident location <span style="color:#C6362C">*</span></div>
+                  <button onClick="{{ setLoc }}" style="{{ locFieldStyle }}"><span style="display:flex;align-items:center;gap:8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>{{ locLabel }}</span></button>
+                </div>
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Description</div>
+                  <textarea placeholder="Describe the incident — vehicles, visible injuries, road conditions…" style="width:100%;box-sizing:border-box;min-height:74px;padding:11px 13px;border:1px solid #E4E1D8;border-radius:10px;font-size:13.5px;background:#FAF9F5;outline:none;resize:vertical;color:#1C2434"></textarea>
+                </div>
+                <div style="display:flex;gap:12px">
+                  <div><div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Vehicles involved</div><input value="0" style="width:90px;padding:10px 13px;border:1px solid #E4E1D8;border-radius:10px;font-size:13.5px;background:#FAF9F5;outline:none;color:#1C2434"></div>
+                  <div><div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Casualties / injured</div><input value="0" style="width:90px;padding:10px 13px;border:1px solid #E4E1D8;border-radius:10px;font-size:13.5px;background:#FAF9F5;outline:none;color:#1C2434"></div>
+                </div>
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:8px">Observed conditions <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:400;color:#8A8578">· देखी गई स्थितियाँ</span></sc-if></div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap">
+                    <sc-for list="{{ conds }}" as="cd" hint-placeholder-count="6">
+                      <button onClick="{{ cd.toggle }}" style="{{ cd.style }}">{{ cd.en }}</button>
+                    </sc-for>
+                  </div>
+                </div>
+                <button onClick="{{ submitNow }}" style="{{ submitStyle }}">{{ submitLabel }}</button>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isSpeech }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:14px">
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Voice language <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:400;color:#8A8578">· भाषा</span></sc-if></div>
+                  <div style="display:flex;gap:6px;background:#F3F1EC;border-radius:10px;padding:4px">
+                    <button onClick="{{ vEn }}" style="{{ vEnStyle }}">English</button>
+                    <button onClick="{{ vHi }}" style="{{ vHiStyle }}">हिंदी</button>
+                  </div>
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px 0">
+                  <button style="width:64px;height:64px;border-radius:50%;border:2px solid #2456A6;background:#EDF2FA;color:#2456A6;font-size:22px;cursor:pointer" style-hover="background:#E0E9F7"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:0 auto"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 10v1a7 7 0 0 0 14 0v-1"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg></button>
+                  <div style="font-size:12.5px;color:#5B6572">Tap to start recording — transcript fills the form below<sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"> · रिकॉर्डिंग शुरू करें</sc-if></div>
+                </div>
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Incident location <span style="color:#C6362C">*</span></div>
+                  <button onClick="{{ setLoc }}" style="{{ locFieldStyle }}"><span style="display:flex;align-items:center;gap:8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>{{ locLabel }}</span></button>
+                </div>
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Description <span style="font-weight:400;color:#8A8578">— from transcript, editable</span></div>
+                  <textarea placeholder="Describe the incident — vehicles, visible injuries, road conditions…" style="width:100%;box-sizing:border-box;min-height:64px;padding:11px 13px;border:1px solid #E4E1D8;border-radius:10px;font-size:13.5px;background:#FAF9F5;outline:none;resize:vertical;color:#1C2434"></textarea>
+                </div>
+                <button onClick="{{ submitNow }}" style="{{ submitStyle }}">{{ submitLabel }}</button>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isVoice }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:14px">
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Conversation language <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:400;color:#8A8578">· भाषा</span></sc-if></div>
+                  <div style="display:flex;gap:6px;background:#F3F1EC;border-radius:10px;padding:4px">
+                    <button onClick="{{ vEn }}" style="{{ vEnStyle }}">English</button>
+                    <button onClick="{{ vHi }}" style="{{ vHiStyle }}">हिंदी</button>
+                  </div>
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:22px 0">
+                  <button onClick="{{ sendSos }}" style="width:84px;height:84px;border-radius:50%;border:none;background:linear-gradient(135deg,#2456A6,#173B77);color:#fff;font-size:28px;cursor:pointer;box-shadow:0 8px 24px rgba(36,86,166,.35)" style-hover="filter:brightness(1.08)"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:block;margin:0 auto"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 10v1a7 7 0 0 0 14 0v-1"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg></button>
+                  <div style="font-size:13.5px;font-weight:600">Start conversation<sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:500;color:#8A8578"> · बातचीत शुरू करें</span></sc-if></div>
+                  <div style="font-size:12px;color:#8A8578;max-width:420px;text-align:center;line-height:1.5">A guided voice assistant asks about location, vehicles and injuries, then files the report for you.</div>
+                </div>
+                <div style="text-align:center"><a href="#" style="font-size:12.5px">Or set location manually on the map</a></div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isPothole }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:14px">
+                <div style="background:#FBF1E4;border:1px solid #EED9B8;border-radius:11px;padding:11px 15px;font-size:12.5px;color:#8A5A17;line-height:1.5">
+                  <b>Reporting a road defect</b> — pin the location, describe the defect, and select severity. It will appear on the Accidents tab.
+                </div>
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Location <span style="color:#C6362C">*</span></div>
+                  <button onClick="{{ setLoc }}" style="{{ locFieldStyle }}"><span style="display:flex;align-items:center;gap:8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>{{ locLabel }}</span></button>
+                </div>
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Description</div>
+                  <textarea placeholder="Describe the defect — size, depth, road name, near landmark…" style="width:100%;box-sizing:border-box;min-height:64px;padding:11px 13px;border:1px solid #E4E1D8;border-radius:10px;font-size:13.5px;background:#FAF9F5;outline:none;resize:vertical;color:#1C2434"></textarea>
+                </div>
+                <div>
+                  <div style="font-size:12.5px;font-weight:600;margin-bottom:8px">Severity <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:400;color:#8A8578">· गंभीरता</span></sc-if></div>
+                  <div style="display:flex;gap:8px">
+                    <sc-for list="{{ sevItems }}" as="sv" hint-placeholder-count="3">
+                      <button onClick="{{ sv.pick }}" style="{{ sv.style }}">{{ sv.l }}</button>
+                    </sc-for>
+                  </div>
+                </div>
+                <button onClick="{{ submitNow }}" style="{{ submitStyle }}">{{ submitLabel }}</button>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <!-- ===== POST-REPORT ===== -->
+        <sc-if value="{{ submitted }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;overflow-y:auto;padding:4px 20px 20px">
+            <div style="display:flex;align-items:center;gap:10px;background:#EAF5EE;border:1px solid #C4E2CF;border-radius:11px;padding:11px 15px">
+              <span style="width:22px;height:22px;border-radius:50%;background:#1E7F4F;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:12px;flex:none">✓</span>
+              <span style="font-size:13px;color:#175C3B">Incident <b style="font-family:ui-monospace,Menlo,monospace">INC-20260727-0DD3</b> created and logged</span>
+            </div>
+
+            <section style="margin-top:12px;border:1px solid #EED9B8;border-radius:14px;overflow:hidden">
+              <div style="background:#FBF1E4;padding:10px 16px;display:flex;align-items:center;gap:10px">
+                <span style="font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8A5A17;flex:1">Severity assessment <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:500">· गंभीरता आकलन</span></sc-if></span>
+                <span style="font-size:11px;font-weight:600;background:#fff;border:1px solid #EED9B8;color:#8A5A17;border-radius:99px;padding:3px 10px">Operator selected</span>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 190px;gap:16px;padding:16px">
+                <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+                  <div>
+                    <div style="font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8A8578">Incident type</div>
+                    <div style="font-size:14.5px;font-weight:600;margin-top:2px">Black Ice Skid on Bridge / Flyover</div>
+                  </div>
+                  <div>
+                    <div style="font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8A8578">Impact assessment</div>
+                    <div style="font-size:13px;color:#3B4658;margin-top:2px">No aggravating factors reported yet</div>
+                  </div>
+                  <div>
+                    <div style="font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8A8578;margin-bottom:6px">Agencies to notify</div>
+                    <div style="display:flex;gap:7px;flex-wrap:wrap">
+                      <span style="font-size:12px;font-weight:600;border:1px solid #C4E2CF;background:#EAF5EE;color:#175C3B;border-radius:99px;padding:4px 11px">Ambulance</span>
+                      <span style="font-size:12px;font-weight:600;border:1px solid #C7D4EC;background:#EDF2FA;color:#173B77;border-radius:99px;padding:4px 11px">Police</span>
+                      <span style="font-size:12px;font-weight:600;border:1px solid #EED9B8;background:#FBF1E4;color:#8A5A17;border-radius:99px;padding:4px 11px">NHAI Maintenance</span>
+                    </div>
+                  </div>
+                  <div>
+                    <div style="font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8A8578;margin-bottom:5px">Ask next</div>
+                    <div style="font-size:12.5px;color:#3B4658;line-height:1.7">1. Location &nbsp; 2. Bridge/flyover ID &nbsp; 3. Road surface condition &nbsp; 4. Casualties</div>
+                  </div>
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;border-left:1px solid #EFECE4;padding-left:16px">
+                  <div style="width:74px;height:74px;border-radius:50%;border:4px solid #DD8A20;display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:700;color:#B06712">2</div>
+                  <div style="font-size:13px;font-weight:700;letter-spacing:.1em;color:#B06712">MEDIUM</div>
+                  <div style="display:flex;gap:4px">
+                    <span style="width:22px;height:6px;border-radius:3px;background:#1E7F4F"></span>
+                    <span style="width:22px;height:6px;border-radius:3px;background:#DD8A20"></span>
+                    <span style="width:22px;height:6px;border-radius:3px;background:#E4E1D8"></span>
+                    <span style="width:22px;height:6px;border-radius:3px;background:#E4E1D8"></span>
+                  </div>
+                  <div style="font-size:10.5px;color:#8A8578;text-align:center;margin-top:2px">Verify before acting</div>
+                </div>
+              </div>
+            </section>
+
+            <section style="margin-top:12px;background:#EAF5EE;border:1px solid #C4E2CF;border-radius:14px;padding:14px 16px">
+              <div style="display:flex;align-items:flex-start;gap:14px">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#4E8265">Estimated ambulance arrival</div>
+                  <div style="font-size:14.5px;font-weight:600;color:#175C3B;margin-top:3px">Ambulance inbound from Baraut <span style="font-weight:500;color:#4E8265">· 2 ambulances (BLS)</span></div>
+                  <div style="font-size:12.5px;color:#4E8265;margin-top:2px">~34 min · 19.3 km — based on current road distance</div>
+                </div>
+                <div style="text-align:right;flex:none">
+                  <div style="font-size:26px;font-weight:700;color:#1E7F4F;font-variant-numeric:tabular-nums">{{ etaText }}</div>
+                  <div style="font-size:10px;letter-spacing:.08em;color:#4E8265">MIN : SEC REMAINING</div>
+                </div>
+              </div>
+              <div style="margin-top:10px;height:6px;border-radius:3px;background:#CBE5D6;overflow:hidden"><div style="width:5%;height:100%;background:#1E7F4F;border-radius:3px"></div></div>
+              <div style="font-size:11px;color:#4E8265;margin-top:7px">Calculated estimate — not live tracking. We do not track vehicles.</div>
+            </section>
+
+            <section style="margin-top:12px">
+              <div style="display:flex;align-items:baseline;gap:8px;padding:0 2px 8px">
+                <span style="font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#8A8578;flex:1">Matched hospitals <sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"><span style="font-weight:500">· अस्पताल</span></sc-if></span>
+                <span style="font-size:11px;color:#B4AFA2">traffic time · trauma · specialty</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <sc-for list="{{ hospitals }}" as="h" hint-placeholder-count="3">
+                  <div style="{{ h.style }}">
+                    <span style="{{ h.rankStyle }}">{{ h.r }}</span>
+                    <span style="flex:1;min-width:0">
+                      <span style="display:flex;align-items:center;gap:8px">
+                        <span style="font-size:13.5px;font-weight:600">{{ h.name }}</span>
+                        <span style="font-size:10.5px;font-weight:600;background:#FBF1E4;border:1px solid #EED9B8;color:#8A5A17;border-radius:99px;padding:2px 8px">Unverified</span>
+                      </span>
+                      <span style="display:block;font-size:12px;color:#8A8578;margin-top:2px">{{ h.note }}</span>
+                    </span>
+                    <span style="text-align:right;flex:none">
+                      <span style="display:block;font-size:14px;font-weight:700;color:#2456A6">{{ h.m }}</span>
+                      <span style="display:block;font-size:11.5px;color:#8A8578">{{ h.d }} · current traffic</span>
+                    </span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="font-size:11.5px;color:#4E8265;background:#EAF5EE;border:1px solid #C4E2CF;border-radius:9px;padding:8px 12px;margin-top:8px">✓ Drive times from Routes API — current traffic, vehicle leaving now. We do not track ambulances.</div>
+            </section>
+
+            <section style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div style="border:1px solid #E4E1D8;border-radius:12px;padding:13px 15px">
+                <div style="font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8A8578">Nearest police station</div>
+                <div style="font-size:13.5px;font-weight:600;margin-top:4px">Baghpat Highway Police Chowki</div>
+                <div style="font-size:12px;color:#8A8578;margin-top:1px">Baghpat · NH-334 North circle</div>
+                <div style="font-size:12.5px;margin-top:6px"><b style="color:#2456A6">54 min</b> · 42.8 km · <a href="tel:01232261100">01232-261100</a></div>
+              </div>
+              <div style="border:1px solid #E4E1D8;border-radius:12px;padding:13px 15px">
+                <div style="font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8A8578;margin-bottom:8px">Routes on map</div>
+                <div style="display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:#3B4658">
+                  <div style="display:flex;align-items:center;gap:8px"><span style="width:22px;height:3px;background:#2456A6;border-radius:2px;flex:none"></span>Hospital — Ramkali Devi Memorial</div>
+                  <div style="display:flex;align-items:center;gap:8px"><span style="width:22px;height:3px;background:repeating-linear-gradient(90deg,#14243E 0 5px,transparent 5px 9px);flex:none"></span>Police — Baghpat Highway Chowki</div>
+                  <div style="display:flex;align-items:center;gap:8px"><span style="width:22px;height:3px;background:repeating-linear-gradient(90deg,#1E7F4F 0 5px,transparent 5px 9px);flex:none"></span>Ambulance — 108 Post, Baraut</div>
+                </div>
+              </div>
+            </section>
+
+            <section style="margin-top:12px;border:1px solid #E4E1D8;border-radius:14px;overflow:hidden">
+              <div style="padding:12px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #EFECE4">
+                <span style="width:22px;height:22px;border-radius:50%;background:#1E7F4F;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:12px;flex:none">✓</span>
+                <span style="flex:1;font-size:13px;font-weight:600">2 notifications logged — dispatched on severity assessment</span>
+                <span style="font-size:11.5px;color:#8A8578">15:39:07 IST</span>
+              </div>
+              <sc-for list="{{ dispatch }}" as="d" hint-placeholder-count="2">
+                <div style="padding:12px 16px;border-bottom:1px solid #EFECE4">
+                  <div style="display:flex;align-items:center;gap:9px">
+                    <span style="font-size:13px;font-weight:600;flex:1">{{ d.name }}</span>
+                    <span style="{{ d.tagStyle }}">{{ d.tag }}</span>
+                    <span style="font-size:12px;font-weight:600;color:#1E7F4F">✓ Sent</span>
+                  </div>
+                  <div style="font-size:11.5px;color:#8A8578;margin-top:3px">SMS / Push · 15:39:07 IST — awaiting acknowledgement from recipient · <a href="#">Show exact message text</a></div>
+                </div>
+              </sc-for>
+              <div style="padding:10px 16px;font-size:11.5px;color:#8A8578;background:#FAF9F5;line-height:1.5">This log records that a notification was generated. It does not confirm delivery — no "en route" status is shown; the system has no real-time link to responders.</div>
+            </section>
+
+            <button onClick="{{ closeSheet }}" style="margin-top:14px;width:100%;padding:14px;border:none;border-radius:12px;background:#14243E;color:#fff;font-size:14px;font-weight:600;cursor:pointer" style-hover="background:#1C3152">Close<sc-if value="{{ showHindi }}" hint-placeholder-val="{{ true }}"> · बंद करें</sc-if></button>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showHindi&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Language&quot;},&quot;sidePanelOpen&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Layout&quot;},&quot;openPostReport&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Preview states&quot;}}">
+class Component extends DCLogic {
+  state = { screen:'services', lang:'en', panelOpen:null, sheetOpen:null, mode:'sos', submitted:null, locSet:false, vlang:'en', sev:'medium', etaSec:2046,
+    cats:{hosp:true,amb:true,fire:true,tow:true,mech:false,police:false,pharm:false,fuel:false},
+    showDef:true, showAcc:true,
+    conds:{conscious:false,breathing:false,trapped:false,bleeding:false,fire:false,hazmat:false} };
+  isSub(){ return this.state.submitted ?? this.props.openPostReport ?? false; }
+  componentDidMount(){ this._t=setInterval(()=>{ if(this.isSub()&&this.state.etaSec>0) this.setState(s=>({etaSec:s.etaSec-1})); },1000); }
+  componentWillUnmount(){ clearInterval(this._t); }
+  renderVals(){
+    const S=this.state,P=this.props;
+    const showHindi=P.showHindi??true;
+    const panelOpen=(S.panelOpen??P.sidePanelOpen??true);
+    const submitted=this.isSub();
+    const sheetOpen=(S.sheetOpen??P.openPostReport??false);
+    const scr=S.screen, isServices=scr==='services', isAccidents=scr==='accidents', isNetwork=scr==='network';
+    const set=(o)=>()=>this.setState(o);
+    // nav tabs
+    const tabDefs=[['services','Services','सेवाएँ'],['accidents','Accidents','दुर्घटनाएँ'],['network','Network','नेटवर्क']];
+    const navTabs=tabDefs.map(([k,en,hi])=>({en,hi,go:set({screen:k}),
+      style:{display:'flex',flexDirection:'column',alignItems:'center',gap:'0px',padding:'5px 18px',border:'none',borderRadius:'8px',cursor:'pointer',fontSize:'12.5px',fontWeight:600,lineHeight:1.25,
+        background:scr===k?'#fff':'transparent',color:scr===k?'#14243E':'#B9C4D8'},
+      hiStyle:{fontSize:'10.5px',fontWeight:500,color:scr===k?'#8A8578':'#7D8DA9'}}));
+    const langBtn=(on)=>({padding:'4px 10px',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'11.5px',fontWeight:600,background:on?'#fff':'transparent',color:on?'#14243E':'#B9C4D8'});
+    // service categories
+    const catDefs=[
+      ['hosp','Hospitals','अस्पताल','#2456A6',160,false],
+      ['amb','Ambulance Stations','एम्बुलेंस केंद्र','#1E7F4F',12,true],
+      ['fire','Fire Stations','दमकल केंद्र','#C6362C',9,true],
+      ['tow','Towing / Recovery','टोइंग / रिकवरी','#6B7280',14,true],
+      ['mech','Mechanics','मैकेनिक','#374151',158,false],
+      ['police','Police Stations','पुलिस थाने','#4F46E5',136,false],
+      ['pharm','Pharmacies','दवा दुकानें','#0D9488',159,false],
+      ['fuel','Fuel Stations','पेट्रोल पंप','#B45309',153,false]];
+    const cats=catDefs.map(([k,en,hi,color,count,sample])=>{const on=S.cats[k];return{
+      k,en,hi,color,count,on,
+      toggle:()=>this.setState(s=>({cats:{...s.cats,[k]:!s.cats[k]}})),
+      dotStyle:{width:'10px',height:'10px',borderRadius:'50%',background:color,flex:'none',opacity:on?1:.35},
+      sampleStyle:{display:sample?'inline':'none',fontSize:'9.5px',fontWeight:600,color:'#DD8A20',verticalAlign:'2px',letterSpacing:'.04em'},
+      swStyle:{width:'34px',height:'20px',borderRadius:'10px',background:on?'#2456A6':'#D8D4C9',position:'relative',flex:'none',transition:'background .15s'},
+      knobStyle:{position:'absolute',top:'2px',left:on?'16px':'2px',width:'16px',height:'16px',borderRadius:'50%',background:'#fff',transition:'left .15s',boxShadow:'0 1px 3px rgba(0,0,0,.25)'}};});
+    // map markers
+    const mDefs={hosp:[[60,20,24],[57,34,31],[55,48,42],[53,62,38],[52,74,25]],amb:[[61,25,4],[56,42,5],[53,68,3]],
+      fire:[[59,30,3],[54,56,4],[51.5,72,2]],tow:[[62.5,17,5],[55,52,6],[53.5,66,3]],mech:[[58,26,40],[54,44,52],[52,70,66]],
+      police:[[60.5,22,30],[55.5,54,48],[53,76,58]],pharm:[[57,37,50],[54,58,62],[51.5,78,47]],fuel:[[59,28,38],[55.5,46,55],[53,72,60]]};
+    const colorOf=Object.fromEntries(catDefs.map(d=>[d[0],d[3]]));
+    let markers=[];
+    if(isServices){ for(const k in mDefs){ if(!S.cats[k])continue; for(const[x,y,n]of mDefs[k]) markers.push({n,style:this._mk(x,y,colorOf[k])}); } }
+    if(isAccidents){
+      if(S.showAcc) for(const[x,y,n]of[[60,22,3],[57,38,2],[55,50,4],[54,60,2],[53,70,5],[52,78,3]]) markers.push({n,style:this._mk(x,y,'#D14036')});
+      if(S.showDef) for(const[x,y,n]of[[58,32,1],[56,44,2],[54,64,1]]) markers.push({n,style:{...this._mk(x,y,'#6B4226'),borderRadius:'4px',transform:'translate(-50%,-50%) rotate(45deg)'}});
+    }
+    const cities=[['Dehradun',63,13],['Chandigarh',49,21],['Saharanpur',57,31],['Karnal',47,45],['Panipat',51,55],['Meerut',58,66],['Delhi',53.5,79],['Gurugram',47,86]]
+      .map(([name,x,y])=>({name,style:{position:'absolute',left:x+'%',top:y+'%',fontSize:'11.5px',fontWeight:600,color:'#7C8474',transform:'translate(-50%,-140%)',letterSpacing:'.02em'}}));
+    const facilities=[
+      {name:'Ramkali Devi Memorial Hospital',meta:'Hospital · Baraut',dist:'7.6 km',c:'#2456A6'},
+      {name:'108 Ambulance Post — Baraut',meta:'Ambulance station',dist:'2.1 km',c:'#1E7F4F'},
+      {name:'NHAI Route Patrol — Khekra',meta:'Towing / recovery',dist:'12.4 km',c:'#6B7280'},
+      {name:'Baghpat Highway Police Chowki',meta:'Police · NH-334 North',dist:'42.8 km',c:'#4F46E5'}]
+      .map(f=>({...f,dotStyle:{width:'10px',height:'10px',borderRadius:'50%',background:f.c,flex:'none'}}));
+    // accidents list
+    const sevChip=(bg,bd,tx)=>({fontSize:'10px',fontWeight:700,letterSpacing:'.06em',background:bg,border:'1px solid '+bd,color:tx,borderRadius:'5px',padding:'2px 7px',flex:'none'});
+    const stChip=(hot)=>({fontSize:'10.5px',fontWeight:600,color:hot?'#A32B22':'#8A8578',background:hot?'#FBEAE8':'#F3F1EC',borderRadius:'99px',padding:'2px 9px',flex:'none'});
+    const reports=[
+      {sev:'HIGH',sevStyle:sevChip('#FBEAE8','#EFC7C3','#A32B22'),title:'Multi-vehicle collision',loc:'DDE km 42 — Parasoli, Muzaffarnagar',time:'12 min',status:'Awaiting dispatch',statusStyle:stChip(true)},
+      {sev:'MED',sevStyle:sevChip('#FBF1E4','#EED9B8','#B06712'),title:'Black ice skid — flyover',loc:'Baraut, Baghpat',time:'38 min',status:'Dispatched',statusStyle:stChip(false)},
+      {sev:'MED',sevStyle:sevChip('#FBF1E4','#EED9B8','#B06712'),title:'Pothole cluster',loc:'NH-334, near Tikri',time:'2 h',status:'Logged',statusStyle:stChip(false)},
+      {sev:'LOW',sevStyle:sevChip('#F3F1EC','#E4E1D8','#5B6572'),title:'Vehicle breakdown, lane 1',loc:'DDE km 18 — Butrara, Shamli',time:'4 h',status:'Closed',statusStyle:stChip(false)}];
+    const filtChip=(on,color)=>({padding:'7px 13px',border:'1px solid '+(on?color:'#E4E1D8'),borderRadius:'99px',background:on?color+'14':'#fff',color:on?color:'#8A8578',fontSize:'12px',fontWeight:600,cursor:'pointer'});
+    // network
+    const dot=(c)=>({width:'8px',height:'8px',borderRadius:'50%',background:c,flex:'none'});
+    const nChip=(hot)=>({fontSize:'11.5px',border:'1px solid '+(hot?'#EFC7C3':'#E4E1D8'),background:hot?'#FBEAE8':'#FAF9F5',color:hot?'#A32B22':'#5B6572',borderRadius:'99px',padding:'4px 11px'});
+    const nStat=(hot,neu)=>({fontSize:'11px',fontWeight:600,color:hot?'#A32B22':(neu?'#175C3B':'#8A8578'),background:hot?'#FBEAE8':(neu?'#EAF5EE':'#F3F1EC'),borderRadius:'99px',padding:'3px 10px',flex:'none'});
+    const netSections=[
+      {title:'Incidents (Control Room)',hi:'कंट्रोल रूम घटनाएँ',
+       tiles:[{v:'6',l:'Records'},{v:'7',l:'Notifications sent'},{v:'0',l:'Notifications received'}],
+       chips:[{l:'New',v:'0',style:nChip(false)},{l:'Dispatch active',v:'0',style:nChip(false)},{l:'Awaiting dispatch',v:'2',style:nChip(true)},{l:'Older',v:'4',style:nChip(false)}],
+       rows:[
+        {t:'Delhi–Dehradun Expressway, Parasoli, Muzaffarnagar',s:'Awaiting dispatch',dotStyle:dot('#D14036'),sStyle:nStat(true)},
+        {t:'Noida, Gautam Buddha Nagar',s:'Awaiting dispatch',dotStyle:dot('#D14036'),sStyle:nStat(true)},
+        {t:'Noida, Gautam Buddha Nagar',s:'Older',dotStyle:dot('#C9CDD6'),sStyle:nStat(false)},
+        {t:'Noida, Gautam Buddha Nagar',s:'Older',dotStyle:dot('#C9CDD6'),sStyle:nStat(false)},
+        {t:'Delhi–Dehradun Expressway, Butrara, Shamli',s:'Older',dotStyle:dot('#C9CDD6'),sStyle:nStat(false)},
+        {t:'Sardhana, Meerut',s:'Older',dotStyle:dot('#C9CDD6'),sStyle:nStat(false)}]},
+      {title:'Responder Facilities',hi:'रिस्पॉन्डर सुविधाएँ',
+       tiles:[{v:'826',l:'Records'},{v:'0',l:'Notifications sent'},{v:'8',l:'Notifications received'}],
+       chips:[{l:'New',v:'821',style:nChip(false)},{l:'Dispatch active',v:'5',style:nChip(false)},{l:'Awaiting dispatch',v:'0',style:nChip(false)},{l:'Older',v:'0',style:nChip(false)}],
+       rows:['Recovery Post — Dehradun','Recovery Post — Dehradun Valley Entry','Recovery Post — Rishikesh Approach','Recovery Post — Haridwar','Recovery Post — Mohand Ghat']
+        .map(t=>({t,s:'New',dotStyle:dot('#1E7F4F'),sStyle:nStat(false,true)}))}];
+    // report sheet
+    const modeDefs=[['sos','SOS','एसओएस','#C6362C'],['text','Text','लिखें','#2456A6'],['speech','Speech-to-text','बोलकर लिखें','#2456A6'],['voice','Voice','वॉइस','#2456A6'],['pothole','Pothole','गड्ढा','#B06712']];
+    const modeTabs=modeDefs.map(([k,en,hi,c])=>{const on=S.mode===k;return{en,hi,go:set({mode:k}),
+      style:{display:'flex',flexDirection:'column',alignItems:'center',gap:'1px',flex:1,padding:'8px 6px 10px',border:'none',borderBottom:'2.5px solid '+(on?c:'transparent'),background:'transparent',cursor:'pointer',fontSize:'12.5px',fontWeight:on?700:500,color:on?c:'#8A8578',lineHeight:1.2},
+      dotStyle:{display:'none'},hiStyle:{fontSize:'10.5px',fontWeight:500,color:on?c:'#B4AFA2'}};});
+    const m=S.mode;
+    const conds=[['conscious','Conscious'],['breathing','Breathing'],['trapped','Trapped'],['bleeding','Heavy bleeding'],['fire','Fire'],['hazmat','Hazardous material']]
+      .map(([k,en])=>{const on=S.conds[k];return{en,toggle:()=>this.setState(s=>({conds:{...s.conds,[k]:!s.conds[k]}})),
+        style:{padding:'8px 14px',border:'1px solid '+(on?'#2456A6':'#E4E1D8'),borderRadius:'99px',background:on?'#EDF2FA':'#fff',color:on?'#173B77':'#5B6572',fontSize:'12.5px',fontWeight:on?600:500,cursor:'pointer'}};});
+    const sevItems=[['low','LOW','#1E7F4F'],['medium','MEDIUM','#DD8A20'],['high','HIGH','#C6362C']].map(([k,l,c])=>{const on=S.sev===k;return{l,pick:set({sev:k}),
+      style:{flex:1,padding:'11px',border:'1.5px solid '+(on?c:'#E4E1D8'),borderRadius:'10px',background:on?c:'#fff',color:on?'#fff':'#5B6572',fontSize:'12.5px',fontWeight:700,letterSpacing:'.06em',cursor:'pointer'}};});
+    const locSet=S.locSet;
+    const locFieldStyle={width:'100%',boxSizing:'border-box',padding:'12px 13px',borderRadius:'10px',fontSize:'13px',cursor:'pointer',textAlign:'left',fontWeight:locSet?600:400,
+      border:locSet?'1px solid #C4E2CF':'1.5px dashed #C9B98F',background:locSet?'#EAF5EE':'#FDFBF6',color:locSet?'#175C3B':'#8A8578'};
+    const submitOk=locSet;
+    const submitStyle={marginTop:'2px',width:'100%',padding:'14px',border:'none',borderRadius:'12px',fontSize:'14px',fontWeight:700,cursor:submitOk?'pointer':'default',
+      background:submitOk?'linear-gradient(135deg,#D14036,#B92C22)':'#EFECE4',color:submitOk?'#fff':'#A9A395',boxShadow:submitOk?'0 6px 20px rgba(198,54,44,.3)':'none'};
+    const eta=S.etaSec, etaText=String(Math.floor(eta/60)).padStart(2,'0')+':'+String(eta%60).padStart(2,'0');
+    const hospitals=[
+      {r:1,name:'Ramkali Devi Memorial Hospital',d:'7.6 km',m:'19 min',note:'Nearest by road — capability unverified, no trauma or specialty data (Google Places)',top:true},
+      {r:2,name:'Daha Govt Hospital',d:'13.0 km',m:'24 min',note:'Capability unverified — no trauma or specialty data',top:false},
+      {r:3,name:'CHC Tikri',d:'9.8 km',m:'27 min',note:'Capability unverified — no trauma or specialty data',top:false}]
+      .map(h=>({...h,
+        style:{display:'flex',alignItems:'center',gap:'12px',padding:'12px 14px',borderRadius:'12px',border:h.top?'1.5px solid #2456A6':'1px solid #E4E1D8',background:h.top?'#F7FAFE':'#fff'},
+        rankStyle:{width:'24px',height:'24px',borderRadius:'50%',background:h.top?'#14243E':'#F3F1EC',color:h.top?'#fff':'#5B6572',display:'inline-flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:700,flex:'none'}}));
+    const tag=(bg,bd,tx)=>({fontSize:'10.5px',fontWeight:600,background:bg,border:'1px solid '+bd,color:tx,borderRadius:'99px',padding:'2px 9px',flex:'none'});
+    const dispatch=[
+      {name:'Ramkali Devi Memorial Hospital',tag:'Hospital notified',tagStyle:tag('#EAF5EE','#C4E2CF','#175C3B')},
+      {name:'Baghpat Highway Police Chowki',tag:'Police notified',tagStyle:tag('#EDF2FA','#C7D4EC','#173B77')}];
+    return {
+      showHindi, panelOpen, panelClosed:!panelOpen && (isServices||isAccidents), sheetOpen, submitted, notSubmitted:!submitted,
+      isMapScreen:isServices||isAccidents, isServices, isAccidents, isNetwork,
+      isSos:m==='sos',isText:m==='text',isSpeech:m==='speech',isVoice:m==='voice',isPothole:m==='pothole',
+      navTabs, langEnStyle:langBtn(S.lang==='en'), langHiStyle:langBtn(S.lang==='hi'), setEn:set({lang:'en'}), setHi:set({lang:'hi'}),
+      cats, markers, cities, facilities, reports,
+      defChipStyle:filtChip(S.showDef,'#6B4226'), accChipStyle:filtChip(S.showAcc,'#D14036'),
+      toggleDefects:()=>this.setState(s=>({showDef:!s.showDef})), toggleAcc:()=>this.setState(s=>({showAcc:!s.showAcc})),
+      panelTitleEn:isServices?'Emergency services':'Reported incidents', panelTitleHi:isServices?'आपातकालीन सेवाएँ':'दर्ज घटनाएँ',
+      netSections, modeTabs, conds, sevItems, locFieldStyle,
+      locLabel:locSet?'Baraut, Baghpat — 29.18845 N, 77.32539 E':'Tap here, then tap map to set location',
+      setLoc:set({locSet:true}),
+      submitStyle, submitLabel:submitOk?(showHindi?'Submit report · रिपोर्ट भेजें':'Submit report'):'Set location to submit',
+      submitNow:()=>{ if(this.state.locSet) this.setState({submitted:true}); },
+      sendSos:set({submitted:true}),
+      togglePanel:()=>this.setState(s=>({panelOpen:!(s.panelOpen??this.props.sidePanelOpen??true)})),
+      openSheet:set({sheetOpen:true,submitted:false,mode:'sos'}),
+      closeSheet:set({sheetOpen:false,submitted:false,locSet:false}),
+      fabVisible:!sheetOpen,
+      etaText, hospitals, dispatch };
+  }
+  _mk(x,y,c){ return {position:'absolute',left:x+'%',top:y+'%',transform:'translate(-50%,-50%)',minWidth:'26px',height:'26px',borderRadius:'50%',background:c,color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:700,border:'2px solid #fff',boxShadow:'0 2px 6px rgba(28,36,52,.3)',padding:'0 4px',boxSizing:'border-box'}; }
+}
+</script>
+</body>
+</html>

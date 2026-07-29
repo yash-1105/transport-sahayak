@@ -1,0 +1,15 @@
+# Supabase config — PARTIAL / parity only.
+#
+# This project was not initialised with a full `supabase init` here (the CLI is
+# not installed in this environment). The authoritative email-confirmation
+# toggle for the PROTOTYPE lives in the hosted dashboard:
+#   Authentication → Providers → Email → turn OFF "Confirm email".
+# The [auth.email] block below mirrors that setting for parity if you later run
+# the CLI locally (`supabase start`) or `supabase link` + `supabase db push`.
+
+project_id = "transport-sahayak"
+
+[auth.email]
+# Prototype: no OTP / no email verification. Signups create an account and are
+# signed in immediately (a live session is returned from signUp).
+enable_confirmations = false

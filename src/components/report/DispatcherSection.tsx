@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { GeoPoint } from "@/lib/types";
 import type { VoiceLocale } from "@/hooks/useVoiceInput";
 import type { useVoiceDispatcher } from "@/hooks/useVoiceDispatcher";
+import { C, RADIUS } from "@/lib/design";
+import { MicIcon } from "@/components/ui/icons";
+import { useBilingual } from "@/hooks/useI18n";
 
 // Conversational AI dispatcher tab (Gemini Live via Vertex AI). Separate,
 // new file from VoiceSection (the existing Chirp speech-to-text tab) — no
@@ -118,62 +121,83 @@ export function DispatcherSection({
   const isActive = !["idle", "ended", "error"].includes(dispatcher.status);
   const locationLabel = dispatcherLocation?.label || (pinnedLocation ? pinnedLabel : null);
   const flagsLabel = selectedFlags.size ? Array.from(selectedFlags).join(", ") : null;
+  const { showHindi } = useBilingual();
 
   if (!dispatcher.supported) {
     return (
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-xs text-gray-500">
+      <div style={{ background: C.inset, border: `1px solid ${C.border}`, borderRadius: RADIUS.input, padding: 12, fontSize: 12.5, color: C.secondary }}>
         The voice dispatcher is not supported in this browser. Use the Text tab instead.
         <br />
-        <span className="text-gray-400">Supported: Chrome / Edge on desktop and Android.</span>
+        <span style={{ color: C.muted }}>Supported: Chrome / Edge on desktop and Android.</span>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3.5">
       <div>
-        <label className="block text-xs font-semibold text-gray-600 mb-1.5">Conversation Language</label>
-        <div className="flex gap-2">
-          {(["en-IN", "hi-IN"] as VoiceLocale[]).map((l) => (
-            <button
-              key={l}
-              onClick={() => { if (isActive) dispatcher.stop(); onLocaleChange(l); }}
-              className={`flex-1 py-2 rounded-lg border text-sm font-semibold transition-colors ${
-                locale === l
-                  ? "bg-[#0f2044] text-white border-[#0f2044]"
-                  : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
-              }`}
-            >
-              {l === "en-IN" ? "English" : "हिंदी"}
-            </button>
-          ))}
+        <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6, color: C.ink }}>
+          Conversation language{showHindi && <span style={{ fontWeight: 400, color: C.muted }}> · भाषा</span>}
+        </div>
+        <div className="flex" style={{ gap: 6, background: C.page, borderRadius: RADIUS.input, padding: 4 }}>
+          {(["en-IN", "hi-IN"] as VoiceLocale[]).map((l) => {
+            const on = locale === l;
+            return (
+              <button
+                key={l}
+                onClick={() => { if (isActive) dispatcher.stop(); onLocaleChange(l); }}
+                style={{
+                  flex: 1,
+                  padding: "8px 0",
+                  border: "none",
+                  borderRadius: 7,
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: on ? 600 : 500,
+                  background: on ? "#fff" : "transparent",
+                  color: on ? C.ink : C.secondary,
+                  boxShadow: on ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+                }}
+              >
+                {l === "en-IN" ? "English" : "हिंदी"}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      <div className="flex flex-col items-center gap-2 py-1">
-        <button
-          onClick={() => (isActive ? dispatcher.stop() : dispatcher.start(locale))}
-          className={`w-20 h-20 rounded-full border-2 flex items-center justify-center transition-all ${STATUS_RING[dispatcher.status] ?? STATUS_RING.idle}`}
-        >
-          {dispatcher.status === "speaking" || dispatcher.status === "briefing" ? (
-            <WaveformBars active />
-          ) : (
-            <svg
-              className={`w-8 h-8 ${isActive ? "text-white" : "text-gray-500"}`}
-              fill="currentColor"
-              viewBox="0 0 24 24"
-            >
-              {isActive ? (
+      <div className="flex flex-col items-center" style={{ gap: 10, padding: "22px 0" }}>
+        {isActive ? (
+          <button
+            onClick={() => dispatcher.stop()}
+            className={`w-20 h-20 rounded-full border-2 flex items-center justify-center transition-all ${STATUS_RING[dispatcher.status] ?? STATUS_RING.idle}`}
+          >
+            {dispatcher.status === "speaking" || dispatcher.status === "briefing" ? (
+              <WaveformBars active />
+            ) : (
+              <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
                 <rect x="6" y="6" width="12" height="12" rx="2" />
-              ) : (
-                <path d="M12 1a4 4 0 0 1 4 4v6a4 4 0 0 1-8 0V5a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v6a2 2 0 0 0 4 0V5a2 2 0 0 0-2-2zm7 8a1 1 0 0 1 1 1 8 8 0 0 1-7 7.938V21h2a1 1 0 0 1 0 2H9a1 1 0 0 1 0-2h2v-1.062A8 8 0 0 1 4 12a1 1 0 0 1 2 0 6 6 0 0 0 12 0 1 1 0 0 1 1-1z" />
-              )}
-            </svg>
-          )}
-        </button>
-        <p className="text-xs font-medium text-gray-600">
-          {isActive ? STATUS_LABEL[dispatcher.status] : "Start Conversation"}
-        </p>
+              </svg>
+            )}
+          </button>
+        ) : (
+          <button
+            onClick={() => dispatcher.start(locale)}
+            className="flex items-center justify-center"
+            style={{ width: 84, height: 84, borderRadius: "50%", border: "none", background: "linear-gradient(135deg,#2456A6,#173B77)", color: "#fff", cursor: "pointer", boxShadow: "0 8px 24px rgba(36,86,166,.35)" }}
+          >
+            <MicIcon size={32} />
+          </button>
+        )}
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>
+          {isActive ? STATUS_LABEL[dispatcher.status] : "Start conversation"}
+          {!isActive && showHindi && <span style={{ fontWeight: 500, color: C.muted }}> · बातचीत शुरू करें</span>}
+        </div>
+        {!isActive && (
+          <div style={{ fontSize: 12, color: C.muted, maxWidth: 420, textAlign: "center", lineHeight: 1.5 }}>
+            A guided voice assistant asks about location, vehicles and injuries, then files the report for you.
+          </div>
+        )}
         {isActive && dispatcher.status === "listening" && (
           <span className="flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-emerald-400 opacity-75" />
@@ -217,7 +241,7 @@ export function DispatcherSection({
       )}
 
       {!dispatcherLocation && !pinnedLocation && (
-        <button onClick={onRequestPin} className="text-xs text-[#0f2044] underline self-start">
+        <button onClick={onRequestPin} className="self-center" style={{ fontSize: 12.5, color: C.blue }}>
           Or set location manually on the map
         </button>
       )}
