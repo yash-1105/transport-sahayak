@@ -1,250 +1,235 @@
-# Transport Sahayak — Rule-First Severity Engine (Python + FastAPI)
+# Transport Sahayak
 
-A deterministic accident severity & dispatch engine for the **Delhi–Dehradun Expressway**.
-Rule-first: it classifies the incident, scores severity, and resolves which agencies to
-dispatch from a fixed 470-row rule book — severity and agencies are **always** computed by
-rules, never by an LLM.
+A **road-accident first-response** proof-of-concept for the Delhi–Dehradun Expressway corridor
+(originally scoped for the Assam Transport Department). It is a live map + incident console that a
+control-room operator, a citizen, or a community volunteer can use to **report a crash, assess its
+severity, find the nearest hospital/police with real traffic-aware drive times, and log a dispatch
+notification** — plus a conversational AI call-taker that can take the whole report by voice in
+English or Hindi.
 
-Reading free text for hazard signals and taxonomy hints happens in two layers, in order:
-1. **Local NLP (primary, always on)** — `severity_engine/local_extract.py` extracts
-   fire/hazmat/road-blocked/entrapment/vulnerable-victim/casualty signals from the description
-   using a curated phrase lexicon with negation detection ("fire was extinguished" correctly
-   does NOT set `fire: true`), and `severity_engine/classifier.py` matches free text to a
-   taxonomy record via token overlap + synonym normalization + a TF-IDF similarity blend
-   (catches paraphrasing like "rammed into"/"flipped over" that raw keyword matching misses).
-   Deterministic, no network, no API key, no external dependency beyond `scikit-learn`
-   (small, pure-math, no model download) — this is what correctness depends on.
-2. **Gemini (optional bonus)** — `severity_engine/gemini_client.py`'s `classify_with_gemini`
-   (record escalation when local classification is still uncertain) and
-   `extract_hazard_signals` (a second opinion on hazard signals) layer on top when available.
-   Both already fail closed to `None` on any error (no key, quota, timeout, bad output) and
-   only ever ADD to what local extraction already found — never required, never overrides.
+> **Honesty over impressiveness.** This is a POC and it never fakes real-time data. There is no live
+> ambulance GPS, no invented ETAs, no "dispatched & tracked" status. Drive times are clearly labelled
+> as *estimates* ("vehicle leaving now"), a dispatch is only ever a *notification record*, and all
+> synthetic/sample data is labelled as such in the UI. See [Ground rules](#ground-rules) and
+> [`CLAUDE.md`](./CLAUDE.md) for the full contract.
 
-An operator's explicit signal (quick-flag in the UI) always wins over either extraction layer;
-extraction only ever adds. See `severity_engine/engine.py`'s `_merge_signals()`. Runs **locally
-alongside your existing POC** for dev; see "Deploying to production" below for the real
-deployment.
+---
 
-## Run it (for the demo)
+## What's in the app
 
+**Map & incident reporting**
+- Interactive Google map of the corridor with responder/service layers (hospitals, police, ambulance
+  posts, fire, towing, mechanics, pharmacies, fuel) and accident layers (blackspots, potholes,
+  citizen-reported accidents).
+- Report an incident three ways — **SOS** (one tap + geolocation), **Text** (pin on map + describe),
+  or **Voice** (speech-to-text into the description).
+- **Rule-first severity assessment** and **hospital + police matching** with **traffic-aware drive
+  times** (Google Routes API), route polylines, and a printable incident record.
+- Real-time incident-classification hints as you type, duplicate detection, and an append-only event
+  timeline.
+
+**AI voice dispatcher** (a separate Python service)
+- A full conversational call-taker (`WS /ws/dispatcher`) that asks questions, fills the incident form,
+  and submits only after the caller confirms — in **English** (Gemini Live native-audio) or **Hindi**
+  (Sarvam Saaras STT → Gemini Flash reasoning → Sarvam Bulbul TTS).
+
+**Accounts & roles**
+- **Citizens** get an email/password account with a personal safety profile.
+- **Suraksha Mitra volunteers** register as community first-responders, set a **base location** (GPS or
+  map pin) and a **coverage radius**, and appear as a map layer (personal details stay private —
+  operators see full detail, the public sees only first name + coverage + first-aid status).
+- **Operators** (an email allowlist) get an extra **Network** tab: the Signals/Aggregator dispatch
+  dashboard, **Post-Call Analytics** for the voice dispatcher, and an **Ambiguity review** that flags
+  likely-duplicate reports with a side-by-side compare (descriptions, locations, and call transcripts)
+  so the operator can judge before de-duping.
+
+**Data backbone (Signals DPG)**
+- All responder/service entities are served from a **Signals DPG** instance (an open Digital Public
+  Good). Google Places feeds it via an ingestion sync; the app also *mirrors* incidents, dispatches,
+  and volunteer registrations into it. The app degrades gracefully with Signals down — the map just
+  shows empty layers, nothing breaks.
+
+---
+
+## Architecture
+
+Three deployable pieces plus two managed services:
+
+```
+                    ┌─────────────────────────────┐
+   Browser  ───────▶│  Next.js app  (Vercel)      │
+                    │  map · reporting · matching  │
+                    │  operator dashboard · accts  │
+                    └──┬───────────┬───────────┬───┘
+                       │           │           │
+        server routes  │           │ WebSocket │  browser client
+                       ▼           ▼           ▼
+       ┌───────────────────┐ ┌───────────┐ ┌──────────────────┐
+       │ Signals DPG        │ │ Python    │ │ Supabase          │
+       │ (Railway)          │ │ voice     │ │ auth + Postgres   │
+       │ responders +       │ │ backend   │ │ (accounts,        │
+       │ incident/dispatch  │ │ (Railway) │ │  potholes,        │
+       │ mirror             │ │ dispatcher│ │  accidents,       │
+       └────────┬───────────┘ │ + STT +   │ │  metrics)         │
+                │             │ severity  │ └──────────────────┘
+        Google Places ingest  └─────┬─────┘
+                                     │ Vertex (Gemini Live/Flash),
+                                     │ Sarvam (Hindi STT/TTS),
+                                     │ Google Speech-to-Text (Chirp)
+```
+
+- **Next.js frontend** — the main app; runs on Vercel (or locally). This repo.
+- **Python voice backend** (`app.py` + `severity_engine/`) — the conversational dispatcher, live
+  speech-to-text, and the rule-first severity engine. Runs on Railway (Vercel can't hold WebSockets).
+- **Signals DPG** — a separate TypeScript service (Fastify + Postgres + Redis) that stores responders
+  and mirrors incidents/dispatches. Runs on Railway. Bootstrap + deploy: [`signals/README.md`](./signals/README.md).
+- **Supabase** — auth + Postgres for accounts, potholes, citizen accidents, and voice-call metrics.
+- **Google APIs** — Maps JS (map tiles), Routes (drive times), Places (POI ingestion), Speech-to-Text.
+
+---
+
+## Tech stack
+
+| Concern | Choice |
+|---|---|
+| Frontend | Next.js 16 (App Router) · TypeScript · Tailwind CSS v4 |
+| Map | `@vis.gl/react-google-maps` + Google Maps JS API |
+| Routing / drive times | Google Routes API (`computeRouteMatrix` / `computeRoutes`, `TRAFFIC_AWARE`) |
+| Responder data | Signals DPG (Aggregator) — Google Places synced in |
+| Severity | Python rule-first engine (`severity_engine/`), optional Gemini second opinion, heuristic fallback |
+| Voice (English) | Gemini Live native-audio (Vertex AI) |
+| Voice (Hindi) | Sarvam Saaras (STT) → Gemini Flash → Sarvam Bulbul (TTS) |
+| Speech-to-text | Google Cloud Speech-to-Text V2 (Chirp) |
+| Accounts / DB | Supabase (auth + Postgres, client-side RLS) |
+| State | Zustand · i18n via a flat EN/HI/AS string map |
+
+---
+
+## Running it locally
+
+### Prerequisites
+- **Node.js 20+** and **npm** (this repo). Next.js 16.
+- A **Google Maps API key** (see below) — the only thing you strictly need to see the map.
+- Optional, for full functionality: a Supabase project, a running Signals DPG, and the Python voice
+  backend (each degrades gracefully if absent).
+
+### 1. Install & run the frontend
+```bash
+npm install
+cp .env.example .env.local     # then fill in the keys you have (see below)
+npm run dev                    # http://localhost:3000
+```
+
+### 2. Minimum env to get going
+Put these in `.env.local`. With just the browser key you get the map and can click around; the rest
+unlock more.
+
+```bash
+# Map tiles (required for the map to render at all) — browser-safe, referrer-restricted
+NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY=AIza...
+
+# Routes + Places (server-side only, never NEXT_PUBLIC_). Enables real drive times + POI ingestion.
+GOOGLE_MAPS_SERVER_KEY=AIza...
+
+# Accounts (optional) — without these the app runs, just with no login/accounts
+NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
+NEXT_PUBLIC_OPERATOR_EMAILS=you@example.com   # who sees the operator Network tab
+
+# Responder data (optional) — point at a running Signals DPG (see signals/README.md).
+# Without these, service/responder map layers are empty but the app still works.
+SIGNALS_API_URL=http://localhost:2742
+SIGNALS_API_KEY=sk_signals_...
+SIGNALS_AGG_ORG_ID=org_...
+SIGNALS_REGISTRY_API_KEY=sk_signals_...
+```
+
+> `.env.example` is the full annotated reference (also lists the Python backend + Sarvam/Vertex vars).
+> `.env` and `.env.local` are gitignored — never commit real keys.
+
+### Degraded modes (all intentional)
+| Missing | Behaviour |
+|---|---|
+| Browser Maps key | Map area is blank; everything else still works |
+| Server Maps key | POI/responder layers hidden; hospital ranking uses straight-line distance; no polylines |
+| Supabase keys | No accounts/login; guest reporting still works via anon API routes |
+| Signals keys / DPG down | Responder layers empty; incident/volunteer mirror is a no-op; app unaffected |
+| Severity engine unreachable | Severity falls back to a rule-based heuristic (amber "Heuristic fallback" card) |
+
+### 3. (Optional) the Python voice backend
+The voice dispatcher, live speech-to-text, and severity engine live in `app.py` + `severity_engine/`.
 ```bash
 pip install -r requirements.txt
-
-# 1) Offline demo — no API key, no server. Best for a quick walk-through:
-python demo.py
-
-# 2) Guardrail tests (determinism + cost):
-python tests.py
-
-# 3) The API your Next.js POC calls:
-uvicorn app:app --reload --port 8000
-#   GET  http://localhost:8000/health
-#   GET  http://localhost:8000/subtypes        -> dropdown options for the UI
-#   POST http://localhost:8000/assess          -> the assessment
+uvicorn app:app --reload --port 8000        # http://localhost:8000/health
 ```
+Point the frontend at it via `SEVERITY_ENGINE_URL` (severity) and the `NEXT_PUBLIC_*_WS_URL` vars
+(voice). Full setup — Google service-account credentials, Vertex/Gemini, Sarvam, GCP one-time enables
+— is documented inline in `.env.example` and in this file's git history / the module docstrings.
 
-Example request:
+### 4. (Optional) the Signals DPG
+Responder data comes from a Signals DPG instance (Fastify + Postgres + Redis, port 2742). Local
+bootstrap + the Railway deploy runbook are in [`signals/README.md`](./signals/README.md).
 
-```bash
-curl -s localhost:8000/assess -H 'content-type: application/json' -d '{
-  "incident": {"description": "lpg tanker on fire near km 40"},
-  "signals": {"fire": true},
-  "location": {"km": 40}
-}'
-```
+---
 
-## Optional Gemini extraction (bonus layer only)
+## Deployment
 
-```bash
-export GEMINI_API_KEY=your_key
-export GEMINI_MODEL=gemini-2.0-flash
-```
+- **Frontend → Vercel.** Set the same env vars in the Vercel project (server keys stay non-`NEXT_PUBLIC_`).
+- **Python voice backend → Railway.** Vercel can't hold WebSockets open; Railway hosts the always-on
+  service. Needs the Google service-account JSON + Vertex/Sarvam keys.
+- **Signals DPG → Railway.** Fastify + managed Postgres + Redis. Deploy + bootstrap runbook in
+  [`signals/README.md`](./signals/README.md) and the "Production deployment" section of `CLAUDE.md`.
+- **Supabase** is already hosted; apply migrations from `supabase/migrations/`.
 
-The engine works fully — including hazard-signal detection and paraphrase-tolerant
-classification — without this key; local NLP (`local_extract.py` + `classifier.py`'s
-TF-IDF blend) is the primary path, not a fallback. Gemini only adds a second opinion on top when
-configured and reachable. Free-tier Gemini API keys sometimes have a 0-request quota until
-billing is linked — that fails closed the same way as a missing key, not silently broken (check
-`llmUsed` in the response: `true` only when Gemini specifically contributed, regardless of
-whether local extraction also caught the same signal). `GET /debug/gemini` makes one trivial
-call and reports the real error (bad key, quota, billing) if you need to diagnose it.
+---
 
-## Voice streaming (Google Cloud Speech-to-Text V2 / Chirp)
-
-`WS /ws/voice?locale=en-IN|hi-IN` — replaces the old browser Web Speech API entirely. The
-browser streams raw PCM16/16kHz/mono microphone audio directly to this WebSocket (see
-`src/hooks/useVoiceInput.ts` on the Next.js side); `severity_engine/voice_stream.py` forwards
-it to Speech-to-Text V2's `StreamingRecognize` (Chirp 2, automatic punctuation) and relays
-`{"type":"interim"|"final","text":...}` events back as they arrive. Vercel serverless functions
-can't hold a WebSocket open, so the browser connects to this service directly — see
-`NEXT_PUBLIC_VOICE_STREAM_URL` in `.env.example`.
-
-**Language is selected per recording session, not simultaneously.** English and Hindi are the
-only two supported languages (matching the `locale` query param), but Chirp 2 doesn't support
-recognizing both at once in a single request on this project: multi-language mode is only
-available in the `eu`/`global`/`us` multi-region locations, and `chirp_2` isn't deployed to any
-of them there — only to specific single regions like `us-central1` (both confirmed via real
-400s while building this). So the reporter's selected language (the existing "English"/"हिंदी"
-toggle already in the UI) applies to the whole recording, same as the old browser API's
-per-session `rec.lang`.
-
-**Client protocol:** after the handshake, send binary PCM16 audio frames while recording; send
-any text frame (the client sends `"__end__"`) to signal "no more audio" *without* closing the
-socket — the server needs a moment to flush the final transcript before the connection goes
-away, so it closes the socket itself once done. Closing from the client immediately (skipping
-the text signal) is handled as a normal disconnect, but risks losing an in-flight final result —
-this raced and silently dropped the last utterance during testing, which is why the explicit
-signal exists instead of relying on close alone.
-
-Credentials (checked in this order, first match wins — see `voice_stream.py` for the exact
-logic):
-1. `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64` — base64-encoded service account JSON. **Use this in
-   production (Railway)**: `base64 -i path/to/key.json | tr -d '\n'`, paste the output as a
-   Railway environment variable.
-2. `GOOGLE_SERVICE_ACCOUNT_JSON` — the same JSON unencoded, if base64 is inconvenient.
-3. A local file (default `~/Downloads/trans-sahayak-8f5e1c61e87e.json`, override via
-   `GOOGLE_SERVICE_ACCOUNT_LOCAL_PATH`) — **local dev only**, never set in production.
-
-This is deliberately explicit rather than bare `gcloud auth login` / ambient ADC discovery —
-credentials are either configured or they're not, with a clear error either way, not a silent
-"works on my machine" surprise.
-
-**Required GCP setup** (one-time, on whichever project the service account belongs to):
-```bash
-gcloud services enable speech.googleapis.com --project=<your-project-id>
-gcloud projects add-iam-policy-binding <your-project-id> \
-  --member="serviceAccount:<your-service-account-email>" \
-  --role="roles/speech.client"
-```
-(or the Console equivalents: APIs & Services → Library → enable "Cloud Speech-to-Text API";
-IAM & Admin → IAM → find the service account → add the "Cloud Speech Client" role.) Chirp 2 is
-a regional model — this integration talks to the `us-central1` regional endpoint by default
-(`GOOGLE_SPEECH_LOCATION` to change it — `chirp_2` is only deployed to specific regions, not
-`eu`/`global`/`us`, see "Voice streaming" above), which requires enabling the API and granting
-the role before any request will succeed — a `403 PERMISSION_DENIED` naming
-`speech.recognizers.recognize` means this step hasn't been done yet on that project.
-
-Speech-to-Text V2/Chirp is a paid, metered API — separate billing/quota from the Gemini setup
-above, even if you reuse the same GCP project.
-
-## Voice dispatcher (Gemini Live via Vertex AI)
-
-`WS /ws/dispatcher?locale=en-IN|hi-IN` — a full conversational AI call-taker, distinct from the
-Chirp transcription above. The browser streams mic audio in; the server streams synthesized
-speech back (see `severity_engine/dispatcher_live.py`). Unlike Chirp, this is a real conversation:
-the model asks questions, calls backend tools to search the real incident taxonomy
-(`classifier.guess()`/`get_categories()`/`get_subtypes_for()` — never invents an incident type),
-pushes `form_update` events back to the browser as it collects each field, and only submits after
-the caller verbally confirms a summary. See the module docstring in `dispatcher_live.py` for the
-exact WebSocket message protocol and the 5 tools (`search_incident_type`,
-`search_incident_categories`, `update_form_field`, `get_current_location`, `submit_incident`).
-
-Uses the exact same service-account credentials as Speech-to-Text above (Vertex AI shares the
-same GCP service-account mechanism) — no new credential env vars. New vars: `VERTEX_AI_LOCATION`
-(default `us-central1`), `GEMINI_LIVE_MODEL` (default `gemini-live-2.5-flash-native-audio`),
-`GOOGLE_CLOUD_PROJECT` (optional override, defaults to the service account's own project).
-
-**GCP setup**: enable the Vertex AI API on the project:
-```bash
-gcloud services enable aiplatform.googleapis.com --project=<your-project-id>
-```
-During development this worked with the existing Speech-to-Text service account with no
-additional IAM role grant beyond what it already had — if you're using a fresh/more restricted
-service account and hit a `403`, grant it the Vertex AI User role:
-```bash
-gcloud projects add-iam-policy-binding <your-project-id> \
-  --member="serviceAccount:<your-service-account-email>" \
-  --role="roles/aiplatform.user"
-```
-
-**Verified empirically** (Vertex AI's Live API is new and fast-moving — don't trust the model
-name or region blindly, confirm against a live connection): `gemini-live-2.5-flash-native-audio`
-in `us-central1` connects successfully, function calling works with the standard
-`FunctionResponse` pattern (no `scheduling` field needed), and `send_realtime_input()` requires
-genuinely real-time-paced audio for Voice Activity Detection to detect end-of-speech — a live
-microphone stream is naturally paced this way, so this only matters for anyone writing a
-synthetic test client against this endpoint, not for the real feature.
-
-Gemini Live is a paid, metered, real-time API — separate billing from both the Gemini extraction
-bonus layer and Speech-to-Text above, even on the same GCP project, and typically more expensive
-per session than either since it's continuous bidirectional audio, not a single request.
-
-## Wiring into your existing POC (local dev)
-
-1. Run this engine locally on port 8000 (above).
-2. Add `SEVERITY_ENGINE_URL=http://localhost:8000` to the Next.js app's `.env.local`.
-
-Local dev only — `http://localhost:8000` is your own machine, not reachable from a Vercel
-deployment. See below for production.
-
-## Deploying to production (Railway)
-
-The Next.js app on Vercel calls this engine over HTTP via `SEVERITY_ENGINE_URL` — it needs
-its own always-on host, since Vercel can't reach `localhost` on your machine. This repo is
-already set up for Railway:
-
-1. **Deploy this repo to Railway** — [railway.app](https://railway.app) → New Project →
-   Deploy from GitHub repo → select this repo. Railway auto-detects the `Procfile`
-   (`web: uvicorn app:app --host 0.0.0.0 --port $PORT`) and `requirements.txt`.
-   `nixpacks.toml` at the repo root forces a Python-only build so Railway ignores the
-   sibling Next.js `package.json` in the same repo.
-2. In the Railway service → **Settings → Networking**, click **Generate Domain** to get a
-   public URL (Railway services aren't public by default). Copy it, e.g.
-   `https://transport-sahayak-severity.up.railway.app`.
-3. Verify it: `curl https://<your-railway-domain>/health` → `{"ok":true,"records":471}`.
-4. (Optional) Add `GEMINI_API_KEY` as a Railway environment variable for a bonus second opinion
-   on classification/hazard signals — not required. Local NLP already handles FIRE/hazmat/
-   road-blocked dispatch from free text with no key configured at all.
-5. Add `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64` as a Railway environment variable (see "Voice
-   streaming" above) — **required** for voice input to work at all in production; unlike
-   Gemini, there's no local fallback for speech recognition.
-6. In your **Vercel** project → Settings → Environment Variables, set:
-   - `SEVERITY_ENGINE_URL` = the Railway URL from step 2 (no trailing slash), `https://...`.
-   - `NEXT_PUBLIC_VOICE_STREAM_URL` = the same Railway domain with `wss://` and `/ws/voice`,
-     e.g. `wss://transport-sahayak-severity.up.railway.app/ws/voice`.
-   Set both for Production (and Preview if you want PR previews to hit the same engine), then
-   redeploy.
-7. `/api/assess` in the Next.js app will now reach the real engine instead of falling back
-   to the "severity engine unreachable — treat as HIGH" stub, and the Voice report mode will
-   stream to Speech-to-Text V2 instead of the browser's (now-removed) built-in recognizer.
-
-Note: Railway redeploys this service whenever anything in the repo changes, including
-Next.js–only commits — harmless (same build, no code difference for this service) but worth
-knowing if you see redeploys you didn't expect.
-
-## Files
+## Repo layout
 
 ```
-app.py                         FastAPI wrapper (/health /subtypes /assess /ws/voice)
-demo.py                        offline live-demo script
-tests.py                       determinism + cost guardrail tests
-requirements.txt
-severity_engine/
-  classifier.py                free-text/dropdown -> record: synonym normalization + token
-                                overlap + TF-IDF similarity blend (primary, no LLM)
-  local_extract.py             free-text -> hazard signals: curated phrase lexicon + negation
-                                detection (primary, no LLM)
-  severity.py                  base + modifiers + hard overrides -> LOW/MED/HIGH/CRITICAL
-  dispatch.py                  agency resolution + corridor state-aware labels
-  gemini_client.py             OPTIONAL bonus layer: classify_with_gemini (record escalation) +
-                                extract_hazard_signals (free-text hazard extraction) — both
-                                graceful if no key/failure, never required
-  voice_stream.py              Speech-to-Text V2 (Chirp) streaming bridge for /ws/voice —
-                                credential loading + StreamingRecognize forwarding
-  engine.py                    orchestrator (rule-first; local NLP primary, LLM only reads as
-                                a bonus, neither ever decides severity/dispatch)
-  data/accident_index.json     470-row rule book (your Excel, structured)
-  data/category_groups.json    raw category (50) -> curated top-level UI category (11) —
-                                single source of truth, also read by src/lib/incidentClassifier.ts
-  data/corridor_profile.json   km segments, wildlife/tunnel zones, state jurisdictions
-poc_integration/               drop-in snippets for the existing Next.js POC
+src/
+  app/                       Next.js App Router
+    page.tsx · layout.tsx
+    api/                     server route handlers
+      assess/                → rule-first severity engine (proxy, heuristic fallback)
+      aggregator/            → responder data + Google Places sync (Signals)
+      routes/                → Google Routes (drive-time matrix + polylines)
+      signals/               → publish incidents/dispatches/volunteers to Signals
+      call-metrics/          → voice-dispatcher analytics (+ per-incident lookup)
+      accidents/ potholes/ incident-reviews/  → Supabase-backed data
+  components/
+    MapView.tsx              the map: all layers, markers, popups, panels
+    report/                  incident report + hospital/police matching
+    auth/                    accounts, Suraksha Mitra volunteer form + map picker
+    operator/                Network dashboard, call analytics, ambiguity review
+    map/ signals/            clustered layers, Signals dashboard panel
+  hooks/ lib/ store/ i18n/   data hooks, domain logic, Zustand stores, EN/HI/AS strings
+
+severity_engine/  app.py     Python: rule-first severity + voice dispatcher (English/Hindi) + Chirp STT
+signals/                     Signals DPG network contract + bootstrap/deploy runbook
+supabase/migrations/         accounts, volunteer location/radius, operator analytics/reviews
+data/                        labelled sample seed data (hospitals, ambulance posts, blackspots, …)
+CLAUDE.md                    the authoritative deep-dive on every subsystem + the hard rules
 ```
 
-## Known data note
+---
 
-Your source Excel's **Category** column is row-shifted in places (e.g. "Fire Inside Tunnel"
-is tagged "Driver / Passenger Medical"). Each row's own subType, cause, agencies, capture,
-and severity are correct — only the category *grouping label* is unreliable. The engine
-therefore ranks free text by sub-type keywords, not category, and the UI should show
-**subType** as the primary label. If you want clean category labels, re-derive them later;
-it does not affect severity or dispatch.
+## Ground rules
+
+These are enforced throughout the code and UI:
+
+1. **No fake real-time data.** No live vehicle GPS, no invented ETAs, no auto-escalation timers. (A
+   clearly-labelled *simulated* ambulance marker may animate along a highlighted route as a visual aid.)
+2. **Drive times are estimates**, labelled `"Est. drive time from [Facility], current traffic — vehicle
+   leaving now."` — never "ambulance arriving in X." We do not track vehicles.
+3. **No phantom infrastructure.** If a feature would need field equipment that doesn't exist, it isn't built.
+4. **Sample data is labelled** — in code and with an amber banner in the UI.
+5. **A dispatch is a notification record only** — who was notified, what, when. No acknowledgement or
+   en-route status is ever implied.
+
+---
+
+## More detail
+
+- **[`CLAUDE.md`](./CLAUDE.md)** — the authoritative, exhaustive context: every subsystem, the voice
+  pipelines, the Signals integration, the API-key architecture, and the production-deployment notes.
+- **[`signals/README.md`](./signals/README.md)** — the Signals DPG integration + bootstrap/deploy runbook.
