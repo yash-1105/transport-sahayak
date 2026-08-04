@@ -37,11 +37,6 @@ function median(sorted: number[]): number | null {
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
 }
-function percentile(sorted: number[], p: number): number | null {
-  if (sorted.length === 0) return null;
-  const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
-  return sorted[Math.max(0, idx)];
-}
 function mean(nums: number[]): number | null {
   if (nums.length === 0) return null;
   return Math.round(nums.reduce((a, b) => a + b, 0) / nums.length);
@@ -58,24 +53,17 @@ function summarize(rows: MetricRow[]) {
     .filter((n): n is number => typeof n === "number" && n >= 0)
     .sort((a, b) => a - b);
 
-  const productive = rows.reduce((a, r) => a + (r.productive_turns ?? 0), 0);
-  const turns = rows.reduce((a, r) => a + (r.total_turns ?? 0), 0);
-
   return {
     total_calls: total,
     dispatched: dispatched.length,
     abandoned: abandoned.length,
     errored: errored.length,
     dispatch_ready_rate: total ? dispatched.length / total : null,
-    abandonment_rate: total ? abandoned.length / total : null,
     // time-to-dispatch (ms), dispatched calls only
     ttd_median_ms: median(ttd),
-    ttd_p90_ms: percentile(ttd, 90),
     ttd_mean_ms: mean(ttd),
     ttd_min_ms: ttd[0] ?? null,
     ttd_max_ms: ttd[ttd.length - 1] ?? null,
-    // productivity
-    productive_pct: turns ? productive / turns : null,
     avg_caller_turns: mean(dispatched.map((r) => r.caller_turns ?? 0)),
     avg_call_duration_ms: mean(rows.map((r) => r.call_duration_ms ?? 0).filter((n) => n > 0)),
   };
@@ -99,6 +87,24 @@ function histogram(rows: MetricRow[]) {
 export async function GET(req: Request) {
   if (!supabase) return NextResponse.json({ error: "Supabase not configured" }, { status: 503 });
   const { searchParams } = new URL(req.url);
+
+  // Single-incident lookup (operator ambiguity review drill-down): return the
+  // one matching call row INCLUDING its transcript, or { call: null } if the
+  // incident had no voice call (SOS/Text reports). Kept as an early return so
+  // the aggregate payload below is unaffected.
+  const incidentId = searchParams.get("incident_id");
+  if (incidentId) {
+    const { data, error } = await supabase
+      .from("voice_call_metrics")
+      .select("*")
+      .eq("incident_id", incidentId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ call: data ?? null });
+  }
+
   const locale = searchParams.get("locale"); // 'en-IN' | 'hi-IN' | null
 
   let q = supabase.from("voice_call_metrics").select("*").order("created_at", { ascending: false });

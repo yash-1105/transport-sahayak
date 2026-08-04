@@ -154,17 +154,6 @@ export default function SignalsDashboardPanel() {
         </div>
       </div>
 
-      {/* Local-instance banner */}
-      {data?.source === "signals" && (
-        <div
-          className="flex gap-2.5 items-baseline"
-          style={{ marginTop: 14, background: C.saffronSoftBg, border: `1px solid ${C.saffronSoftBorder}`, borderRadius: 11, padding: "11px 15px", fontSize: 12.5, color: C.saffronSoftText }}
-        >
-          <span style={{ fontWeight: 700, flex: "none" }}>Local instance</span>
-          <span>Shows only what this console has published — not a live network feed.</span>
-        </div>
-      )}
-
       {loading && !data && <p style={{ fontSize: 13, color: C.faint, marginTop: 16 }}>Loading…</p>}
 
       {data?.source === "no_key" && (

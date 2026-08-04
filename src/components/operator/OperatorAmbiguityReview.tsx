@@ -12,9 +12,10 @@ import { C, RADIUS } from "@/lib/design";
 import { useBilingual } from "@/hooks/useI18n";
 import type { DbAccident } from "@/lib/types";
 import {
-  findAmbiguousClusters, AMBIGUITY_DIST_M, AMBIGUITY_TIME_MIN, AMBIGUITY_JACCARD_MIN,
+  findAmbiguousClusters,
   type AmbiguityCluster,
 } from "@/lib/ambiguity";
+import AmbiguityCompareModal from "@/components/operator/AmbiguityCompareModal";
 
 interface ReviewRow { incident_id: string; review_status: string; duplicate_of: string | null }
 
@@ -40,6 +41,8 @@ export default function OperatorAmbiguityReview({
   const [busy, setBusy] = useState<string | null>(null);
   // Per-cluster chosen "keep" incident id (defaults to the earliest).
   const [keepChoice, setKeepChoice] = useState<Record<string, string>>({});
+  // Open compare/detail modal for a cluster (all members side-by-side).
+  const [detailKey, setDetailKey] = useState<string | null>(null);
 
   const loadReviews = useCallback(async () => {
     try {
@@ -104,12 +107,6 @@ export default function OperatorAmbiguityReview({
         </p>
       </div>
 
-      {/* honesty banner */}
-      <div style={{ background: C.saffronSoftBg, border: `1px solid ${C.saffronSoftBorder}`, borderRadius: 11, padding: "10px 14px", fontSize: 12, color: "#8A5A17", lineHeight: 1.5, marginBottom: 16 }}>
-        A review aid — flagging is advisory; you decide. Detection: within {AMBIGUITY_DIST_M} m · {AMBIGUITY_TIME_MIN} min · ≥{Math.round(AMBIGUITY_JACCARD_MIN * 100)}% wording overlap.
-        Ignoring marks the record and de-dups the map, but it does <b>not</b> cancel any dispatch notification already sent (a notification can’t be un-sent), and never deletes the incident.
-      </div>
-
       {clusters.length === 0 && (
         <div style={{ background: C.inset, border: `1px solid ${C.border}`, borderRadius: 11, padding: 18, fontSize: 13, color: C.secondary }}>
           Nothing to review. New clusters appear here when multiple incidents are reported from the same area, close in time, with similar wording.
@@ -129,30 +126,43 @@ export default function OperatorAmbiguityReview({
                 <div style={{ fontSize: 11.5, color: "#8A5A17", marginTop: 3 }}>{cluster.why}</div>
               </div>
 
-              {/* members — choose which to keep */}
+              {/* members — radio picks which to KEEP; the row body opens full
+                  details (kept separate so selecting ≠ opening). */}
               <div style={{ padding: "6px 8px" }}>
                 {cluster.members.map((m) => {
                   const chosen = m.id === keepId;
+                  const isVoice = m.report_mode === "DISPATCHER";
                   return (
-                    <label key={m.id} className="flex items-start" style={{ gap: 10, padding: "9px 10px", borderRadius: 9, cursor: "pointer", background: chosen ? C.blueSoftBg : "transparent" }}>
+                    <div key={m.id} className="flex items-start" style={{ gap: 8, padding: "5px 6px", borderRadius: 9, background: chosen ? C.blueSoftBg : "transparent" }}>
                       <input
                         type="radio"
                         name={`keep-${cluster.key}`}
                         checked={chosen}
                         onChange={() => setKeepChoice((s) => ({ ...s, [cluster.key]: m.id }))}
-                        style={{ marginTop: 3, flex: "none", accentColor: C.blue }}
+                        aria-label={`Keep the ${localeOf(m.report_mode)} report from ${fmtTime(m.created_at)}`}
+                        style={{ marginTop: 9, flex: "none", accentColor: C.blue }}
                       />
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span className="flex items-center" style={{ gap: 8, flexWrap: "wrap" }}>
-                          <span style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>{fmtTime(m.created_at)}</span>
-                          <span style={{ fontSize: 11, color: C.muted }}>{localeOf(m.report_mode)}</span>
-                          {chosen && <span style={{ fontSize: 10, fontWeight: 700, color: C.blueSoftText, background: "#fff", border: `1px solid ${C.blueSoftBorder}`, borderRadius: RADIUS.pill, padding: "1px 8px" }}>KEEP</span>}
+                      <button
+                        type="button"
+                        onClick={() => setDetailKey(cluster.key)}
+                        title="Open full details"
+                        className="flex items-center"
+                        style={{ flex: 1, minWidth: 0, gap: 10, padding: "5px 8px", border: "none", background: "transparent", textAlign: "left", cursor: "pointer", borderRadius: 8 }}
+                      >
+                        <span style={{ flex: 1, minWidth: 0 }}>
+                          <span className="flex items-center" style={{ gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 12.5, fontWeight: 600, color: C.ink }}>{fmtTime(m.created_at)}</span>
+                            <span style={{ fontSize: 11, color: C.muted }}>{localeOf(m.report_mode)}</span>
+                            {isVoice && <span style={{ fontSize: 9.5, fontWeight: 700, color: C.blueSoftText, background: C.blueSoftBg, border: `1px solid ${C.blueSoftBorder}`, borderRadius: RADIUS.pill, padding: "0 6px" }}>TRANSCRIPT</span>}
+                            {chosen && <span style={{ fontSize: 10, fontWeight: 700, color: C.blueSoftText, background: "#fff", border: `1px solid ${C.blueSoftBorder}`, borderRadius: RADIUS.pill, padding: "1px 8px" }}>KEEP</span>}
+                          </span>
+                          <span style={{ display: "block", fontSize: 12.5, color: C.body, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {m.description?.trim() || "(no description)"}
+                          </span>
                         </span>
-                        <span style={{ display: "block", fontSize: 12.5, color: C.body, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {m.description?.trim() || "(no description)"}
-                        </span>
-                      </span>
-                    </label>
+                        <span style={{ fontSize: 11.5, fontWeight: 600, color: C.blue, flex: "none", whiteSpace: "nowrap" }}>Details ›</span>
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -178,6 +188,19 @@ export default function OperatorAmbiguityReview({
           );
         })}
       </div>
+
+      {detailKey && (() => {
+        const c = clusters.find((cl) => cl.key === detailKey);
+        if (!c) return null;
+        return (
+          <AmbiguityCompareModal
+            cluster={c}
+            keepId={keepChoice[c.key] ?? c.members[0].id}
+            showHindi={showHindi}
+            onClose={() => setDetailKey(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

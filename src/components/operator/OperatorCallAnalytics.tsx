@@ -18,13 +18,10 @@ interface Summary {
   abandoned: number;
   errored: number;
   dispatch_ready_rate: number | null;
-  abandonment_rate: number | null;
   ttd_median_ms: number | null;
-  ttd_p90_ms: number | null;
   ttd_mean_ms: number | null;
   ttd_min_ms: number | null;
   ttd_max_ms: number | null;
-  productive_pct: number | null;
   avg_caller_turns: number | null;
   avg_call_duration_ms: number | null;
 }
@@ -129,10 +126,11 @@ export default function OperatorCallAnalytics() {
           <h2 style={{ fontSize: 18, fontWeight: 700, color: C.ink }}>
             Post-Call Analytics{showHindi && <span style={{ fontWeight: 500, color: C.muted, fontSize: 15 }}> · कॉल विश्लेषण</span>}
           </h2>
-          <p style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
-            {o ? `Computed across ${o.total_calls} call${o.total_calls === 1 ? "" : "s"}` : "Voice-dispatcher performance up to dispatch"}
-            {" · time-to-dispatch stops at the dispatch decision (never times the briefing)"}
-          </p>
+          {o && o.total_calls > 0 && (
+            <p style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
+              Computed across {o.total_calls} call{o.total_calls === 1 ? "" : "s"} · measured until help is dispatched (never the briefing)
+            </p>
+          )}
         </div>
         <button onClick={() => void load()} style={{ padding: "8px 14px", border: `1px solid ${C.border}`, borderRadius: 9, background: "#fff", fontSize: 12.5, fontWeight: 600, color: C.blue, cursor: "pointer", flex: "none" }}>
           {loading ? "Refreshing…" : "Refresh"}
@@ -153,14 +151,11 @@ export default function OperatorCallAnalytics() {
 
       {o && o.total_calls > 0 && (
         <>
-          {/* KPI tiles */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 20 }}>
+          {/* KPI tiles — the 3 headline numbers (green on the positive one) */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 20 }}>
             <Tile showHindi={showHindi} value={String(o.total_calls)} label="Total calls" hi="कुल कॉल" />
-            <Tile showHindi={showHindi} value={fmtPct(o.dispatch_ready_rate)} label="Dispatch-ready rate" hi="डिस्पैच दर" accent={C.green} tip="Share of calls that reached the dispatch decision (submitted)." />
-            <Tile showHindi={showHindi} value={fmtDur(o.ttd_median_ms)} label="Median time-to-dispatch" hi="माध्य समय" accent={C.blue} tip="Median ready → dispatch time (dispatched calls only). Excludes the post-submit briefing." />
-            <Tile showHindi={showHindi} value={fmtDur(o.ttd_p90_ms)} label="p90 time-to-dispatch" hi="p90 समय" tip="90th-percentile ready → dispatch time." />
-            <Tile showHindi={showHindi} value={fmtPct(o.productive_pct)} label="Productive turns" hi="उपयोगी टर्न" tip="Share of agent turns whose caller exchange produced a new form field (advanced data collection); the rest are re-asks/clarifications." />
-            <Tile showHindi={showHindi} value={fmtPct(o.abandonment_rate)} label="Abandonment" hi="परित्याग दर" accent={o.abandonment_rate && o.abandonment_rate > 0.25 ? C.red : undefined} tip="Connected calls that ended without dispatch." />
+            <Tile showHindi={showHindi} value={fmtPct(o.dispatch_ready_rate)} label="Completion rate" hi="पूर्णता दर" accent={C.green} tip="Share of calls that reached the point where help is dispatched." />
+            <Tile showHindi={showHindi} value={fmtDur(o.ttd_median_ms)} label="Typical time to dispatch" hi="सामान्य समय" tip="Typical (median) time from ready to dispatch — dispatched calls only, never the briefing." />
           </div>
 
           {/* English vs Hindi comparison */}
@@ -178,12 +173,8 @@ export default function OperatorCallAnalytics() {
                 <tbody>
                   {([
                     { label: "Calls", en: String(en?.total_calls ?? 0), hi: String(hi?.total_calls ?? 0) },
-                    { label: "Dispatch-ready rate", en: fmtPct(en?.dispatch_ready_rate), hi: fmtPct(hi?.dispatch_ready_rate) },
-                    { label: "Median time-to-dispatch", en: fmtDur(en?.ttd_median_ms), hi: fmtDur(hi?.ttd_median_ms) },
-                    { label: "p90 time-to-dispatch", en: fmtDur(en?.ttd_p90_ms), hi: fmtDur(hi?.ttd_p90_ms) },
-                    { label: "Productive turns", en: fmtPct(en?.productive_pct), hi: fmtPct(hi?.productive_pct) },
-                    { label: "Avg caller turns", en: en?.avg_caller_turns == null ? "—" : String(en.avg_caller_turns), hi: hi?.avg_caller_turns == null ? "—" : String(hi.avg_caller_turns) },
-                    { label: "Abandonment", en: fmtPct(en?.abandonment_rate), hi: fmtPct(hi?.abandonment_rate) },
+                    { label: "Completion rate", en: fmtPct(en?.dispatch_ready_rate), hi: fmtPct(hi?.dispatch_ready_rate) },
+                    { label: "Typical time to dispatch", en: fmtDur(en?.ttd_median_ms), hi: fmtDur(hi?.ttd_median_ms) },
                   ]).map((r) => (
                     <tr key={r.label} style={{ borderTop: `1px solid ${C.hairline}` }}>
                       <td style={tdStyle}><span style={{ color: C.body }}>{r.label}</span></td>
@@ -243,7 +234,10 @@ const tdStyle: React.CSSProperties = { padding: "8px", whiteSpace: "nowrap" };
 function DistributionChart({ buckets }: { buckets: HistBucket[] }) {
   const total = buckets.reduce((a, b) => a + b.count, 0);
   const maxCount = Math.max(1, ...buckets.map((b) => b.count));
-  const W = 560, H = 150, padL = 4, padR = 4, padB = 26, padT = 8;
+  // padT reserves headroom for the count label that sits ABOVE each bar — the
+  // tallest bar's top is at y=padT, so padT must clear the label's height or it
+  // clips off the top of the viewBox.
+  const W = 560, H = 150, padL = 4, padR = 4, padB = 26, padT = 22;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
   const bw = innerW / buckets.length;
