@@ -32,6 +32,31 @@ async function postJson<T>(url: string, body: unknown): Promise<T | null> {
   }
 }
 
+// Volunteer ("Suraksha Mitra") registration mirror. Called after the Supabase
+// save succeeds; never awaited by the form, always ends in .catch(). A Signals
+// outage silently no-ops — the Supabase record is the source of truth. On a
+// successful mirror, nudge the Network dashboard so the new responder shows up.
+export interface VolunteerMirror {
+  userId: string;
+  name: string;
+  phone?: string;
+  lat: number;
+  lng: number;
+  locationLabel?: string;
+  coverageRadiusKm?: number;
+  occupation?: string;
+  firstAidTrained?: boolean;
+  firstAidLevel?: string;
+}
+
+export function publishVolunteer(volunteer: VolunteerMirror): void {
+  void postJson<{ source: string }>("/api/signals/publish-volunteer", volunteer)
+    .then((res) => {
+      if (res?.source === "signals") bumpActivity();
+    })
+    .catch(() => {});
+}
+
 export function publishIncident(incident: AccidentReport): void {
   setSync(incident.id, "pending");
   const call = postJson<{ source: string; itemId?: string }>(

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useCallback, useEffect, type ReactNode } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef, type ReactNode } from "react";
 import {
   APIProvider,
   Map,
@@ -39,6 +39,7 @@ import type {
   AmbulanceStation,
   FireStation,
   TowingStation,
+  SurakshaMitra,
   AccidentReport,
   DbPothole,
   DbAccident,
@@ -65,7 +66,7 @@ const SERVICE_LAYERS: {
   hi: string;
   color: string;
   strokeColor: string;
-  source: "google" | "synthetic";
+  source: "google" | "synthetic" | "volunteer";
   defaultOn: boolean;
 }[] = [
   { key: "HOSPITAL",          labelKey: "layerHospitals", hi: "अस्पताल",           color: "#2456A6", strokeColor: "#1B417D", source: "google",    defaultOn: true },
@@ -76,6 +77,10 @@ const SERVICE_LAYERS: {
   { key: "POLICE",            labelKey: "layerPolice",    hi: "पुलिस थाने",        color: "#4F46E5", strokeColor: "#3730B3", source: "google",    defaultOn: false },
   { key: "PHARMACY",          labelKey: "layerPharmacy",  hi: "दवा दुकानें",       color: "#0D9488", strokeColor: "#0A6E64", source: "google",    defaultOn: false },
   { key: "GAS_STATION",       labelKey: "layerFuel",      hi: "पेट्रोल पंप",       color: "#B45309", strokeColor: "#8A3F07", source: "google",    defaultOn: false },
+  // Community volunteer first-responders — REAL user registrations (not sample).
+  // Saffron to read as the brand's "community" tone, distinct from the service
+  // layers. Off by default, like the other secondary layers.
+  { key: "SURAKSHA_MITRA",    labelKey: "layerSurakshaMitra", hi: "सुरक्षा मित्र", color: "#DD8A20", strokeColor: "#B06D14", source: "volunteer", defaultOn: false },
 ];
 
 const ACCIDENT_LAYERS: {
@@ -167,6 +172,17 @@ function GasIcon() {
       <path d="M8.5 5.5L11 4v3.5a1 1 0 002 0V4" stroke="white"
         strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
       <path d="M3.5 6.5h4" stroke="white" strokeWidth="1.4" strokeLinecap="round"/>
+    </svg>
+  );
+}
+function SurakshaMitraIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      {/* Shield with a person silhouette — community helper */}
+      <path d="M7 1L2.2 2.9v3.6c0 2.6 2 4.6 4.8 5.4 2.8-.8 4.8-2.8 4.8-5.4V2.9L7 1z"
+        fill="rgba(255,255,255,0.18)" stroke="white" strokeWidth="1.2" strokeLinejoin="round"/>
+      <circle cx="7" cy="5.4" r="1.35" fill="white"/>
+      <path d="M4.6 9.2c0-1.4 1.1-2.3 2.4-2.3s2.4.9 2.4 2.3z" fill="white"/>
     </svg>
   );
 }
@@ -271,6 +287,7 @@ const LAYER_MARKER: Record<string, { shape: MarkerShape; Icon: () => React.JSX.E
   POLICE:            { shape: "square",   Icon: PoliceIcon },
   PHARMACY:          { shape: "square",   Icon: PharmacyIcon },
   GAS_STATION:       { shape: "square",   Icon: GasIcon },
+  SURAKSHA_MITRA:    { shape: "circle",   Icon: SurakshaMitraIcon },
   POTHOLE:             { shape: "diamond",  Icon: PotholeIcon },
   REPORTED_ACCIDENT:   { shape: "circle",   Icon: ReportedAccidentIcon },
 };
@@ -533,6 +550,45 @@ function ReportedAccidentPopup({ a }: { a: DbAccident }) {
   );
 }
 
+// Suraksha Mitra (community volunteer) popup — PRIVACY-GATED. The public sees
+// only non-sensitive info (first name, coverage area, first-aid yes/no) and a
+// generalised coverage location, never the phone number or precise home pin.
+// Operators additionally see the full name, phone and registration detail.
+// Framing stays honest: this is a registration, not a dispatch/activation.
+const FIRST_AID_LABEL: Record<string, string> = {
+  basic: "Basic first aid", cpr: "CPR trained", professional: "Professional (medic)",
+};
+function SurakshaMitraPopup({ m, isOperator }: { m: SurakshaMitra; isOperator: boolean }) {
+  const firstName = m.name.trim().split(/\s+/)[0] || "Volunteer";
+  const aidLevel = m.firstAidTrained && m.firstAidLevel && m.firstAidLevel !== "none"
+    ? FIRST_AID_LABEL[m.firstAidLevel] ?? null : null;
+  return (
+    <div className="text-xs leading-relaxed min-w-[200px]">
+      <p className="font-semibold text-sm text-gray-900 flex items-center gap-2">
+        {isOperator ? m.name : firstName}
+        <span style={{ fontSize: 9.5, fontWeight: 700, color: "#8A5A17", background: "#FBF1E4", border: "1px solid #EED9B8", borderRadius: 999, padding: "1px 6px", letterSpacing: ".02em" }}>
+          SURAKSHA MITRA
+        </span>
+      </p>
+      <p className="text-gray-500 mb-1">Community volunteer first-responder</p>
+      <table className="w-full text-gray-700">
+        <tbody>
+          <tr><td className="pr-2 text-gray-500 align-top">Coverage</td><td>{m.coverageRadiusKm} km radius{m.locationLabel ? ` · ${m.locationLabel}` : ""}</td></tr>
+          <tr><td className="pr-2 text-gray-500 align-top">First aid</td><td>{m.firstAidTrained ? `Yes${isOperator && aidLevel ? ` · ${aidLevel}` : ""}` : "No"}</td></tr>
+          {isOperator && (
+            <>
+              {m.phone && <tr><td className="pr-2 text-gray-500 align-top">Phone</td><td><a href={`tel:${m.phone}`} className="font-medium text-amber-800 hover:underline">{m.phone}</a></td></tr>}
+              {m.occupation && <tr><td className="pr-2 text-gray-500 align-top">Background</td><td>{m.occupation}</td></tr>}
+            </>
+          )}
+        </tbody>
+      </table>
+      <p className="text-gray-400 text-[10px] mt-2">Registration only — this volunteer has not been dispatched or activated.</p>
+      {isOperator && <p className="text-amber-700 text-[10px] mt-0.5">Operator view — contact details are hidden from the public map.</p>}
+    </div>
+  );
+}
+
 // ── InfoWindow state type ─────────────────────────────────────────────────────
 
 interface MarkerInfo {
@@ -561,6 +617,31 @@ function MapHandle({
     });
     return () => listener.remove();
   }, [map, onCenter]);
+  return null;
+}
+
+// Coverage-zone circle for the selected volunteer (imperative google.maps.Circle
+// via useMap — same pattern as AccidentDensityLayer). Saffron to match the
+// volunteer layer; purely a visual of the registered coverage radius.
+function VolunteerZoneCircle({ zone }: { zone: { lat: number; lng: number; radiusKm: number } }) {
+  const map = useMap();
+  const circleRef = useRef<google.maps.Circle | null>(null);
+  useEffect(() => {
+    if (!map) return;
+    circleRef.current = new google.maps.Circle({
+      map,
+      center: { lat: zone.lat, lng: zone.lng },
+      radius: zone.radiusKm * 1000,
+      strokeColor: "#DD8A20",
+      strokeOpacity: 0.7,
+      strokeWeight: 1.5,
+      fillColor: "#DD8A20",
+      fillOpacity: 0.1,
+      clickable: false,
+      zIndex: 5,
+    });
+    return () => { circleRef.current?.setMap(null); circleRef.current = null; };
+  }, [map, zone.lat, zone.lng, zone.radiusKm]);
   return null;
 }
 
@@ -606,6 +687,9 @@ export default function MapView() {
   const [pinnedLocation, setPinnedLocation] = useState<GeoPoint | null>(null);
   const [pinnedLabel, setPinnedLabel] = useState("");
   const [openInfo, setOpenInfo] = useState<MarkerInfo | null>(null);
+  // The selected volunteer's coverage zone (drawn as a circle while their popup
+  // is open); cleared when the InfoWindow closes.
+  const [selectedZone, setSelectedZone] = useState<{ lat: number; lng: number; radiusKm: number } | null>(null);
   // On mobile the floating panel becomes a bottom drawer — start it collapsed so
   // the map, FAB and timeline pill are visible; the ☰ button re-opens it. Safe to
   // read matchMedia in the initializer: MapView is a client-only (ssr:false)
@@ -656,6 +740,9 @@ export default function MapView() {
   const ambulances = responders.ambulanceStations;
   const fireStations = responders.fireStations;
   const towingStations = responders.towingStations;
+  // Community volunteers — REAL registrations mirrored from the responder
+  // registry (not sample). Layer + popup are privacy-gated (Phase 4).
+  const surakshaMitras = responders.surakshaMitras;
   const { potholes, loading: potholesLoading, error: potholesError, refetch: refetchPotholes } = usePotholes();
   const { accidents: reportedAccidents, refetch: refetchAccidents } = useAccidents();
 
@@ -714,6 +801,8 @@ export default function MapView() {
       ? fireStations.length
       : l.key === "TOWING_STATION"
       ? towingStations.length
+      : l.key === "SURAKSHA_MITRA"
+      ? surakshaMitras.length
       : null;
     return {
       key: l.key,
@@ -762,6 +851,15 @@ export default function MapView() {
           items.push({ key: w.id, name: w.name, meta: w.district, color: l.color, lat: w.lat, lng: w.lng, distanceLabel: "",
             onSelect: () => { focusOn(w.lat, w.lng); setOpenInfo({ position: { lat: w.lat, lng: w.lng }, content: <TowingStationPopup w={w} /> }); } });
         }
+      } else if (l.key === "SURAKSHA_MITRA") {
+        for (const m of surakshaMitras) {
+          // Privacy: non-operators see first name only, and search matches that
+          // (never leak the full name via the list to the public).
+          const displayName = isOperator ? m.name : (m.name.trim().split(/\s+/)[0] || "Volunteer");
+          if (!matchesSearch(displayName)) continue;
+          items.push({ key: m.id, name: displayName, meta: m.locationLabel || `${m.coverageRadiusKm} km zone`, color: l.color, lat: m.lat, lng: m.lng, distanceLabel: "",
+            onSelect: () => { focusOn(m.lat, m.lng); setSelectedZone({ lat: m.lat, lng: m.lng, radiusKm: m.coverageRadiusKm }); setOpenInfo({ position: { lat: m.lat, lng: m.lng }, content: <SurakshaMitraPopup m={m} isOperator={isOperator} /> }); } });
+        }
       }
     }
     items.sort(
@@ -772,7 +870,7 @@ export default function MapView() {
       distanceLabel: `${haversineKmLocal(mapCenter, { lat: it.lat, lng: it.lng }).toFixed(1)} km`,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [places, ambulances, fireStations, towingStations, activeServices, query, mapCenter, focusOn]);
+  }, [places, ambulances, fireStations, towingStations, surakshaMitras, isOperator, activeServices, query, mapCenter, focusOn]);
 
   // ── Floating-panel: report cards (accidents tab) ────────────────────────────
   const reportCards: ReportCardData[] = useMemo(() => {
@@ -984,6 +1082,26 @@ export default function MapView() {
                   }))}
                 />
               )}
+
+              {/* Suraksha Mitra volunteers — real registrations, privacy-gated popup.
+                  Marker title is first-name only so non-operators don't get the full
+                  name via the native map tooltip. */}
+              {activeServices.has("SURAKSHA_MITRA") && (
+                <ClusteredLayer
+                  color={LAYER_COLOR.SURAKSHA_MITRA.color}
+                  items={surakshaMitras
+                    .filter((m) => matchesSearch(isOperator ? m.name : (m.name.trim().split(/\s+/)[0] || "Volunteer")))
+                    .map((m) => ({
+                      key: m.id, position: { lat: m.lat, lng: m.lng },
+                      title: isOperator ? m.name : (m.name.trim().split(/\s+/)[0] || "Suraksha Mitra"),
+                      onClick: () => { setSelectedZone({ lat: m.lat, lng: m.lng, radiusKm: m.coverageRadiusKm }); setOpenInfo({ position: { lat: m.lat, lng: m.lng }, content: <SurakshaMitraPopup m={m} isOperator={isOperator} /> }); },
+                      pin: <LayerMarker layerKey="SURAKSHA_MITRA" color={LAYER_COLOR.SURAKSHA_MITRA.color} strokeColor={LAYER_COLOR.SURAKSHA_MITRA.strokeColor} />,
+                    }))}
+                />
+              )}
+
+              {/* Selected volunteer's coverage-radius zone. */}
+              {selectedZone && <VolunteerZoneCircle zone={selectedZone} />}
             </>
           )}
 
@@ -1099,7 +1217,7 @@ export default function MapView() {
 
           {/* ── InfoWindow ────────────────────────────────────────────────── */}
           {openInfo && (
-            <InfoWindow position={openInfo.position} onClose={() => setOpenInfo(null)} shouldFocus={false}>
+            <InfoWindow position={openInfo.position} onClose={() => { setOpenInfo(null); setSelectedZone(null); }} shouldFocus={false}>
               {openInfo.content}
             </InfoWindow>
           )}

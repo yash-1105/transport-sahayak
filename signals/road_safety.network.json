@@ -150,7 +150,7 @@
             },
             "Facility Type": {
               "type": "string",
-              "enum": ["HOSPITAL", "POLICE", "AMBULANCE_STATION", "FIRE_STATION", "TOWING_STATION", "MECHANIC", "PHARMACY", "FUEL_STATION"]
+              "enum": ["HOSPITAL", "POLICE", "AMBULANCE_STATION", "FIRE_STATION", "TOWING_STATION", "MECHANIC", "PHARMACY", "FUEL_STATION", "SURAKSHA_MITRA"]
             },
             "District": {
               "type": "string"
@@ -177,7 +177,7 @@
             },
             "Data Origin": {
               "type": "string",
-              "enum": ["curated", "synthetic", "google_places"]
+              "enum": ["curated", "synthetic", "google_places", "volunteer"]
             },
             "Place ID": {
               "type": "string"

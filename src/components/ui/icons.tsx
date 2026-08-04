@@ -44,6 +44,31 @@ export function MapPinIcon({ size = 15, className, strokeWidth = 2, style }: Ico
   );
 }
 
+/** Crosshair / locate — GPS auto-detect. */
+export function CrosshairIcon({ size = 16, className, strokeWidth = 2, style }: IconProps) {
+  return (
+    <svg {...base(size, className, style)} strokeWidth={strokeWidth}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="2.5" />
+      <line x1="12" y1="1.5" x2="12" y2="5" />
+      <line x1="12" y1="19" x2="12" y2="22.5" />
+      <line x1="1.5" y1="12" x2="5" y2="12" />
+      <line x1="19" y1="12" x2="22.5" y2="12" />
+    </svg>
+  );
+}
+
+/** Folded map — pick a point on the map. */
+export function MapIcon({ size = 16, className, strokeWidth = 2, style }: IconProps) {
+  return (
+    <svg {...base(size, className, style)} strokeWidth={strokeWidth}>
+      <path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z" />
+      <line x1="9" y1="4" x2="9" y2="18" />
+      <line x1="15" y1="6" x2="15" y2="20" />
+    </svg>
+  );
+}
+
 export function MicIcon({ size = 24, className, strokeWidth = 2, style }: IconProps) {
   return (
     <svg {...base(size, className, style)} strokeWidth={strokeWidth}>

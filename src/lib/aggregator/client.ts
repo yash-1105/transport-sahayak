@@ -16,6 +16,7 @@ import type {
   GooglePlaceType,
   Hospital,
   PoliceStation,
+  SurakshaMitra,
   TowingStation,
 } from "@/lib/types";
 import {
@@ -205,6 +206,28 @@ export function toTowingStation(it: ResponderItem): TowingStation {
     ...toStationBase(it),
     vehicleTypes: (a.vehicleTypes as string[] | undefined) ?? [],
   } as TowingStation;
+}
+
+/** Volunteer ("Suraksha Mitra") item → the app shape. A REAL registration
+ *  (Data Origin "volunteer"), so sample is false — never the sample-labelling
+ *  contract the synthetic/curated mappers pin. Phone is carried through but is
+ *  a private field; the UI gates it to operators only (never on the public map). */
+export function toSurakshaMitra(it: ResponderItem): SurakshaMitra {
+  const a = attrs(it);
+  const l = it.item_locations?.[0];
+  return {
+    id: itemFacilityId(it),
+    sample: false,
+    name: s(it.item_state["Facility Name"]),
+    lat: loc(it).lat,
+    lng: loc(it).lng,
+    locationLabel: s(a.locationLabel) || s(l?.label),
+    coverageRadiusKm: typeof a.coverageRadiusKm === "number" ? a.coverageRadiusKm : 8,
+    phone: s(it.item_state["Contact Number"]) || s(a.phone),
+    occupation: s(a.occupation),
+    firstAidTrained: a.firstAidTrained === true,
+    firstAidLevel: s(a.firstAidLevel),
+  } satisfies SurakshaMitra;
 }
 
 /** Google-synced item → the GooglePlace shape the map layers already render.

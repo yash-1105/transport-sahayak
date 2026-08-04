@@ -192,6 +192,7 @@ export type Database = {
           base_lng: number | null
           blood_group: string | null
           city: string | null
+          coverage_radius_km: number | null
           created_at: string | null
           district: string | null
           email: string | null
@@ -201,6 +202,7 @@ export type Database = {
           good_samaritan_consent: boolean | null
           highway: string | null
           languages: string | null
+          location_label: string | null
           occupation: string | null
           patrol_stretch: string | null
           phone: string
@@ -214,6 +216,7 @@ export type Database = {
           base_lng?: number | null
           blood_group?: string | null
           city?: string | null
+          coverage_radius_km?: number | null
           created_at?: string | null
           district?: string | null
           email?: string | null
@@ -223,6 +226,7 @@ export type Database = {
           good_samaritan_consent?: boolean | null
           highway?: string | null
           languages?: string | null
+          location_label?: string | null
           occupation?: string | null
           patrol_stretch?: string | null
           phone: string
@@ -236,6 +240,7 @@ export type Database = {
           base_lng?: number | null
           blood_group?: string | null
           city?: string | null
+          coverage_radius_km?: number | null
           created_at?: string | null
           district?: string | null
           email?: string | null
@@ -245,6 +250,7 @@ export type Database = {
           good_samaritan_consent?: boolean | null
           highway?: string | null
           languages?: string | null
+          location_label?: string | null
           occupation?: string | null
           patrol_stretch?: string | null
           phone?: string

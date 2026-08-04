@@ -14,6 +14,7 @@ import type {
   GooglePlaceType,
   Hospital,
   PoliceStation,
+  SurakshaMitra,
   TowingStation,
 } from "@/lib/types";
 
@@ -58,6 +59,7 @@ export interface RespondersData {
   ambulanceStations: AmbulanceStation[];
   fireStations: FireStation[];
   towingStations: TowingStation[];
+  surakshaMitras: SurakshaMitra[];
 }
 
 const EMPTY_DATA: RespondersData = {
@@ -66,6 +68,7 @@ const EMPTY_DATA: RespondersData = {
   ambulanceStations: [],
   fireStations: [],
   towingStations: [],
+  surakshaMitras: [],
 };
 
 export function useResponders() {
@@ -90,6 +93,7 @@ export function useResponders() {
           ambulanceStations: payload.ambulanceStations ?? [],
           fireStations: payload.fireStations ?? [],
           towingStations: payload.towingStations ?? [],
+          surakshaMitras: payload.surakshaMitras ?? [],
         });
         if (payload.source === "unavailable" || payload.source === "no_key") setHasError(true);
       } catch (err) {

@@ -82,6 +82,7 @@ export const strings = {
   layerPolice:      { EN: "Police Stations",     HI: "पुलिस थाने",           AS: "আৰক্ষী থানা" },
   layerPharmacy:    { EN: "Pharmacies",          HI: "फ़ार्मेसी",             AS: "ঔষধালয়" },
   layerFuel:        { EN: "Fuel Stations",       HI: "ईंधन केंद्र",           AS: "ইন্ধন কেন্দ্ৰ" },
+  layerSurakshaMitra: { EN: "Suraksha Mitras",   HI: "सुरक्षा मित्र",         AS: "সুৰক্ষা মিত্ৰ" },
   layerBlackspots:  { EN: "Accident Hotspots",   HI: "दुर्घटना क्षेत्र",    AS: "দুৰ্ঘটনা অঞ্চল" },
   layerPotholes:    { EN: "Road Defects / Potholes", HI: "सड़क दोष / गड्ढे", AS: "পথৰ ত্ৰুটি / গাঁত" },
   layerReportedAccidents: { EN: "Reported Accidents", HI: "रिपोर्ट की गई दुर्घटनाएं", AS: "প্ৰতিবেদিত দুৰ্ঘটনা" },

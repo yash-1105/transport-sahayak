@@ -19,7 +19,8 @@ export type ServiceLayerType =
   | "MECHANIC"
   | "POLICE"
   | "PHARMACY"
-  | "GAS_STATION";
+  | "GAS_STATION"
+  | "SURAKSHA_MITRA";
 
 // ── Google Places (live, not sample) ─────────────────────────────────────────
 
@@ -126,6 +127,25 @@ export interface PoliceStation {
   circle: string;
   phone: string;
   emergency: string;
+}
+
+// Community volunteer first-responder ("Suraksha Mitra") — a REAL user
+// registration mirrored into the responder registry, NOT sample data. Personal
+// contact details (phone) are private/operator-only; the public map exposes
+// only non-sensitive coverage info (first name + coverage area + first-aid).
+// This is a registration record — nothing here dispatches or activates anyone.
+export interface SurakshaMitra {
+  id: string;
+  sample: false;
+  name: string;
+  lat: number;
+  lng: number;
+  locationLabel: string;   // reverse-geocoded base-location label
+  coverageRadiusKm: number; // coverage/notification zone radius around the base
+  phone: string;           // PRIVATE — never shown to non-operators
+  occupation: string;
+  firstAidTrained: boolean;
+  firstAidLevel: string;
 }
 
 export interface Blackspot {

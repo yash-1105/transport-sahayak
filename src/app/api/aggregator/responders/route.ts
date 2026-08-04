@@ -27,6 +27,7 @@ import {
   toGooglePlace,
   toHospital,
   toPoliceStation,
+  toSurakshaMitra,
   toTowingStation,
   type ResponderItem,
 } from "@/lib/aggregator/client";
@@ -44,6 +45,7 @@ interface RespondersPayload {
   ambulanceStations: ReturnType<typeof toAmbulanceStation>[];
   fireStations: ReturnType<typeof toFireStation>[];
   towingStations: ReturnType<typeof toTowingStation>[];
+  surakshaMitras: ReturnType<typeof toSurakshaMitra>[];
   places: Record<GooglePlaceType, GooglePlace[]>;
 }
 
@@ -66,6 +68,7 @@ function buildPayload(items: ResponderItem[], forMatching: boolean): RespondersP
     ambulanceStations: [],
     fireStations: [],
     towingStations: [],
+    surakshaMitras: [],
     places: {
       hospital: [],
       police: [],
@@ -92,6 +95,7 @@ function buildPayload(items: ResponderItem[], forMatching: boolean): RespondersP
       case "AMBULANCE_STATION": payload.ambulanceStations.push(toAmbulanceStation(it)); break;
       case "FIRE_STATION": payload.fireStations.push(toFireStation(it)); break;
       case "TOWING_STATION": payload.towingStations.push(toTowingStation(it)); break;
+      case "SURAKSHA_MITRA": payload.surakshaMitras.push(toSurakshaMitra(it)); break;
     }
   }
 
@@ -117,7 +121,7 @@ export async function GET(req: NextRequest) {
   if (!aggregatorEnabled()) {
     return NextResponse.json({
       source: "no_key",
-      hospitals: [], policeStations: [], ambulanceStations: [], fireStations: [], towingStations: [],
+      hospitals: [], policeStations: [], ambulanceStations: [], fireStations: [], towingStations: [], surakshaMitras: [],
       places: EMPTY_PLACES,
     });
   }
@@ -135,7 +139,7 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({
       source: "unavailable",
-      hospitals: [], policeStations: [], ambulanceStations: [], fireStations: [], towingStations: [],
+      hospitals: [], policeStations: [], ambulanceStations: [], fireStations: [], towingStations: [], surakshaMitras: [],
       places: EMPTY_PLACES,
     });
   }
