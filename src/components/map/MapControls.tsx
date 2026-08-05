@@ -38,10 +38,15 @@ export default function MapControls() {
       className="absolute right-4 top-4 z-[500] flex flex-col overflow-hidden"
       style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 10, boxShadow: SHADOW.mapControl }}
     >
-      <button style={{ ...btn, fontSize: 17 }} onClick={() => zoom(1)} aria-label="Zoom in">+</button>
-      <div style={hairline} />
-      <button style={{ ...btn, fontSize: 17 }} onClick={() => zoom(-1)} aria-label="Zoom out">−</button>
-      <div style={hairline} />
+      {/* Zoom +/− are hidden on mobile — pinch-to-zoom is the norm on phones, so
+          the control shrinks to just the reset-north (N) button there. The full
+          +/−/N stack stays on ≥sm (desktop). */}
+      <div className="hidden sm:flex sm:flex-col">
+        <button style={{ ...btn, fontSize: 17 }} onClick={() => zoom(1)} aria-label="Zoom in">+</button>
+        <div style={hairline} />
+        <button style={{ ...btn, fontSize: 17 }} onClick={() => zoom(-1)} aria-label="Zoom out">−</button>
+        <div style={hairline} />
+      </div>
       <button style={{ ...btn, fontSize: 12, fontWeight: 600, color: C.blue }} onClick={resetNorth} aria-label="Reset north">N</button>
     </div>
   );

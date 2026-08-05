@@ -141,8 +141,11 @@ export default function AuthLanding({
             <circle className="lg-loop" r={3.4} fill="#E8862B" style={{ offsetPath: `path('${ROUTE_PATH}')`, animation: "lgTravel 7s 3.2s linear infinite" } as React.CSSProperties} />
           </svg>
 
-          {/* floating stat chips */}
-          <div style={{ position: "absolute", right: 0, top: 24, display: "flex", flexDirection: "column", gap: 10, animation: "lgUp .7s 1.2s ease both" }}>
+          {/* floating stat chips — anchored to the empty BOTTOM-right of the
+              graphic (the road runs Delhi ↘ bottom-left → Dehradun ↗ top-right,
+              so the bottom-right is clear) to avoid overlapping the Dehradun /
+              Saharanpur city labels near the top. */}
+          <div style={{ position: "absolute", right: 0, bottom: 0, display: "flex", flexDirection: "column", gap: 10, animation: "lgUp .7s 1.2s ease both" }}>
             <Chip dot="#4CAF7D" delay="0s">Highway helpline <b style={{ fontVariantNumeric: "tabular-nums" }}>1033</b></Chip>
             <Chip dot="#E8862B" delay="1.4s">Severity assessed in seconds</Chip>
             <Chip dot="#6E9BE0" delay="2.8s">EN · हिंदी voice reporting</Chip>
@@ -285,45 +288,35 @@ export default function AuthLanding({
             <p style={{ fontSize: 11, color: "#B4AFA2", textAlign: "center", margin: "22px 0 0", lineHeight: 1.5 }}>
               Prototype — accounts store a private safety profile behind sign-in. Emergency reporting never requires an account.
             </p>
+
+            {/* Staff access — discreet links at the very BOTTOM of the form flow,
+                so they scroll with the content and never overlap an input. (They
+                used to be fixed to the screen corners, which sat on top of the
+                password field on a phone.) */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, margin: "20px 0 2px" }}>
+              <button
+                className="lg-operator-link" onClick={() => setOperatorOpen(true)} title="Operator access"
+                style={{ display: "flex", alignItems: "center", gap: 5, background: "transparent", color: "#B4AFA2", fontSize: 11, fontWeight: 500, cursor: "pointer", padding: 4, lineHeight: 1 }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="11" width="18" height="10" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+                Operator access
+              </button>
+              <span style={{ width: 3, height: 3, borderRadius: "50%", background: "#D8D3C8", flex: "none" }} />
+              <button
+                className="lg-operator-link" onClick={() => setAdminOpen(true)} title="Administrator access"
+                style={{ display: "flex", alignItems: "center", gap: 5, background: "transparent", color: "#B4AFA2", fontSize: 11, fontWeight: 500, cursor: "pointer", padding: 4, lineHeight: 1 }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                </svg>
+                Administrator access
+              </button>
+            </div>
           </div>
         </div>
       </main>
-
-      {/* Quiet operator ("admin") entry — deliberately low-visibility, corner. */}
-      <button
-        className="lg-operator-link"
-        onClick={() => setOperatorOpen(true)}
-        title="Operator access"
-        style={{
-          position: "fixed", right: 16, bottom: "max(12px, env(safe-area-inset-bottom))", zIndex: 5,
-          display: "flex", alignItems: "center", gap: 6,
-          background: "transparent", color: "#B4AFA2", fontSize: 11, fontWeight: 500,
-          cursor: "pointer", padding: 6, lineHeight: 1,
-        }}
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="11" width="18" height="10" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
-        </svg>
-        Operator access
-      </button>
-
-      {/* Even quieter administrator entry (bottom-left corner). */}
-      <button
-        className="lg-operator-link"
-        onClick={() => setAdminOpen(true)}
-        title="Administrator access"
-        style={{
-          position: "fixed", left: 16, bottom: "max(12px, env(safe-area-inset-bottom))", zIndex: 5,
-          display: "flex", alignItems: "center", gap: 6,
-          background: "transparent", color: "#B4AFA2", fontSize: 11, fontWeight: 500,
-          cursor: "pointer", padding: 6, lineHeight: 1,
-        }}
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-        </svg>
-        Administrator access
-      </button>
     </div>
 
     {operatorOpen && <OperatorSignIn onClose={() => setOperatorOpen(false)} />}

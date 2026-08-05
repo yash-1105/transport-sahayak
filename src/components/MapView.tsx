@@ -12,7 +12,6 @@ import { useMap } from "@vis.gl/react-google-maps";
 import { useRoutingStore, type SimulatedVehicleKind } from "@/store/routingStore";
 import { useEventLog } from "@/store/eventLog";
 import TimelinePanel from "@/components/TimelinePanel";
-import LanguageToggle from "@/components/LanguageToggle";
 import AuthControl from "@/components/auth/AuthControl";
 import SafetyProfileSheet from "@/components/auth/SafetyProfileSheet";
 import { useIsOperator, useAuthStore } from "@/store/authStore";
@@ -1002,12 +1001,15 @@ export default function MapView() {
           >
             <ShieldCrossIcon size={19} style={{ color: "#fff" }} />
           </div>
-          <div className="min-w-0" style={{ lineHeight: 1.15 }}>
+          {/* Name + subtitle hidden on mobile — the logo tile carries the brand
+              on small/standalone screens, freeing the row (the name was clipping
+              to "Transpor…"). Restored on ≥sm. */}
+          <div className="min-w-0 hidden sm:block" style={{ lineHeight: 1.15 }}>
             <div style={{ fontSize: 15, fontWeight: 600, color: "#fff" }} className="truncate">
               {t("appName")}
               {showHindi && <span style={{ fontWeight: 500, color: "#93A3BE", fontSize: 13 }}> · परिवहन सहायक</span>}
             </div>
-            <div className="truncate hidden sm:block" style={{ fontSize: 11, color: C.onNavySub }}>
+            <div className="truncate" style={{ fontSize: 11, color: C.onNavySub }}>
               Delhi–Dehradun Expressway — Road Accident First Response
             </div>
           </div>
@@ -1041,11 +1043,12 @@ export default function MapView() {
           })}
         </nav>
 
-        {/* Account + Language toggle + PWA install */}
+        {/* Account + PWA install. The EN/हिं toggle was removed — the whole UI is
+            already bilingual, so it was redundant and cost header width. Voice
+            language is still chosen in the voice flow. */}
         <div className="flex items-center gap-1.5 sm:gap-2 flex-none" style={{ marginLeft: "auto" }}>
           <InstallPWA />
           <AuthControl />
-          <LanguageToggle />
         </div>
       </header>
 
@@ -1326,28 +1329,28 @@ export default function MapView() {
       {tab !== "NETWORK" && !isPickingPin && (
         <button
           onClick={() => setTimelineOpen(true)}
-          className="absolute z-[500] flex items-center gap-[7px]"
+          className="absolute z-[500] flex items-center gap-[6px]"
           style={{
             left: panelOpen ? 368 : 16,
-            bottom: 14,
+            bottom: "calc(14px + env(safe-area-inset-bottom))",
             background: "#fff",
             border: `1px solid ${C.border}`,
             borderRadius: 99,
-            padding: "8px 14px",
-            fontSize: 12.5,
+            padding: "6px 12px",
+            fontSize: 12,
             fontWeight: 500,
             color: C.body,
             cursor: "pointer",
             boxShadow: SHADOW.mapControl,
           }}
         >
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.blue, display: "inline-block" }} />
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.blue, display: "inline-block" }} />
           Timeline
           {showHindi && <span style={{ color: C.muted }}>· समयरेखा</span>}
           {eventCount > 0 && (
             <span
               className="inline-flex items-center justify-center"
-              style={{ width: 16, height: 16, borderRadius: "50%", background: C.navy800, color: "#fff", fontSize: 9, fontWeight: 700 }}
+              style={{ width: 15, height: 15, borderRadius: "50%", background: C.navy800, color: "#fff", fontSize: 9, fontWeight: 700 }}
             >
               {eventCount > 9 ? "9+" : eventCount}
             </span>
@@ -1361,34 +1364,36 @@ export default function MapView() {
           className="absolute z-[500] flex flex-col items-end"
           style={{ right: 22, bottom: "calc(22px + env(safe-area-inset-bottom))", gap: 12 }}
         >
-          {/* SOS — emergency voice dispatch. The red pulsing CTA (now the priority). */}
+          {/* SOS — emergency voice dispatch. The red pulsing CTA (priority),
+              stays big; icon + "SOS" only (no Hindi text — it's a universal label). */}
           <button
             onClick={() => setSosLangChoice(true)}
             aria-label="SOS — talk to the voice dispatcher"
             className="flex items-center gap-2"
             style={{
               background: CTA_GRADIENT, color: "#fff", border: "none", borderRadius: 99,
-              padding: "13px 22px", fontSize: 15, fontWeight: 800, letterSpacing: ".02em",
+              padding: "13px 22px", fontSize: 15, fontWeight: 800, letterSpacing: ".04em",
               cursor: "pointer", boxShadow: SHADOW.fab, animation: "tsPulse 2.6s infinite",
             }}
           >
             <MicIcon size={18} />
-            SOS{showHindi && <span style={{ fontWeight: 600, opacity: 0.9 }}> · एसओएस</span>}
+            SOS
           </button>
 
-          {/* Report Incident — the full report sheet. Secondary (navy, no pulse). */}
+          {/* Report Incident — the full report sheet. Secondary (navy, no pulse),
+              a touch smaller than SOS. */}
           <button
             onClick={openReport}
-            className="flex items-center gap-2.5"
+            className="flex items-center gap-2"
             style={{
               background: C.navy800, color: "#fff", border: "none", borderRadius: 99,
-              padding: "12px 20px", fontSize: 13.5, fontWeight: 700, cursor: "pointer",
+              padding: "9px 15px", fontSize: 13, fontWeight: 700, cursor: "pointer",
               boxShadow: SHADOW.floatBtn,
             }}
           >
             <span
               className="inline-flex items-center justify-center"
-              style={{ width: 19, height: 19, borderRadius: "50%", background: "rgba(255,255,255,.18)", fontSize: 14, fontWeight: 600 }}
+              style={{ width: 18, height: 18, borderRadius: "50%", background: "rgba(255,255,255,.18)", fontSize: 13, fontWeight: 600 }}
             >
               +
             </span>

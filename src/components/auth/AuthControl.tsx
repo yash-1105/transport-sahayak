@@ -50,9 +50,10 @@ export default function AuthControl() {
           onClick={() => exitGuest("signin")}
           aria-label="Sign in"
           title="Sign in"
-          // Icon-only + compact on small screens (the label text is what eats
-          // header width); the "Sign in · साइन इन" label returns at ≥sm.
-          className="flex items-center justify-center py-1.5 px-2 sm:px-3"
+          // Labelled pill on all sizes — with the app name + language toggle
+          // gone from the mobile header there's room, and a labelled control
+          // reads better than a bare icon.
+          className="flex items-center justify-center py-1.5 px-3"
           style={{
             gap: 6,
             borderRadius: RADIUS.pill,
@@ -67,7 +68,7 @@ export default function AuthControl() {
           }}
         >
           <UserIcon size={15} />
-          <span className="hidden sm:inline">Sign in{showHindi && <span style={{ color: "#C6D0E2", fontWeight: 500 }}> · साइन इन</span>}</span>
+          <span>Sign in{showHindi && <span style={{ color: "#C6D0E2", fontWeight: 500 }}> · साइन इन</span>}</span>
         </button>
       ) : (
         // ── Signed in: chip + dropdown ──
