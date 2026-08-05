@@ -1,7 +1,7 @@
 "use client";
 import React, { useState } from "react";
 import { C, RADIUS, CTA_GRADIENT, BRAND_GRADIENT, SHADOW } from "@/lib/design";
-import { ShieldCrossIcon, UserIcon } from "@/components/ui/icons";
+import { ShieldCrossIcon, UserIcon, MicIcon } from "@/components/ui/icons";
 import { useBilingual } from "@/hooks/useI18n";
 import { useAuthStore } from "@/store/authStore";
 import AuthLanding from "@/components/auth/AuthLanding";
@@ -27,9 +27,17 @@ export default function PWAHome() {
     ((user?.user_metadata?.full_name as string | undefined)?.trim() || user?.email || "").trim();
   const initial = (displayName || "?").charAt(0).toUpperCase();
 
-  // Report Incident → first ask which language the voice dispatcher should speak.
-  function handleReport() {
+  // SOS → first ask which language the voice dispatcher should speak.
+  function handleSos() {
     setChooseLang(true);
+  }
+  // Report Incident → open the full report sheet (manual/describe form) in the
+  // app, mirroring the map's navy "Report Incident" FAB. Emergencies are never
+  // blocked, so a signed-out user is dropped into guest mode first.
+  function startReport() {
+    if (!user) continueAsGuest();
+    setLaunchIntent("report");
+    enterPwa();
   }
   // Language chosen → into the voice dispatcher in that language. Emergencies
   // must never be blocked, so a signed-out user is dropped into guest mode first.
@@ -121,28 +129,47 @@ export default function PWAHome() {
               Road accident first response
             </div>
 
+            {/* SOS — emergency voice dispatch. The big red pulsing CTA (primary),
+                matching the map's SOS FAB. */}
             <button
-              onClick={handleReport}
-              aria-label="Report Incident"
+              onClick={handleSos}
+              aria-label="SOS — talk to the voice dispatcher"
               className="flex flex-col items-center justify-center active:scale-95 transition-transform"
               style={{
-                width: "min(72vw, 258px)", aspectRatio: "1", borderRadius: "50%",
+                width: "min(64vw, 224px)", aspectRatio: "1", borderRadius: "50%",
                 border: "none", cursor: "pointer", color: "#fff", gap: 8,
                 background: CTA_GRADIENT, boxShadow: "0 18px 44px rgba(198,54,44,.34)",
+                animation: "tsPulse 2.6s infinite",
               }}
             >
-              <AlertGlyph />
-              <span style={{ fontSize: 21, fontWeight: 800, letterSpacing: "-.01em" }}>Report Incident</span>
-              {showHindi && <span style={{ fontSize: 14, fontWeight: 600, opacity: 0.92 }}>रिपोर्ट करें</span>}
+              <MicIcon size={40} />
+              <span style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.01em" }}>
+                SOS{showHindi && <span style={{ fontSize: 17, fontWeight: 600, opacity: 0.92 }}> · एसओएस</span>}
+              </span>
             </button>
 
             <p style={{ fontSize: 12.5, color: C.secondary, textAlign: "center", maxWidth: 300, lineHeight: 1.5 }}>
               Tap to talk to the AI dispatcher — it takes your report in English or Hindi.
             </p>
 
+            {/* Report Incident — the full report sheet (secondary, navy), matching
+                the map's second FAB. */}
+            <button
+              onClick={startReport}
+              className="flex items-center justify-center active:scale-95 transition-transform"
+              style={{
+                gap: 9, width: "min(86vw, 320px)", padding: "13px 20px", borderRadius: 14,
+                background: C.navy800, color: "#fff", border: "none", cursor: "pointer",
+                fontSize: 15, fontWeight: 700, boxShadow: SHADOW.floatBtn,
+              }}
+            >
+              <span className="inline-flex items-center justify-center flex-none" style={{ width: 21, height: 21, borderRadius: "50%", background: "rgba(255,255,255,.18)", fontSize: 15, fontWeight: 600 }}>+</span>
+              Report Incident{showHindi && <span style={{ fontWeight: 500, opacity: 0.82 }}> · रिपोर्ट करें</span>}
+            </button>
+
             <button
               onClick={handleDashboard}
-              style={{ background: "transparent", border: "none", color: C.blue, fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "8px 14px" }}
+              style={{ background: "transparent", border: "none", color: C.blue, fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "6px 14px" }}
             >
               View dashboard{showHindi && <span style={{ color: C.muted, fontWeight: 500 }}> · डैशबोर्ड देखें</span>} ›
             </button>
@@ -188,16 +215,5 @@ function LangButton({ title, sub, onClick, primary }: { title: string; sub: stri
       <span style={{ fontSize: 17, fontWeight: 700 }}>{title}</span>
       <span style={{ fontSize: 12, color: primary ? "rgba(255,255,255,.85)" : C.muted, fontWeight: 500 }}>{sub}</span>
     </button>
-  );
-}
-
-// White alert glyph for the report button (matches the incident-pin symbol).
-function AlertGlyph() {
-  return (
-    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M12 3.2 22 20.5H2L12 3.2z" fill="rgba(255,255,255,.16)" stroke="#fff" strokeWidth={1.8} strokeLinejoin="round" />
-      <path d="M12 9.5v4.5" stroke="#fff" strokeWidth={2.2} strokeLinecap="round" />
-      <circle cx="12" cy="17" r="1.3" fill="#fff" />
-    </svg>
   );
 }

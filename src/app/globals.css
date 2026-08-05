@@ -64,23 +64,27 @@ body {
 
 /* ── Responsive (mobile ≤ 640px) ───────────────────────────────────────────── */
 @media (max-width: 640px) {
-  /* Left panel → bottom drawer, map visible behind */
+  /* Left panel → bottom drawer, map visible behind. Dynamic-viewport height +
+     safe-area bottom padding so its contents clear the home indicator. */
   .ts-floating-panel {
     left: 0 !important;
     right: 0 !important;
     top: auto !important;
     bottom: 0 !important;
     width: 100% !important;
-    max-height: 52vh !important;
+    max-height: 52dvh !important;
+    padding-bottom: env(safe-area-inset-bottom) !important;
     border-radius: 14px 14px 0 0 !important;
   }
   /* Report + post-report sheet → full width (centering is margin-auto; leave
-     `transform` alone so the tsUp slide-up animation still runs on mobile) */
+     `transform` alone so the tsUp slide-up animation still runs on mobile).
+     Sized to the dynamic viewport; the scrollable body carries its own
+     safe-area padding (below) so the submit buttons clear the home indicator. */
   .ts-report-sheet {
     left: 0 !important;
     right: 0 !important;
     width: 100% !important;
-    max-height: 90% !important;
+    max-height: 92dvh !important;
   }
   /* SOS cards, severity 2-col and post-report two-up grids stack to one column */
   .ts-sos-grid,
@@ -258,10 +262,20 @@ button, a, select, label, [role="button"] {
    dvh + safe-area insets keep it filling the standalone (PWA) viewport with
    nothing cut off by the notch (top) or home indicator (bottom). */
 @media (max-width: 860px) {
-  .lg-auth { display: block; height: 100vh; height: 100dvh; overflow-y: auto; }
-  .lg-brand { max-height: none; padding: max(28px, env(safe-area-inset-top)) 24px 22px; }
-  .lg-form { max-height: none; overflow: visible; padding: 32px 22px max(40px, env(safe-area-inset-bottom)); }
-  .lg-brand-visual { display: none; }   /* route + chips hidden on mobile */
+  /* Whole screen becomes one scrollable column sized to the DYNAMIC viewport
+     (svh/dvh) so mobile browser chrome + the notch/home-indicator never clip
+     it, and the form is always reachable by scrolling. */
+  .lg-auth { display: block; height: 100vh; height: 100svh; min-height: 100svh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  /* Navy panel collapses to a COMPACT brand band: just the shield + wordmark +
+     rule. The tagline, the route/chip visual and the footer caption are dropped
+     so the "Welcome back" form sits high and visible without hunting. */
+  .lg-brand { max-height: none; padding: max(18px, env(safe-area-inset-top)) 22px 16px; }
+  .lg-form { max-height: none; overflow: visible; padding: 26px 22px max(40px, env(safe-area-inset-bottom)); }
+  .lg-brand-visual,
+  .lg-tagline,
+  .lg-brand-footer { display: none; }
+  /* the accent rule under the wordmark loses its big vertical margins */
+  .lg-brand .lg-rule { margin: 14px 0 0 !important; }
   /* ≥44px hit targets on touch */
   .lg-form input,
   .lg-form .lg-cta,

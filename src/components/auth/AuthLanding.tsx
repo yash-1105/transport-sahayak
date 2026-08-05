@@ -4,6 +4,7 @@ import { ShieldCrossIcon } from "@/components/ui/icons";
 import { ErrorBanner, InfoBanner } from "@/components/auth/ui";
 import { useAuthForm } from "@/components/auth/useAuthForm";
 import OperatorSignIn from "@/components/auth/OperatorSignIn";
+import AdminSignIn from "@/components/auth/AdminSignIn";
 
 // Redesigned full-screen auth screen (design handoff: design_handoff_login).
 // Split layout — animated navy brand panel (left) + light form panel (right).
@@ -27,6 +28,7 @@ export default function AuthLanding({
 }) {
   const f = useAuthForm({ onSignedUp, onSignedIn, initialTab });
   const [operatorOpen, setOperatorOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   const kickerEn = f.isSignup ? "Citizen safety profile" : "Registered citizen";
   const kickerHi = f.isSignup ? "नागरिक सुरक्षा प्रोफ़ाइल" : "पंजीकृत नागरिक";
@@ -92,13 +94,14 @@ export default function AuthLanding({
             </div>
           </div>
           <div
+            className="lg-rule"
             style={{
               width: 64, height: 2, borderRadius: 1, margin: "24px 0 18px",
               background: "linear-gradient(90deg,#E8862B,#C6362C)",
               transformOrigin: "left", animation: "lgRule 1s .5s ease both",
             }}
           />
-          <p style={{ fontSize: 14, maxWidth: "36ch", color: "#B9C4D8", lineHeight: 1.7, margin: 0 }}>
+          <p className="lg-tagline" style={{ fontSize: 14, maxWidth: "36ch", color: "#B9C4D8", lineHeight: 1.7, margin: 0 }}>
             Every minute of the golden hour, accounted for — from the first report on the Delhi–Dehradun
             Expressway to the nearest ready hospital.
           </p>
@@ -147,7 +150,7 @@ export default function AuthLanding({
         </div>
 
         {/* footer caption */}
-        <div style={{ position: "relative", fontSize: 11, letterSpacing: ".14em", textTransform: "uppercase", color: "#5F7093", animation: "lgUp .7s 1.5s ease both", fontVariantNumeric: "tabular-nums" }}>
+        <div className="lg-brand-footer" style={{ position: "relative", fontSize: 11, letterSpacing: ".14em", textTransform: "uppercase", color: "#5F7093", animation: "lgUp .7s 1.5s ease both", fontVariantNumeric: "tabular-nums" }}>
           Road accident first response · 210 km corridor
         </div>
       </aside>
@@ -303,9 +306,28 @@ export default function AuthLanding({
         </svg>
         Operator access
       </button>
+
+      {/* Even quieter administrator entry (bottom-left corner). */}
+      <button
+        className="lg-operator-link"
+        onClick={() => setAdminOpen(true)}
+        title="Administrator access"
+        style={{
+          position: "fixed", left: 16, bottom: "max(12px, env(safe-area-inset-bottom))", zIndex: 5,
+          display: "flex", alignItems: "center", gap: 6,
+          background: "transparent", color: "#B4AFA2", fontSize: 11, fontWeight: 500,
+          cursor: "pointer", padding: 6, lineHeight: 1,
+        }}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </svg>
+        Administrator access
+      </button>
     </div>
 
     {operatorOpen && <OperatorSignIn onClose={() => setOperatorOpen(false)} />}
+    {adminOpen && <AdminSignIn onClose={() => setAdminOpen(false)} />}
     </>
   );
 }

@@ -20,8 +20,8 @@ import InstallPWA from "@/components/InstallPWA";
 import IncidentRecord from "@/components/IncidentRecord";
 import { useT, useBilingual } from "@/hooks/useI18n";
 import { useResponders, LAYER_TO_PLACE_TYPE } from "@/hooks/useResponders";
-import { C, HEADER_GRADIENT, BRAND_GRADIENT, CTA_GRADIENT, SHADOW } from "@/lib/design";
-import { ShieldCrossIcon } from "@/components/ui/icons";
+import { C, RADIUS, HEADER_GRADIENT, BRAND_GRADIENT, CTA_GRADIENT, SHADOW } from "@/lib/design";
+import { ShieldCrossIcon, MicIcon } from "@/components/ui/icons";
 import ClusteredLayer, { type ClusterItem } from "@/components/map/ClusteredLayer";
 import AccidentDensityLayer from "@/components/map/AccidentDensityLayer";
 import MapControls from "@/components/map/MapControls";
@@ -687,14 +687,21 @@ export default function MapView() {
   // ssr:false dynamic import, so this reads on the client only; consume it into
   // initial state here (no setState-in-effect), then clear the store flag below.
   const [launchIntent] = useState(() => useAuthStore.getState().launchIntent);
-  // Voice-bot language chosen on the PWA home before entering (voice launch only).
-  const [launchVoiceLocale] = useState(() => useAuthStore.getState().launchVoiceLocale);
-  const [reportOpen, setReportOpen] = useState(launchIntent === "voice");
-  // PWA launch: force the report panel into a mode / auto-start the voice call.
+  // "voice" (SOS) auto-starts the dispatcher; "report" opens the full report
+  // sheet on its default (SOS) tab — both mirror the map's two report FABs.
+  const [reportOpen, setReportOpen] = useState(launchIntent === "voice" || launchIntent === "report");
+  // PWA launch OR the map SOS button: force the report panel into a mode /
+  // auto-start the voice call in a chosen language. reportSession keys the panel
+  // so these props re-seed its state on every open (it stays mounted otherwise).
   const [reportInitialMode, setReportInitialMode] = useState<ReportMode | undefined>(
     launchIntent === "voice" ? "DISPATCHER" : undefined
   );
   const [reportAutoStartVoice, setReportAutoStartVoice] = useState(launchIntent === "voice");
+  const [reportVoiceLocale, setReportVoiceLocale] = useState<"en-IN" | "hi-IN" | null>(
+    () => useAuthStore.getState().launchVoiceLocale
+  );
+  const [reportSession, setReportSession] = useState(0);
+  const [sosLangChoice, setSosLangChoice] = useState(false);
   const [profileOpen, setProfileOpen] = useState(launchIntent === "profile");
   useEffect(() => {
     // Clear the one-shot intent once consumed (a store action, not a React
@@ -779,8 +786,22 @@ export default function MapView() {
     }
   }, []);
 
-  function openReport() { setReportInitialMode(undefined); setReportAutoStartVoice(false); setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true); }
-  function closeReport() { setReportOpen(false); setIsPickingPin(false); setReportInitialMode(undefined); setReportAutoStartVoice(false); }
+  function openReport() {
+    setReportInitialMode(undefined); setReportAutoStartVoice(false); setReportVoiceLocale(null);
+    setReportSession((s) => s + 1);
+    setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true);
+  }
+  function closeReport() {
+    setReportOpen(false); setIsPickingPin(false);
+    setReportInitialMode(undefined); setReportAutoStartVoice(false); setReportVoiceLocale(null);
+  }
+  // Map SOS → open the Voice dispatcher in the chosen language and auto-start.
+  function startSosVoice(locale: "en-IN" | "hi-IN") {
+    setSosLangChoice(false);
+    setReportInitialMode("DISPATCHER"); setReportAutoStartVoice(true); setReportVoiceLocale(locale);
+    setReportSession((s) => s + 1);
+    setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true);
+  }
   function requestPin() { setIsPickingPin(true); setReportOpen(false); }
 
   function toggleService(key: ServiceLayerType) {
@@ -951,7 +972,7 @@ export default function MapView() {
 
   if (!browserKey) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gray-100 p-8">
+      <div className="flex h-[100dvh] items-center justify-center bg-gray-100 p-8">
         <div className="bg-white rounded-xl border border-amber-300 shadow p-6 max-w-md text-center">
           <p className="text-sm font-semibold text-gray-900 mb-1">Google Maps key not configured</p>
           <p className="text-xs text-gray-500 mb-3">
@@ -970,7 +991,7 @@ export default function MapView() {
     <div className="h-full flex flex-col overflow-hidden" style={{ background: C.page, color: C.ink }}>
       {/* ── Header (60px navy) ─────────────────────────────────────────────── */}
       <header
-        className="flex items-center gap-5 px-4 flex-none"
+        className="flex items-center gap-2 sm:gap-5 px-3 sm:px-4 flex-none"
         style={{ minHeight: 60, paddingTop: "env(safe-area-inset-top)", background: HEADER_GRADIENT, boxShadow: "0 1px 0 rgba(255,255,255,.06) inset, 0 2px 8px rgba(14,26,47,.25)" }}
       >
         {/* Brand */}
@@ -994,7 +1015,7 @@ export default function MapView() {
 
         {/* Segmented nav */}
         <nav
-          className="ts-nav flex"
+          className="ts-nav flex flex-none"
           style={{ marginLeft: "auto", gap: 4, background: "rgba(255,255,255,.07)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, padding: 3 }}
         >
           {([
@@ -1021,7 +1042,7 @@ export default function MapView() {
         </nav>
 
         {/* Account + Language toggle + PWA install */}
-        <div className="flex items-center gap-2" style={{ marginLeft: "auto" }}>
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-none" style={{ marginLeft: "auto" }}>
           <InstallPWA />
           <AuthControl />
           <LanguageToggle />
@@ -1334,35 +1355,47 @@ export default function MapView() {
         </button>
       )}
 
-      {/* ── Report Incident FAB (bottom-right, pulsing) ────────────────────── */}
+      {/* ── Bottom-right action stack: SOS (voice, red pulsing) above Report ── */}
       {!reportOpen && !isPickingPin && (
-        <button
-          onClick={openReport}
-          className="absolute z-[500] flex items-center gap-2.5"
-          style={{
-            right: 22,
-            bottom: "calc(22px + env(safe-area-inset-bottom))",
-            background: CTA_GRADIENT,
-            color: "#fff",
-            border: "none",
-            borderRadius: 99,
-            padding: "14px 22px",
-            fontSize: 14.5,
-            fontWeight: 700,
-            cursor: "pointer",
-            boxShadow: SHADOW.fab,
-            animation: "tsPulse 2.6s infinite",
-          }}
+        <div
+          className="absolute z-[500] flex flex-col items-end"
+          style={{ right: 22, bottom: "calc(22px + env(safe-area-inset-bottom))", gap: 12 }}
         >
-          <span
-            className="inline-flex items-center justify-center"
-            style={{ width: 20, height: 20, borderRadius: "50%", background: "rgba(255,255,255,.22)", fontSize: 15, fontWeight: 600 }}
+          {/* SOS — emergency voice dispatch. The red pulsing CTA (now the priority). */}
+          <button
+            onClick={() => setSosLangChoice(true)}
+            aria-label="SOS — talk to the voice dispatcher"
+            className="flex items-center gap-2"
+            style={{
+              background: CTA_GRADIENT, color: "#fff", border: "none", borderRadius: 99,
+              padding: "13px 22px", fontSize: 15, fontWeight: 800, letterSpacing: ".02em",
+              cursor: "pointer", boxShadow: SHADOW.fab, animation: "tsPulse 2.6s infinite",
+            }}
           >
-            +
-          </span>
-          {t("reportTitle")}
-          {showHindi && <span style={{ fontWeight: 500, opacity: 0.85 }}>· रिपोर्ट करें</span>}
-        </button>
+            <MicIcon size={18} />
+            SOS{showHindi && <span style={{ fontWeight: 600, opacity: 0.9 }}> · एसओएस</span>}
+          </button>
+
+          {/* Report Incident — the full report sheet. Secondary (navy, no pulse). */}
+          <button
+            onClick={openReport}
+            className="flex items-center gap-2.5"
+            style={{
+              background: C.navy800, color: "#fff", border: "none", borderRadius: 99,
+              padding: "12px 20px", fontSize: 13.5, fontWeight: 700, cursor: "pointer",
+              boxShadow: SHADOW.floatBtn,
+            }}
+          >
+            <span
+              className="inline-flex items-center justify-center"
+              style={{ width: 19, height: 19, borderRadius: "50%", background: "rgba(255,255,255,.18)", fontSize: 14, fontWeight: 600 }}
+            >
+              +
+            </span>
+            {t("reportTitle")}
+            {showHindi && <span style={{ fontWeight: 500, opacity: 0.8 }}> · रिपोर्ट करें</span>}
+          </button>
+        </div>
       )}
 
       {isPickingPin && pinnedLocation && (
@@ -1378,10 +1411,11 @@ export default function MapView() {
 
       {/* ── Report panel ─────────────────────────────────────────────────────── */}
       <ReportPanel
+        key={reportSession}
         open={reportOpen}
         initialMode={reportInitialMode}
         autoStartVoice={reportAutoStartVoice}
-        initialVoiceLocale={launchVoiceLocale ?? undefined}
+        initialVoiceLocale={reportVoiceLocale ?? undefined}
         pinnedLocation={pinnedLocation}
         pinnedLabel={pinnedLabel}
         onRequestPin={requestPin}
@@ -1445,6 +1479,44 @@ export default function MapView() {
           the home-screen name chip. AuthControl also owns its own instance for
           the header dropdown; this one is driven by the launch intent. ── */}
       {profileOpen && <SafetyProfileSheet showHindi={showHindi} onClose={() => setProfileOpen(false)} />}
+
+      {/* ── SOS: quick language chooser → voice dispatcher (auto-start) ── */}
+      {sosLangChoice && (
+        <>
+          <div className="fixed inset-0 z-[2099]" style={{ background: "rgba(14,26,47,.45)" }} onClick={() => setSosLangChoice(false)} />
+          <div
+            className="fixed z-[2100] flex flex-col bg-white"
+            style={{ left: "50%", top: "50%", transform: "translate(-50%,-50%)", width: "min(360px, 92vw)", borderRadius: RADIUS.card, boxShadow: "0 20px 60px rgba(14,26,47,.4)", overflow: "hidden" }}
+          >
+            <div style={{ padding: "16px 18px 2px" }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>
+                Choose a language{showHindi && <span style={{ fontWeight: 500, color: C.muted, fontSize: 13 }}> · भाषा चुनें</span>}
+              </div>
+              <p style={{ fontSize: 12, color: C.secondary, marginTop: 2 }}>The voice dispatcher will speak this language, then take your report.</p>
+            </div>
+            <div className="flex flex-col" style={{ gap: 10, padding: "12px 18px 6px" }}>
+              <button
+                onClick={() => startSosVoice("en-IN")}
+                style={{ padding: "13px 16px", border: "none", borderRadius: 12, background: CTA_GRADIENT, color: "#fff", fontSize: 14.5, fontWeight: 700, cursor: "pointer", textAlign: "left", boxShadow: "0 6px 18px rgba(198,54,44,.3)" }}
+              >
+                English<span style={{ fontWeight: 500, opacity: 0.85 }}> · Talk to the dispatcher in English</span>
+              </button>
+              <button
+                onClick={() => startSosVoice("hi-IN")}
+                style={{ padding: "13px 16px", border: `1px solid ${C.border}`, borderRadius: 12, background: "#fff", color: C.ink, fontSize: 14.5, fontWeight: 700, cursor: "pointer", textAlign: "left" }}
+              >
+                हिंदी<span style={{ fontWeight: 500, color: C.muted }}> · वॉइस डिस्पैचर से हिंदी में बात करें</span>
+              </button>
+            </div>
+            <button
+              onClick={() => setSosLangChoice(false)}
+              style={{ padding: "11px", border: "none", borderTop: `1px solid ${C.hairline}`, background: "transparent", color: C.secondary, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+            >
+              Cancel{showHindi && " · रद्द करें"}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

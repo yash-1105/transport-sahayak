@@ -1418,6 +1418,135 @@ check("#4 non-critical still asks the routine combined safety question first, fa
       == "how many vehicles were involved, and whether anyone is injured or trapped"
       and _normal._state_block()["fast_track"] is False)
 
+# ── #4 Hindi staged / interim dispatch ────────────────────────────────────────
+# Hindi (the REAL HindiDispatcherSession, not the base class used above) keeps
+# collecting every field even when critical -- urgency is handled by an interim
+# dispatch, not by cutting the report short. English is unchanged (asserted
+# above via _sess_for, which builds a base DispatcherSession).
+class _CapWS:
+    def __init__(self): self.sent = []
+    async def send_json(self, payload): self.sent.append(payload)
+
+def _hi_staged(**state):
+    s = HindiDispatcherSession.__new__(HindiDispatcherSession)
+    HindiDispatcherSession.__init__(s, _CapWS())
+    s.state.category = "Vehicle Collisions"
+    s.state.sub_type = "X"
+    s.state.description = "x"
+    s.state.location = {"lat": 26.1, "lng": 91.7, "label": "NH-27"}
+    for k, v in state.items():
+        setattr(s.state, k, v)
+    return s
+
+_hi_crit = _hi_staged(flags={"Trapped"})
+check("#4 Hindi critical does NOT short-circuit -- keeps collecting the secondary questions",
+      _hi_crit._compute_still_missing() != [])
+check("#4 Hindi critical still surfaces fast_track True (drives auto-submit-without-confirm)",
+      _hi_crit._state_block()["fast_track"] is True)
+check("#4 Hindi non-critical secondary-question ORDER matches the shared logic (no regression)",
+      _hi_staged()._compute_still_missing()
+      == _sess_for("Vehicle Collisions")._compute_still_missing())
+
+# _pending_interim_services: ambulance when critical + location; fire on a fire/
+# hazmat flag; nothing before a location is known; deduped once notified.
+check("#4 interim: critical + location -> ambulance",
+      _hi_staged(flags={"Trapped"})._pending_interim_services() == ["ambulance"])
+check("#4 interim: fire flag -> ambulance + fire (fire is itself critical)",
+      _hi_staged(flags={"Fire"})._pending_interim_services() == ["ambulance", "fire"])
+check("#4 interim: hazmat flag also dispatches fire",
+      "fire" in _hi_staged(flags={"Hazardous material"})._pending_interim_services())
+_hi_noloc = _hi_staged(flags={"Trapped"}); _hi_noloc.state.location = None
+check("#4 interim: NEVER dispatch before a location is known",
+      _hi_noloc._pending_interim_services() == [])
+check("#4 interim: a non-critical incident dispatches nothing early",
+      _hi_staged(casualties=0)._pending_interim_services() == [])
+
+async def _interim_dispatch_sends_frame_and_arms_note():
+    s = _hi_staged(flags={"Trapped"})
+    await s._maybe_interim_dispatch()
+    frame = s.websocket.sent[-1]
+    ok_frame = (
+        frame["type"] == "interim_dispatch"
+        and frame["services"] == ["ambulance"]
+        and frame["location"]["label"] == "NH-27"
+    )
+    # A deterministic spoken reassurance is armed (guaranteed voiced in
+    # _agent_turn), honest wording only -- "<service> notified, help being
+    # arranged" -- and the model note tells the model NOT to repeat it.
+    spoken = s._pending_interim_spoken or ""
+    ok_spoken = "एम्बुलेंस" in spoken and "सूचित" in spoken and "मिनट" not in spoken
+    note = s._pending_interim_note or ""
+    ok_note = "do NOT repeat" in note and "arranged" in note.lower()
+    # deduped: a second pass with the same state sends nothing new
+    before = len(s.websocket.sent)
+    await s._maybe_interim_dispatch()
+    ok_dedup = len(s.websocket.sent) == before
+    return ok_frame and ok_spoken and ok_note and ok_dedup and s._dispatched_services == {"ambulance"}
+
+check("#4 interim: _maybe_interim_dispatch sends one frame, arms an ETA-free spoken line + note, and dedups",
+      asyncio.run(_interim_dispatch_sends_frame_and_arms_note()))
+
+async def _interim_reassurance_is_spoken_deterministically():
+    # #4: the dispatch reassurance is GUARANTEED spoken -- prepended to the turn's
+    # reply in _agent_turn even if the model itself says nothing about it.
+    s = _hi_staged(flags={"Trapped"})
+    await s._maybe_interim_dispatch()
+    spoken = []
+    async def fake_reason(client, user_text, config=None):
+        return "अच्छा... क्या कोई फँसा हुआ है?"   # model's own reply (no reassurance)
+    async def fake_speak(text, allow_bargein=True):
+        spoken.append(text); return True
+    async def _noop(*a, **k):
+        return None
+    s._reason = fake_reason
+    s._speak_or_fallback = fake_speak
+    s._preconnect_tts = _noop
+    s._enter_listening = _noop
+    s._opening_line_pending = False
+    await s._agent_turn(None, "कोई फँसा है")
+    return (
+        len(spoken) == 1
+        and "एम्बुलेंस को सूचित कर दिया गया है" in spoken[0]   # reassurance spoken first
+        and spoken[0].strip().endswith("क्या कोई फँसा हुआ है?")  # ...then the model's question
+        and s._pending_interim_spoken is None                 # consumed
+    )
+
+check("#4 interim: the dispatch reassurance is spoken deterministically (prepended), then cleared",
+      asyncio.run(_interim_reassurance_is_spoken_deterministically()))
+
+async def _interim_note_folds_into_next_agent_turn():
+    # The armed note is consumed by _agent_turn and folded into that turn's model
+    # input, then cleared -- so it is voiced exactly once.
+    s = _hi_staged(flags={"Trapped"})
+    await s._maybe_interim_dispatch()
+    captured = {}
+    async def fake_reason(client, user_text, config=None):
+        captured["text"] = user_text
+        return ""   # no spoken reply needed for this assertion
+    async def _noop(*a, **k):
+        return None
+    async def fake_speak(text, allow_bargein=True):
+        return True
+    s._reason = fake_reason
+    s._speak_or_fallback = fake_speak
+    s._preconnect_tts = _noop   # keep the turn hermetic (no Bulbul network)
+    s._opening_line_pending = False
+    await s._agent_turn(None, "मेरी कार दूसरी कार से टकरा गई")
+    return (
+        "SYSTEM UPDATE" in captured.get("text", "")
+        and "do NOT repeat" in captured.get("text", "")
+        and s._pending_interim_note is None   # consumed
+    )
+
+check("#4 interim: the reassurance note is folded into the next agent turn's input, then cleared",
+      asyncio.run(_interim_note_folds_into_next_agent_turn()))
+
+# Regression guard: the ENGLISH pipeline must be completely unaffected by #4 --
+# base DispatcherSession has no staged-dispatch machinery at all.
+check("#4 English (base DispatcherSession) has NO interim-dispatch method (Hindi-only change)",
+      not hasattr(DispatcherSession, "_maybe_interim_dispatch")
+      and hasattr(HindiDispatcherSession, "_maybe_interim_dispatch"))
+
 async def _backstop_unconscious_triggers_fast_track():
     s = DispatcherSession.__new__(DispatcherSession)
     s._ws_send_lock = asyncio.Lock()
@@ -1515,9 +1644,9 @@ async def _reason_uses_single_round():
     last = s._history[-1]
     # vehicles(2) + casualties(0) now known, so the count/injury/trapped group is
     # partial -> the individual trapped question (new shorter canonical), not the
-    # combined one. casualties=0 is deliberate: casualties > 0 would trip the #1
-    # injury fast-track (next_question -> null) and correctly fall back to the
-    # model for the fast-track reassurance instead of taking this fast path.
+    # combined one. (In Hindi, casualties > 0 no longer nulls next_question -- see
+    # _reason_injury_continues_collecting -- so both 0 and >0 take this fast path
+    # now; 0 is kept here as the plain non-critical case.)
     return (
         fake.calls == 1
         and reply == "अच्छा... किसी को चोट नहीं आई। क्या कोई फँसा हुआ है?"
@@ -1525,12 +1654,17 @@ async def _reason_uses_single_round():
         and last.role == "model" and last.parts[0].text == reply
     )
 
-async def _reason_injury_falls_back_for_fast_track():
-    # #1: when the caller reports an injury (casualties > 0), the turn becomes
-    # critical, next_question goes null (essentials already present), and the
-    # single-round fast path must DEFER to a second model round -- that round is
-    # where the fast-track reassurance + submit is spoken, which the deterministic
-    # canonical-question appender cannot produce.
+async def _reason_injury_continues_collecting():
+    # #4 (Hindi staged dispatch): when the caller reports an injury
+    # (casualties > 0), the turn becomes critical but -- unlike the shared
+    # English fast-track -- Hindi's overridden _compute_still_missing does NOT
+    # short-circuit: next_question stays present (still collecting the remaining
+    # secondary facts), so the single-round fast path still fires (ONE round),
+    # appending the next canonical question. The "help is being arranged"
+    # reassurance is NOT delivered here -- it rides the interim-dispatch
+    # SYSTEM UPDATE note injected in run() (see _maybe_interim_dispatch), tested
+    # separately. Here vehicles(2) is already known, so the next topic is the
+    # individual "trapped" question.
     from google.genai import types as gtypes
     s = _fresh_hindi_session()
     fake = _FakeGeminiClient([
@@ -1539,14 +1673,13 @@ async def _reason_injury_falls_back_for_fast_track():
             gtypes.Part(function_call=gtypes.FunctionCall(
                 name="update_form_field", args={"field": "casualties", "number_value": 2})),
         ]),
-        _model_response([gtypes.Part(
-            text="मैं अभी आपके लिए एम्बुलेंस का इंतज़ाम कर रहा हूँ... आप मेरे साथ बने रहिए।")]),
     ])
     reply = await s._reason(fake, "दो लोग घायल हैं")
     return (
-        fake.calls == 2               # fell back to the model, no canonical appended
+        fake.calls == 1               # fast path fired, canonical question appended
+        and reply == "ओह... मैं समझ सकता हूँ। क्या कोई फँसा हुआ है?"
         and s.state.casualties == 2
-        and s._is_critical()
+        and s._is_critical()          # still flagged critical (drives auto-submit + interim dispatch)
     )
 
 async def _reason_falls_back_without_ack_text():
@@ -1564,8 +1697,8 @@ async def _reason_falls_back_without_ack_text():
 
 check("fast path answers in ONE Gemini round and mirrors the reply into history",
       asyncio.run(_reason_uses_single_round()))
-check("#1 an injury report falls back to the model for the fast-track reassurance",
-      asyncio.run(_reason_injury_falls_back_for_fast_track()))
+check("#4 Hindi injury report keeps collecting (fast path fires with the next question, not fast-track submit)",
+      asyncio.run(_reason_injury_continues_collecting()))
 check("missing ack text still falls back to the normal second round",
       asyncio.run(_reason_falls_back_without_ack_text()))
 
@@ -1718,6 +1851,8 @@ def _fresh_opening_session():
     s._ended = asyncio.Event()
     s._last_opener = None
     s._turn_stats = {}
+    s._pending_interim_note = None   # #4: mirrors __init__ (helper skips it)
+    s._pending_interim_spoken = None
     return s
 
 async def _hindi_opening_turn_greeting_one_utterance():

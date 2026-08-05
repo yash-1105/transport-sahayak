@@ -7,7 +7,8 @@ import { supabase } from "@/lib/supabase";
 // ONLY in the operator dashboard UI (UI-gated, like the Network dashboard).
 //
 // HONESTY (Hard Rules): time_to_dispatch_ms is captured client-side as
-// ready_at → dispatched_at (the `submitted` event) and never includes the
+// ready_at → the actual dispatch moment (the interim ambulance dispatch when a
+// call staged one, otherwise the `submitted` event) and never includes the
 // post-submit briefing / SOPs / ETAs.
 
 interface MetricRow {

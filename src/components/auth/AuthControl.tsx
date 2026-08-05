@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import { C, RADIUS, SHADOW } from "@/lib/design";
 import { useBilingual } from "@/hooks/useI18n";
-import { useAuthStore, useIsOperator } from "@/store/authStore";
+import { useAuthStore, useIsOperator, useIsAdmin } from "@/store/authStore";
 import { UserIcon, ChevronDownIcon, LogOutIcon, ShieldCrossIcon } from "@/components/ui/icons";
 import SafetyProfileSheet from "@/components/auth/SafetyProfileSheet";
 import SurakshaMitraSheet from "@/components/auth/SurakshaMitraSheet";
@@ -21,6 +21,8 @@ export default function AuthControl() {
   const signOut = useAuthStore((s) => s.signOut);
   const exitGuest = useAuthStore((s) => s.exitGuest);
   const isOperator = useIsOperator();
+  const isAdmin = useIsAdmin();
+  const staffLabel = isAdmin ? "Administrator" : "Operator";
 
   const [overlay, setOverlay] = useState<Overlay>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -46,10 +48,13 @@ export default function AuthControl() {
         //    full-screen auth screen (on the sign-in tab), not a modal. ──
         <button
           onClick={() => exitGuest("signin")}
-          className="flex items-center"
+          aria-label="Sign in"
+          title="Sign in"
+          // Icon-only + compact on small screens (the label text is what eats
+          // header width); the "Sign in · साइन इन" label returns at ≥sm.
+          className="flex items-center justify-center py-1.5 px-2 sm:px-3"
           style={{
             gap: 6,
-            padding: "6px 12px",
             borderRadius: RADIUS.pill,
             border: "1px solid rgba(255,255,255,.18)",
             background: "rgba(255,255,255,.12)",
@@ -62,7 +67,7 @@ export default function AuthControl() {
           }}
         >
           <UserIcon size={15} />
-          <span>Sign in{showHindi && <span style={{ color: "#C6D0E2", fontWeight: 500 }}> · साइन इन</span>}</span>
+          <span className="hidden sm:inline">Sign in{showHindi && <span style={{ color: "#C6D0E2", fontWeight: 500 }}> · साइन इन</span>}</span>
         </button>
       ) : (
         // ── Signed in: chip + dropdown ──
@@ -88,7 +93,7 @@ export default function AuthControl() {
               {isOperator ? <ShieldCrossIcon size={14} /> : initial}
             </span>
             <span className="truncate hidden sm:block" style={{ fontSize: 12.5, fontWeight: 600, maxWidth: 140 }}>
-              {isOperator ? "Operator" : displayName}
+              {isOperator ? staffLabel : displayName}
             </span>
             <ChevronDownIcon size={14} style={{ opacity: 0.75, flex: "none" }} />
           </button>
@@ -112,11 +117,11 @@ export default function AuthControl() {
               >
                 <div style={{ padding: "11px 14px", borderBottom: `1px solid ${C.hairline}` }}>
                   <div style={{ fontSize: 12.5, fontWeight: 700, color: C.ink }} className="truncate">
-                    {isOperator ? "Operator" : displayName}
+                    {isOperator ? staffLabel : displayName}
                   </div>
                   {isOperator && (
                     <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: C.saffron, marginTop: 1 }}>
-                      Dispatch console access
+                      {isAdmin ? "Network-wide oversight" : "Dispatch console access"}
                     </div>
                   )}
                   {user.email && (isOperator || displayName !== user.email) && (

@@ -51,8 +51,9 @@ export default function InstallPWA() {
           if (outcome === "accepted") setInstalled(true);
           setDeferredPrompt(null);
         }}
-        className="flex items-center gap-1.5 rounded-full bg-red-600 px-3 py-1.5 text-xs font-semibold text-white shadow-lg active:scale-95 transition-transform md:hidden"
+        className="flex items-center gap-1.5 rounded-full bg-red-600 px-2 sm:px-3 py-1.5 text-xs font-semibold text-white shadow-lg active:scale-95 transition-transform md:hidden"
         title="Install app"
+        aria-label="Install app"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -67,7 +68,7 @@ export default function InstallPWA() {
           />
           <path d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" />
         </svg>
-        Install app
+        <span className="hidden sm:inline">Install app</span>
       </button>
     );
   }
@@ -78,8 +79,9 @@ export default function InstallPWA() {
       <>
         <button
           onClick={() => setShowIOSHint((v) => !v)}
-          className="flex items-center gap-1.5 rounded-full bg-red-600 px-3 py-1.5 text-xs font-semibold text-white shadow-lg active:scale-95 transition-transform md:hidden"
+          className="flex items-center gap-1.5 rounded-full bg-red-600 px-2 sm:px-3 py-1.5 text-xs font-semibold text-white shadow-lg active:scale-95 transition-transform md:hidden"
           title="Install app"
+          aria-label="Install app"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -94,7 +96,7 @@ export default function InstallPWA() {
             />
             <path d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" />
           </svg>
-          Install app
+          <span className="hidden sm:inline">Install app</span>
         </button>
 
         {showIOSHint && (

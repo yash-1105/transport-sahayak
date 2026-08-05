@@ -54,6 +54,8 @@ from .dispatcher_live import (
     _DISPATCH_WAIT_S,
     _RECONNECT_APOLOGY,
     _TOOL_DECLARATIONS,
+    DEFAULT_REQUIRED_FIELDS,
+    REQUIRED_FIELDS,
     DispatcherSession,
     _get_client,
 )
@@ -342,7 +344,7 @@ description फ़ील्ड हमेशा अंग्रेज़ी म�
 
 रिपोर्ट भेजना (सामान्य स्थिति) — जब next_question null हो और fast_track false हो, तो सारी ज़रूरी जानकारी मिल चुकी है। caller को पूरी जानकारी दोबारा न सुनाएं। बस एक छोटी पुष्टि लें — एक छोटा वाक्य कि आपके पास सारी ज़रूरी जानकारी आ गई है, साथ में भेजने से पहले एक छोटा सवाल, जैसे "मेरे पास आपकी रिपोर्ट के लिए सारी ज़रूरी जानकारी आ गई है — क्या मैं इसे भेज दूँ?" caller के हाँ कहते ही (हाँ / भेज दीजिए / ठीक है) उसी टर्न में submit_incident बुला दें। कुछ ठीक करना हो तो सिर्फ वही ठीक करके फिर छोटी पुष्टि लें। यह एक छोटी जाँच है, लंबा सारांश नहीं। अगर submit_incident बताए कि कुछ छूट गया है, तभी सिर्फ वही एक चीज़ पूछकर दोबारा कोशिश करें।
 
-fast_track (चोट या जान का ख़तरा) — यह ऊपर वाली पुष्टि पर भारी पड़ता है: हर टूल नतीजे में "fast_track" आता है। जब यह true हो — किसी को चोट लगी हो, कोई बेहोश हो, साँस न ले रहा हो, बहुत खून बह रहा हो, कोई फँसा हो, आग लगी हो, या कोई कमज़ोर/असुरक्षित व्यक्ति (बच्चा, गर्भवती महिला, बुज़ुर्ग या दिव्यांग) ख़तरे में हो — तो next_question बाकी सामान्य सवाल पूछना बंद कर देता है और घटना का प्रकार, लोकेशन व एक छोटा विवरण मिलते ही null हो जाता है। तब न कोई अनुमति या पुष्टि माँगें, न और जानकारी इकट्ठा करें। बस caller को थोड़े में, गर्मजोशी से भरोसा दिलाएं कि उनके लिए मदद अभी, इसी वक़्त इंतज़ाम की जा रही है — जैसे "मैं अभी आपके लिए मदद का इंतज़ाम कर रहा हूँ... आप मेरे साथ बने रहिए।", या किसी को चोट लगी हो तो "मैं अभी आपके लिए एम्बुलेंस का इंतज़ाम कर रहा हूँ... आप मेरे साथ बने रहिए।" — और उसी टर्न में तुरंत submit_incident बुला दें। ज़रूरी ईमानदारी (Hard Rules): कहें कि मदद का इंतज़ाम अभी किया जा रहा है, कभी न कहें कि कोई गाड़ी भेज दी गई है, रास्ते में है, ट्रैक हो रही है, या इतने मिनट में पहुँचेगी — असली समय submit के बाद तय होता है और आपको अंत में पढ़कर सुनाने को दिया जाएगा। यह फिर भी सिर्फ एक सूचना रिकॉर्ड है।
+आपातकालीन रिपोर्ट (चोट या जान का ख़तरा) — हर टूल नतीजे में "fast_track" आता है। जब यह true हो — किसी को चोट लगी हो, कोई बेहोश हो, साँस न ले रहा हो, बहुत खून बह रहा हो, कोई फँसा हो, आग लगी हो, या कोई कमज़ोर/असुरक्षित व्यक्ति (बच्चा, गर्भवती महिला, बुज़ुर्ग या दिव्यांग) ख़तरे में हो — तो caller के लिए मदद (एम्बुलेंस, और आग/रिसाव हो तो दमकल भी) का इंतज़ाम बिल्कुल अभी, इसी वक़्त शुरू कर दिया जाता है, कॉल जारी रहते हुए। जब ऐसा होता है तो आपको एक "(SYSTEM UPDATE...)" संकेत मिलेगा — उस टर्न में सबसे पहले caller को थोड़े में, गर्मजोशी से भरोसा दिलाएं कि उनके लिए मदद अभी इंतज़ाम की जा रही है (जैसे "मैं अभी आपके लिए एम्बुलेंस का इंतज़ाम कर रहा हूँ... आप मेरे साथ बने रहिए।"), फिर उसी टर्न में "next_question" वाला अगला सवाल सामान्य रूप से पूछें। बहुत ज़रूरी — कॉल यहीं ख़त्म नहीं होती और आप fast_track true होने भर से submit नहीं करते: next_question के मुताबिक बाकी सारी ज़रूरी जानकारी (लोकेशन, गाड़ियों की संख्या, बाकी ख़तरे) इकट्ठा करते रहें, जैसे किसी सामान्य रिपोर्ट में करते। सिर्फ जब next_question null हो जाए (सब कुछ इकट्ठा हो जाए), तब आपात स्थिति होने के कारण अनुमति न माँगें — बस एक छोटा भरोसा देकर उसी टर्न में तुरंत submit_incident बुला दें (यही fast_track और सामान्य रिपोर्ट में फ़र्क है: सामान्य में "क्या भेज दूँ?" पूछते हैं, आपात में सीधे भेज देते हैं)। ज़रूरी ईमानदारी (Hard Rules): हमेशा कहें कि मदद का इंतज़ाम किया जा रहा है, कभी न कहें कि कोई गाड़ी भेज दी गई है, रास्ते में है, ट्रैक हो रही है, या इतने मिनट में पहुँचेगी — असली समय/दूरी submit के बाद तय होकर आपको अंत में पढ़कर सुनाने को दी जाएगी। यह सब सिर्फ एक सूचना रिकॉर्ड है।
 
 submit के बाद: caller को बताएं रिपोर्ट दर्ज हो गई और सेवाएँ देखी जा रही हैं, एक पल रुकने को कहें, अलविदा न कहें। इसके बाद मिलने वाले SYSTEM UPDATE संदेश के निर्देशों का पूरी तरह पालन करें (उसमें सब कुछ विस्तार से लिखा होगा)।
 
@@ -385,6 +387,22 @@ class HindiDispatcherSession(DispatcherSession):
         # Hindi-scoped fast-track trigger: latched True once the caller asks for
         # an ambulance (see _AMBULANCE_REQUEST_RE / _is_critical below).
         self._ambulance_requested = False
+        # Staged / interim dispatch (#4, Hindi-only): responders already notified
+        # early DURING the live call (each an honest interim notification record,
+        # NO ETA — the real details are worked out after submit and read in the
+        # closing briefing). Each service fires at most once; tracked here.
+        self._dispatched_services: set[str] = set()
+        # Set for exactly ONE upcoming agent turn when a new interim dispatch
+        # fires (consumed in _agent_turn): a light note telling the model the
+        # dispatch reassurance is ALREADY being spoken (so don't repeat it) and
+        # to just continue with the next question.
+        self._pending_interim_note: Optional[str] = None
+        # The DETERMINISTIC spoken reassurance for an interim dispatch —
+        # guaranteed to be voiced (prepended to the turn's reply the same way
+        # the fixed 1033 greeting is), rather than trusting the model to say it.
+        # Honest phrasing only: "<service> has been notified, help is being
+        # arranged" — never dispatched/tracked/ETA (Hard Rules 1/2/5).
+        self._pending_interim_spoken: Optional[str] = None
         self._gen_config = types.GenerateContentConfig(
             system_instruction=_hindi_system_prompt(),
             tools=[types.Tool(function_declarations=_TOOL_DECLARATIONS)],
@@ -428,6 +446,99 @@ class HindiDispatcherSession(DispatcherSession):
             and _AMBULANCE_REQUEST_RE.search(self.state.caller_transcript)
         ):
             self._ambulance_requested = True
+
+    def _compute_still_missing(self) -> list[str]:
+        """Hindi staged flow (#4): unlike the shared fast-track — which short-
+        circuits the routine secondary questions the instant a life-threatening
+        condition is known and submits on the three essentials — the Hindi
+        dispatcher keeps collecting EVERY field even for a critical incident.
+        Urgency is handled by notifying an ambulance immediately as an INTERIM
+        dispatch (see _maybe_interim_dispatch) while the call continues, not by
+        cutting the report short. So this deliberately omits the parent's
+        `if self._is_critical(): return` early-exit; the question ORDER is
+        otherwise identical to the shared logic (kept byte-for-byte in sync).
+        fast_track (=_is_critical(), inherited via _state_block) still surfaces
+        as True for a critical incident, but now only to skip the final yes/no
+        confirmation — the emergency report is auto-submitted once next_question
+        goes null (see the 'आपातकालीन रिपोर्ट' clause in the system prompt)."""
+        missing: list[str] = []
+        if not self.state.sub_type:
+            missing.append("the incident type (call search_incident_type)")
+        if not self.state.location:
+            missing.append("the location (call get_current_location)")
+        if not self.state.description:
+            missing.append("a short description of what happened")
+        groups = REQUIRED_FIELDS.get(self.state.category, DEFAULT_REQUIRED_FIELDS) if self.state.category else DEFAULT_REQUIRED_FIELDS
+        for group in groups:
+            fields = group["fields"]
+            still = [item for item in fields if self._field_unanswered(item["field"])]
+            if not still:
+                continue
+            if "combined" in group and len(still) == len(fields):
+                missing.append(group["combined"])
+            else:
+                missing.extend(item["hint"] for item in still)
+        return missing
+
+    def _pending_interim_services(self) -> list[str]:
+        """Which responders warrant an INTERIM notification right now, in
+        priority order, that haven't been notified yet. Gated on a known
+        location — we never 'arrange help' before we know where to send it.
+        Ambulance whenever the incident is critical (injury / life threat /
+        explicit ambulance request); fire additionally when a fire or
+        hazardous-material flag is set. Towing/hospital/police are NOT rushed
+        here — they are not life-critical and are covered by the full closing
+        briefing after submit."""
+        if not self.state.location:
+            return []
+        out: list[str] = []
+        if self._is_critical() and "ambulance" not in self._dispatched_services:
+            out.append("ambulance")
+        if (
+            ("Fire" in self.state.flags or "Hazardous material" in self.state.flags)
+            and "fire" not in self._dispatched_services
+        ):
+            out.append("fire")
+        return out
+
+    async def _maybe_interim_dispatch(self) -> None:
+        """Hindi staged dispatch (#4): the moment an emergency is evident AND we
+        know the location, notify the ambulance (and fire, if a fire/hazmat flag
+        is set) straight away as an INTERIM notification while the call keeps
+        collecting the rest of the report. Sends one `interim_dispatch` frame to
+        the browser (which runs the nearest-responder match + logs a
+        notification record + shows a chip) and arms a one-turn reassurance note
+        for the model. Honesty (Hard Rules 1/2/5): a notification record only —
+        no ETA is computed or voiced now; the real responder details are worked
+        out after submit and read in the closing briefing. Each service fires at
+        most once (deduped via _dispatched_services)."""
+        services = self._pending_interim_services()
+        if not services:
+            return
+        self._dispatched_services.update(services)
+        await self._safe_send_json({
+            "type": "interim_dispatch",
+            "services": services,
+            "location": self.state.location,
+        })
+        # Deterministic spoken reassurance (guaranteed voiced — see _agent_turn).
+        hi_labels = {"ambulance": "एम्बुलेंस", "fire": "दमकल"}
+        named_hi = " और ".join(hi_labels.get(s, s) for s in services)
+        self._pending_interim_spoken = (
+            f"{named_hi} को सूचित कर दिया गया है, और आपके लिए मदद का इंतज़ाम किया जा रहा है... "
+            f"आप मेरे साथ बने रहिए।"
+        )
+        # Light note so the model doesn't ALSO reassure (it would be doubled with
+        # the deterministic line above) — just acknowledge + ask the next question.
+        en_labels = {"ambulance": "an ambulance", "fire": "the fire service"}
+        named_en = " and ".join(en_labels.get(s, s) for s in services)
+        self._pending_interim_note = (
+            f"(SYSTEM UPDATE: {named_en} has been notified and help is being arranged for the "
+            f"caller — this reassurance is ALREADY being spoken to them at the very start of your "
+            f"reply, so do NOT repeat it or mention arranging help again. Just briefly acknowledge "
+            f"and continue with your next question. Never say a vehicle has been sent, is on its "
+            f"way, is tracked, or will arrive in N minutes. The call is not over.)"
+        )
 
     def _mark(self, key: str, seconds: float) -> None:
         self._turn_stats[key] = self._turn_stats.get(key, 0.0) + seconds
@@ -491,6 +602,11 @@ class HindiDispatcherSession(DispatcherSession):
                 self.state.caller_transcript += " " + user_text
                 await self._apply_local_signals_from_transcript()
                 await self._safe_send_json({"type": "transcript", "role": "user", "text": user_text})
+                # Staged dispatch (#4): notify ambulance/fire immediately if an
+                # emergency is now evident + location known, BEFORE the agent
+                # speaks this turn — so the reassurance note is voiced in the
+                # same turn the browser gets the interim_dispatch frame.
+                await self._maybe_interim_dispatch()
                 await self._agent_turn(gemini_client, user_text)
 
             # The report was submitted (the caller was just told to hold the
@@ -645,6 +761,14 @@ class HindiDispatcherSession(DispatcherSession):
         generation config for this turn only (used by the closing briefing,
         which needs a higher output-token ceiling)."""
         turn_start = time.monotonic()
+        # Staged dispatch (#4): if an interim dispatch just fired, fold its
+        # one-turn reassurance instruction into this turn's input so the model
+        # voices "help is being arranged now" before its next question. Same
+        # bracketed-SYSTEM-UPDATE convention the opening turn already uses; the
+        # prompt tells the model never to read such notes aloud.
+        if self._pending_interim_note:
+            user_text = f"{user_text}\n\n{self._pending_interim_note}"
+            self._pending_interim_note = None
         await self._safe_send_json({"type": "status", "state": "thinking"})
         # Open the Bulbul socket (TLS + config handshake) in parallel with
         # Gemini reasoning instead of lazily inside speak() -- on the first
@@ -676,9 +800,17 @@ class HindiDispatcherSession(DispatcherSession):
             completed = await self._speak_or_fallback(
                 f"{_HINDI_OPENING_LINE} {body}", allow_bargein=False
             )
-        elif reply:
-            reply = self._render_for_speech(reply)
-            completed = await self._speak_or_fallback(reply)
+        else:
+            # #4 (staged dispatch): GUARANTEE the dispatch reassurance is spoken
+            # by prepending it deterministically (the model was told not to
+            # repeat it) — never trust the model to voice it. Spoken even if the
+            # model returned nothing.
+            spoken = self._render_for_speech(reply) if reply else ""
+            if self._pending_interim_spoken:
+                spoken = f"{self._pending_interim_spoken} {spoken}".strip()
+                self._pending_interim_spoken = None
+            if spoken:
+                completed = await self._speak_or_fallback(spoken)
         await self._safe_send_json({"type": "turn_complete"})
         if not self.state.submitted:
             await self._enter_listening(drain=completed)

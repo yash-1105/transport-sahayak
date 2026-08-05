@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GeoPoint } from "@/lib/types";
 import type { VoiceLocale } from "@/hooks/useVoiceInput";
 import type { useVoiceDispatcher } from "@/hooks/useVoiceDispatcher";
+import type { InterimDispatch } from "@/components/report/ReportPanel";
 import { C, RADIUS } from "@/lib/design";
 import { MicIcon } from "@/components/ui/icons";
 import { useBilingual } from "@/hooks/useI18n";
@@ -15,6 +16,13 @@ import { useBilingual } from "@/hooks/useI18n";
 // state convention VoiceSection already uses), so this component's only job
 // is to render the call UI and a live-mirrored summary of what's been
 // collected so far; ReportPanel.tsx owns all the actual form state.
+
+// #4 (staged dispatch): bilingual chip labels per interim service key.
+const INTERIM_LABEL: Record<string, { en: string; hi: string }> = {
+  ambulance: { en: "Ambulance", hi: "एम्बुलेंस" },
+  fire: { en: "Fire service", hi: "दमकल" },
+  towing: { en: "Towing", hi: "टोइंग" },
+};
 
 const STATUS_LABEL: Record<string, string> = {
   idle: "Tap to start a conversation",
@@ -98,6 +106,7 @@ export interface DispatcherSectionProps {
   vehiclesInvolved: string;
   casualties: string;
   selectedFlags: Set<string>;
+  interimDispatches: InterimDispatch[];
   dispatcherLocation: { point: GeoPoint; label: string } | null;
   pinnedLocation: GeoPoint | null;
   pinnedLabel: string;
@@ -113,6 +122,7 @@ export function DispatcherSection({
   vehiclesInvolved,
   casualties,
   selectedFlags,
+  interimDispatches,
   dispatcherLocation,
   pinnedLocation,
   pinnedLabel,
@@ -224,6 +234,41 @@ export function DispatcherSection({
         <p className="text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-2.5">
           {dispatcher.agentText}
         </p>
+      )}
+
+      {/* #4 (staged dispatch): responders notified early, mid-call. Each is a
+          notification record only — "being arranged", never a tracked vehicle
+          or a fabricated ETA (the real ETA is read at the close of the call). */}
+      {interimDispatches.length > 0 && (
+        <div style={{ background: "#FEF6EC", border: `1px solid ${C.saffronSoftBorder}`, borderRadius: RADIUS.input, padding: "10px 12px" }}>
+          <p className="uppercase" style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".08em", color: "#8A5A17", marginBottom: 6 }}>
+            Help being arranged{showHindi && <span style={{ fontWeight: 600 }}> · मदद भेजी जा रही है</span>}
+          </p>
+          <div className="flex flex-col" style={{ gap: 5 }}>
+            {interimDispatches.map((d) => {
+              const m = INTERIM_LABEL[d.service] ?? { en: d.service, hi: d.service };
+              return (
+                <div key={d.service} className="flex items-center" style={{ gap: 7, fontSize: 12 }}>
+                  <span className="flex h-2 w-2 flex-none">
+                    <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full opacity-60" style={{ background: C.saffron }} />
+                    <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: C.saffron }} />
+                  </span>
+                  <span style={{ color: C.ink, fontWeight: 600 }}>
+                    {m.en} notified{showHindi && <span style={{ fontWeight: 500, color: C.muted }}> · {m.hi} सूचित</span>}
+                  </span>
+                  {d.name && (
+                    <span className="truncate" style={{ color: C.secondary }}>
+                      — {d.name}{d.distanceKm != null && ` (~${d.distanceKm} km)`}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p style={{ fontSize: 10.5, color: C.muted, marginTop: 6, lineHeight: 1.4 }}>
+            Notification records only — being arranged now. Final estimated arrival times are confirmed at the end of the call. We do not track vehicles.
+          </p>
+        </div>
       )}
 
       {(isActive || selectedSubType || description) && (

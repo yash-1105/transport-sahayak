@@ -17,6 +17,7 @@ import { useRoutingStore } from "@/store/routingStore";
 import { useLocaleStore } from "@/store/localeStore";
 import { useBilingual } from "@/hooks/useI18n";
 import { useResponders } from "@/hooks/useResponders";
+import { haversineKm } from "@/lib/matching";
 import type {
   AccidentReport,
   AssessmentResult,
@@ -152,6 +153,17 @@ function Segmented({
 
 // Responder lists come from the Aggregator DPG (useResponders inside the
 // component) — the app no longer bundles any responder dataset.
+
+// #4 (Hindi staged dispatch): one interim responder notification shown as a
+// chip while the call is still in progress. `name`/`distanceKm` are null if no
+// responder of that type is loaded yet — the chip still honestly says the
+// service was notified.
+export interface InterimDispatch {
+  service: string; // "ambulance" | "fire" | "towing"
+  name: string | null;
+  distanceKm: number | null;
+  dispatchedAt: number; // ms epoch — when this responder was notified mid-call
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1031,14 +1043,14 @@ function FormView({
 
   return (
     <div className="flex flex-col" style={{ gap: 14, padding: "16px 20px 20px" }}>
-      {mode === "VOICE" && (
-        <VoiceSection
-          voice={voice}
-          locale={locale}
-          onLocaleChange={onLocaleChange}
-          onTranscriptReady={handleTranscript}
-        />
-      )}
+      {/* Dictation mic — always available in the merged Describe tab; the user
+          can type OR tap the mic to speak into the description. */}
+      <VoiceSection
+        voice={voice}
+        locale={locale}
+        onLocaleChange={onLocaleChange}
+        onTranscriptReady={handleTranscript}
+      />
 
       {/* Incident type — auto-detect + two-tier browse */}
       <IncidentTypePicker description={description} value={selectedSubType || selectedCategory} onChange={onSubType} />
@@ -1270,6 +1282,11 @@ export default function ReportPanel({
   const [dupMatch, setDupMatch] = useState<DuplicateMatch | null>(null);
   const [pendingIncident, setPendingIncident] = useState<AccidentReport | null>(null);
   const [dispatcherLocation, setDispatcherLocation] = useState<{ point: GeoPoint; label: string } | null>(null);
+  // #4 (Hindi staged dispatch): responders the backend notified early, mid-call,
+  // as interim notifications — shown as chips in DispatcherSection. Each is a
+  // notification record only; the authoritative dispatch records + real ETAs are
+  // produced by the normal matching flow after submit (never faked here).
+  const [interimDispatches, setInterimDispatches] = useState<InterimDispatch[]>([]);
 
   const [potholeDescription, setPotholeDescription] = useState("");
   const [potholeSeverity, setPotholeSeverity] = useState<"HIGH" | "MEDIUM" | "LOW">("MEDIUM");
@@ -1300,6 +1317,13 @@ export default function ReportPanel({
       const label = dispatcherLocation?.label || pinnedLabel || `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
       return { lat: point.lat, lng: point.lng, label };
     },
+    onInterimDispatch: (services, loc) => {
+      const point: GeoPoint | null =
+        (loc && typeof loc.lat === "number" && typeof loc.lng === "number"
+          ? { lat: loc.lat, lng: loc.lng }
+          : null) ?? dispatcherLocation?.point ?? pinnedLocation;
+      handleInterimDispatch(services, point);
+    },
     onSubmitReady: (payload: DispatcherSubmitPayload) => {
       const loc = dispatcherLocation?.point ?? payload.location ?? pinnedLocation;
       if (!loc) return;
@@ -1325,7 +1349,58 @@ export default function ReportPanel({
   const { data: responders, allDone: respondersLoaded } = useResponders();
   const appendReport = useEventLog((s) => s.appendReport);
   const appendAssessment = useEventLog((s) => s.appendAssessment);
+  const appendNote = useEventLog((s) => s.appendNote);
   const appendDuplicateFlagged = useEventLog((s) => s.appendDuplicateFlagged);
+
+  // #4 (Hindi staged dispatch): the backend notified responder(s) early,
+  // mid-call. Match the nearest one of each type from the in-memory Aggregator
+  // lists (distance only — no route/ETA is computed here; that stays for the
+  // post-submit matching flow), log an honest interim notification record in
+  // the timeline, and surface a chip. Honesty (Hard Rules 1/2/5): "notified /
+  // being arranged", never a dispatched/tracked claim or a fabricated ETA.
+  const handleInterimDispatch = useCallback(
+    (services: string[], point: GeoPoint | null) => {
+      const LIST: Record<string, { lat: number; lng: number; name: string }[]> = {
+        ambulance: responders.ambulanceStations,
+        fire: responders.fireStations,
+        towing: responders.towingStations,
+      };
+      const LABEL: Record<string, string> = { ambulance: "Ambulance", fire: "Fire service", towing: "Towing" };
+      const dispatchedAt = Date.now();
+      const picks: InterimDispatch[] = [];
+      for (const svc of services) {
+        const list = LIST[svc] ?? [];
+        let best: { name: string; km: number } | null = null;
+        if (point) {
+          for (const r of list) {
+            const km = haversineKm(point, { lat: r.lat, lng: r.lng });
+            if (!best || km < best.km) best = { name: r.name, km };
+          }
+        }
+        const pick: InterimDispatch = {
+          service: svc,
+          name: best?.name ?? null,
+          distanceKm: best ? Math.round(best.km * 10) / 10 : null,
+          dispatchedAt,
+        };
+        picks.push(pick);
+        const label = LABEL[svc] ?? svc;
+        appendNote(
+          "",
+          best
+            ? `Interim dispatch — ${label} notified: ${best.name} (~${best.km.toFixed(1)} km, nearest post). Being arranged; final ETA confirmed at close of call.`
+            : `Interim dispatch — ${label} notified. Being arranged; final ETA confirmed at close of call.`
+        );
+      }
+      // Merge, keeping the latest entry per service (dedupe by service key).
+      setInterimDispatches((prev) => {
+        const byKey = new Map(prev.map((d) => [d.service, d]));
+        for (const p of picks) byKey.set(p.service, p);
+        return Array.from(byKey.values());
+      });
+    },
+    [responders, appendNote]
+  );
   const entries = useEventLog((s) => s.entries);
   const clearRoutes = useRoutingStore((s) => s.clearRoutes);
 
@@ -1435,6 +1510,7 @@ export default function ReportPanel({
     setDupMatch(null);
     setPendingIncident(null);
     setDispatcherLocation(null);
+    setInterimDispatches([]);
     setPotholeDescription("");
     setPotholeSeverity("MEDIUM");
     clearRoutes();
@@ -1733,8 +1809,9 @@ export default function ReportPanel({
           <div className="flex flex-shrink-0" style={{ gap: 4, padding: "0 20px 12px", borderBottom: `1px solid ${C.hairline}` }}>
             {([
               { key: "SOS" as ReportMode, en: "SOS", hi: "एसओएस", color: C.red },
-              { key: "TEXT" as ReportMode, en: "Text", hi: "लिखें", color: C.blue },
-              { key: "VOICE" as ReportMode, en: "Speech-to-text", hi: "बोलकर लिखें", color: C.blue },
+              // "Describe" merges the old Text + Speech-to-text: type OR dictate
+              // (the mic lives inside the form now).
+              { key: "TEXT" as ReportMode, en: "Describe", hi: "लिखें / बोलें", color: C.blue },
               { key: "DISPATCHER" as ReportMode, en: "Voice", hi: "वॉइस", color: C.blue },
               { key: "POTHOLE" as ReportMode, en: "Pothole", hi: "गड्ढा", color: "#B06712" },
             ]).map((tab) => {
@@ -1793,6 +1870,9 @@ export default function ReportPanel({
                   towingStations={responders.towingStations}
                   incident={createdIncident}
                   assessment={assessmentResult}
+                  ambulanceDispatchedAt={
+                    interimDispatches.find((d) => d.service === "ambulance")?.dispatchedAt ?? null
+                  }
                   onReady={() => setPanelStatus("COMPLETE")}
                 />
               ) : respondersLoaded ? (
@@ -1858,6 +1938,7 @@ export default function ReportPanel({
                 vehiclesInvolved={vehiclesInvolved}
                 casualties={casualties}
                 selectedFlags={selectedFlags}
+                interimDispatches={interimDispatches}
                 dispatcherLocation={dispatcherLocation}
                 pinnedLocation={pinnedLocation}
                 pinnedLabel={pinnedLabel}

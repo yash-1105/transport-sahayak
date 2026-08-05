@@ -50,6 +50,16 @@ export interface UseVoiceDispatcherCallbacks {
   onSubType: (subType: string, category: string) => void;
   onLocationCaptured: (loc: GeoPoint, label: string) => void;
   onSubmitReady: (payload: DispatcherSubmitPayload) => void;
+  /** #4 (Hindi staged dispatch): the backend notified one or more responders
+   * early, mid-call, as interim notifications (never with an ETA). Fired with
+   * the service keys ("ambulance" | "fire" | "towing") and the incident
+   * location the backend used. ReportPanel matches the nearest responder(s),
+   * logs an honest notification record, and shows a chip. English never sends
+   * this (the English pipeline is untouched by #4). */
+  onInterimDispatch?: (
+    services: string[],
+    location: { lat: number; lng: number; label?: string } | null
+  ) => void;
   /** A manually-set incident location (map pin), or null if none is set. When
    * present it is used for the dispatcher's location instead of device GPS, so
    * a user who dropped a pin before starting isn't overridden by geolocation. */
@@ -105,6 +115,10 @@ interface CallMetricsState {
   startedAt: number | null; // ms epoch — start() pressed
   readyAt: number | null; // ms epoch — `ready` (call connected = clock start)
   dispatchedAt: number | null; // ms epoch — `submitted` (info collection done)
+  // #4: ms epoch of the FIRST real responder dispatch — the interim ambulance
+  // dispatch (Hindi staged flow), which can precede `submitted`. time-to-dispatch
+  // is measured to THIS when present, else to `dispatchedAt` (submit) as before.
+  firstDispatchAt: number | null;
   callerTurns: number;
   agentTurns: number;
   questionsAsked: number; // agent turns DURING info collection (before dispatch)
@@ -118,7 +132,7 @@ interface CallMetricsState {
 function freshMetrics(locale: VoiceLocale): CallMetricsState {
   return {
     posted: false, incidentId: null, locale,
-    startedAt: Date.now(), readyAt: null, dispatchedAt: null,
+    startedAt: Date.now(), readyAt: null, dispatchedAt: null, firstDispatchAt: null,
     callerTurns: 0, agentTurns: 0, questionsAsked: 0, productiveTurns: 0,
     fields: [], transcript: [], reconnects: 0, pendingProductive: false,
   };
@@ -174,6 +188,8 @@ interface ServerEvent {
   message?: string;
   role?: string;
   text?: string;
+  services?: unknown;
+  location?: { lat: number; lng: number; label?: string } | null;
 }
 
 export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseVoiceDispatcher {
@@ -239,18 +255,24 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
     if (!m || m.posted || m.readyAt == null) return;
     m.posted = true;
     const endedAt = Date.now();
+    // #4: the actual dispatch moment is the FIRST responder dispatch — the
+    // interim ambulance dispatch when the call staged one (Hindi), otherwise the
+    // `submitted` event as before. A call that dispatched an ambulance early
+    // then dropped still counts as "dispatched".
+    const dispatchMoment = m.firstDispatchAt ?? m.dispatchedAt;
     const outcome =
-      forcedOutcome ?? (m.dispatchedAt ? "dispatched" : statusRef.current === "error" ? "error" : "abandoned");
+      forcedOutcome ?? (dispatchMoment ? "dispatched" : statusRef.current === "error" ? "error" : "abandoned");
     const body = {
       incident_id: m.incidentId,
       locale: m.locale,
       outcome,
       started_at: m.startedAt ? new Date(m.startedAt).toISOString() : null,
       ready_at: m.readyAt ? new Date(m.readyAt).toISOString() : null,
-      dispatched_at: m.dispatchedAt ? new Date(m.dispatchedAt).toISOString() : null,
+      dispatched_at: dispatchMoment ? new Date(dispatchMoment).toISOString() : null,
       ended_at: new Date(endedAt).toISOString(),
-      // CORE metric — clock stops at `submitted`, never times the briefing.
-      time_to_dispatch_ms: m.dispatchedAt && m.readyAt ? m.dispatchedAt - m.readyAt : null,
+      // CORE metric — clock stops at the actual dispatch moment (interim
+      // ambulance dispatch when staged, else `submitted`); never times the briefing.
+      time_to_dispatch_ms: dispatchMoment && m.readyAt ? dispatchMoment - m.readyAt : null,
       call_duration_ms: m.startedAt ? endedAt - m.startedAt : null,
       caller_turns: m.callerTurns,
       agent_turns: m.agentTurns,
@@ -572,6 +594,23 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
             },
             { enableHighAccuracy: true, timeout: 7000 }
           );
+          break;
+        }
+        case "interim_dispatch": {
+          // #4 (Hindi staged dispatch): the backend arranged one or more
+          // responders early, mid-call. Hand the service list + location to
+          // ReportPanel, which runs the nearest-responder match, logs the
+          // notification record, and shows a chip. No ETA is ever implied here
+          // (the real details come with the closing briefing).
+          const services = Array.isArray(event.services)
+            ? event.services.filter((s): s is string => typeof s === "string")
+            : [];
+          // Metrics: the ambulance dispatch is the actual "dispatch" moment for
+          // time-to-dispatch (stamped once, and only if it precedes `submitted`).
+          if (metricsRef.current && metricsRef.current.firstDispatchAt == null && services.includes("ambulance")) {
+            metricsRef.current.firstDispatchAt = Date.now();
+          }
+          if (services.length) cb.onInterimDispatch?.(services, event.location ?? null);
           break;
         }
         case "submitted":

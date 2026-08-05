@@ -563,6 +563,12 @@ export interface MatchingPanelProps {
   towingStations: TowingStation[];
   incident: AccidentReport;
   assessment: AssessmentResult;
+  /** #4: ms epoch when the ambulance was actually dispatched mid-call (Hindi
+   * staged flow). When set, the ambulance ETA countdown is anchored to THIS
+   * moment (so "time remaining" reflects the real dispatch time), not to when
+   * matching finished. Null/undefined → anchor to the ROUTE_ESTIMATED log time
+   * as before (text/SOS/English calls). */
+  ambulanceDispatchedAt?: number | null;
   onReady?: () => void;
 }
 
@@ -581,6 +587,7 @@ export default function MatchingPanel({
   towingStations,
   incident,
   assessment,
+  ambulanceDispatchedAt,
   onReady,
 }: MatchingPanelProps) {
   const sev = assessment.severityScore as AssessmentSeverity;
@@ -657,8 +664,14 @@ export default function MatchingPanel({
   }
 
   const ambulanceEtaComputedAt = useMemo(
-    () => findEarliestRouteEstimatedAt(eventLogEntries, incident.id, "AMBULANCE"),
-    [eventLogEntries, incident.id]
+    () =>
+      // #4: if the ambulance was dispatched mid-call (Hindi staged flow), anchor
+      // the countdown to THAT moment so the remaining time reflects the real
+      // dispatch time — otherwise to the earliest logged ROUTE_ESTIMATED (when
+      // matching finished), exactly as before.
+      (ambulanceDispatchedAt != null ? new Date(ambulanceDispatchedAt).toISOString() : null) ??
+      findEarliestRouteEstimatedAt(eventLogEntries, incident.id, "AMBULANCE"),
+    [ambulanceDispatchedAt, eventLogEntries, incident.id]
   );
   const fireEtaComputedAt = useMemo(
     () => findEarliestRouteEstimatedAt(eventLogEntries, incident.id, "FIRE"),

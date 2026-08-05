@@ -3,8 +3,9 @@
 // Post-Call Analytics for the voice dispatcher (English + Hindi). OPERATOR-ONLY
 // (mounted only inside the operator Network area). Reads /api/call-metrics.
 //
-// HONESTY: the headline "time-to-dispatch" is ready_at → the `submitted` event
-// (info collection only) — it never includes the post-submit briefing/ETAs.
+// HONESTY: the headline "time-to-dispatch" is ready_at → the actual dispatch
+// moment (the interim ambulance dispatch when a call staged one, else the
+// `submitted` event) — it never includes the post-submit briefing/ETAs.
 // Charts are plain empirical summaries (a bucket histogram + an empirical
 // closure-time curve), NOT rigorous Kaplan-Meier / Markov modeling.
 

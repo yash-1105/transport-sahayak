@@ -41,7 +41,9 @@ interface AuthState {
   // consumed once by MapView on mount then cleared. pwaEntered flips true the
   // moment the user leaves the home screen so the gate stops re-showing it;
   // it's in-memory only, so a fresh cold launch of the PWA resets to the home.
-  launchIntent: "voice" | "dashboard" | "profile" | null;
+  // "report" opens the full report sheet (manual/describe form); "voice" starts
+  // the SOS voice dispatcher — mirrors the map's two report FABs.
+  launchIntent: "voice" | "report" | "dashboard" | "profile" | null;
   // Voice-bot language chosen on the PWA home before entering (voice launch only).
   launchVoiceLocale: "en-IN" | "hi-IN" | null;
   pwaEntered: boolean;
@@ -52,7 +54,7 @@ interface AuthState {
   exitGuest: (tab?: "signup" | "signin") => void;
   beginOnboarding: () => void;
   finishOnboarding: () => void;
-  setLaunchIntent: (intent: "voice" | "dashboard" | "profile", voiceLocale?: "en-IN" | "hi-IN") => void;
+  setLaunchIntent: (intent: "voice" | "report" | "dashboard" | "profile", voiceLocale?: "en-IN" | "hi-IN") => void;
   clearLaunchIntent: () => void;
   enterPwa: () => void;
 }
@@ -76,8 +78,26 @@ const OPERATOR_EMAILS = (process.env.NEXT_PUBLIC_OPERATOR_EMAILS ?? "yashsingh11
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
 
+// ── Administrator allowlist (super-role above operator) ───────────────────────
+// Same model as operators (derived from the email, never settable, password in
+// Supabase only, can't self-register). An Administrator is a SUPER-role:
+// isAdmin ⇒ also treated as an operator (sees everything operators see) plus the
+// admin-only oversight. Override via NEXT_PUBLIC_ADMIN_EMAILS (comma-separated).
+const ADMIN_EMAILS = (process.env.NEXT_PUBLIC_ADMIN_EMAILS ?? "admin@gmail.com")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+export function isAdminEmail(email?: string | null): boolean {
+  return !!email && ADMIN_EMAILS.includes(email.trim().toLowerCase());
+}
+
+// Operator access is granted to operators AND administrators (admin ⊇ operator),
+// so every operator-gated surface is also available to an admin.
 export function isOperatorEmail(email?: string | null): boolean {
-  return !!email && OPERATOR_EMAILS.includes(email.trim().toLowerCase());
+  if (!email) return false;
+  const e = email.trim().toLowerCase();
+  return OPERATOR_EMAILS.includes(e) || ADMIN_EMAILS.includes(e);
 }
 
 // Map Supabase's auth error messages to short, friendly inline copy.
@@ -217,9 +237,15 @@ if (supabaseBrowser) {
   useAuthStore.setState({ loading: false, ready: true });
 }
 
-// Derived operator flag — true ONLY for a signed-in Supabase user whose email is
-// allowlisted. Recomputed from `user`; there is no way to set it directly, and
-// no signup path can produce it (a fresh signup's email won't be on the list).
+// Derived operator flag — true for a signed-in Supabase user whose email is on
+// the operator OR admin allowlist (admin ⊇ operator). Never settable; no signup
+// path can produce it.
 export function useIsOperator(): boolean {
   return useAuthStore((s) => isOperatorEmail(s.user?.email));
+}
+
+// Derived administrator (super-role) flag — admin-only oversight on top of the
+// operator surfaces. Same derivation guarantees as useIsOperator.
+export function useIsAdmin(): boolean {
+  return useAuthStore((s) => isAdminEmail(s.user?.email));
 }
