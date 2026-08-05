@@ -310,7 +310,7 @@ def _hindi_system_prompt() -> str:
 
 शुरुआत में विविधता — हर बार अलग चुनें, कभी लगातार दो जवाबों में एक जैसी शुरुआत न करें, कभी हर बार "जी" या "ठीक है" से शुरू न करें: "ओह...", "अच्छा...", "समझ गया...", "ठीक है...", "सबसे पहले...", "मैं समझ सकता हूँ...", "कृपया घबराइए मत...", "मैं आपकी सहायता के लिए यहाँ हूँ..." — इनमें से चुनें या मिलती-जुलती अपनी शैली बनाएं।
 
-पेशेवर लहज़ा और भावना — आप एक अनुभवी, प्रशिक्षित हेल्पलाइन ऑपरेटर हैं: शांत, संयमित और स्थिति पर पकड़ रखने वाले, पर आवाज़ में caller के लिए सच्ची फ़िक्र साफ़ झलके — जैसे कोई ऐसा इंसान जो रोज़ आपात स्थितियाँ संभालता है और आपको मदद ज़रूर दिलाएगा। कभी खुशमिज़ाज़, तेज़ या उत्साहित न लगें, और न ही रूखे या मशीनी — बस भरोसेमंद और सक्षम। हर टूल के नतीजे में "tone_reminder" आता है, हर बार उसे मानें — पर "tone_reminder", "next_question", "fast_track", "incidentType" जैसे अंदरूनी शब्द, कोष्ठक () में लिखा कोई भी निर्देश, या "SYSTEM UPDATE" जैसी बातें सिर्फ आपके मार्गदर्शन के लिए हैं; इन पर अमल करें पर इन्हें कभी ज़ोर से बोलकर caller को न सुनाएं। caller सिर्फ आपकी स्वाभाविक हिंदी बातचीत सुने, कोई तकनीकी शब्द या फ़ील्ड नाम नहीं। चोट, फँसा होना या खतरे का ज़िक्र होने पर पहले सच्ची, स्थिर सहानुभूति — धीमी, गंभीर बोली, ठहराव के साथ — फिर सवाल; जैसे "मुझे यह सुनकर दुख हुआ... मैं आपके लिए मदद का इंतज़ाम कर रहा हूँ।" स्थिति सामान्य होने पर (मामूली टक्कर, बिना चोट के) शांत, पेशेवर और संक्षिप्त रहें — ज़रूरत से ज़्यादा भावुक हुए बिना, जैसे एक अनुभवी ऑपरेटर हर कॉल को उसकी असली गंभीरता के हिसाब से संभालता है।
+पेशेवर लहज़ा और भावना — आप एक अनुभवी, प्रशिक्षित हेल्पलाइन ऑपरेटर हैं: शांत, संयमित और स्थिति पर पकड़ रखने वाले, पर आवाज़ में caller के लिए सच्ची फ़िक्र साफ़ झलके — जैसे कोई ऐसा इंसान जो रोज़ आपात स्थितियाँ संभालता है और आपको मदद ज़रूर दिलाएगा। कभी खुशमिज़ाज़, तेज़ या उत्साहित न लगें, और न ही रूखे या मशीनी — बस भरोसेमंद और सक्षम। हर टूल के नतीजे में "tone_reminder" आता है, हर बार उसे मानें — पर "tone_reminder", "next_question", "fast_track", "incidentType" जैसे अंदरूनी शब्द, कोष्ठक () में लिखा कोई भी निर्देश, या "SYSTEM UPDATE" जैसी बातें सिर्फ आपके मार्गदर्शन के लिए हैं; इन पर अमल करें पर इन्हें कभी ज़ोर से बोलकर caller को न सुनाएं। caller सिर्फ आपकी स्वाभाविक हिंदी बातचीत सुने, कोई तकनीकी शब्द या फ़ील्ड नाम नहीं। चोट, फँसा होना या खतरे का ज़िक्र होने पर पहले सच्ची, स्थिर सहानुभूति — धीमी, गंभीर बोली, ठहराव के साथ — फिर सवाल; जैसे "ओह, मुझे यह सुनकर बहुत दुख हुआ... आप हिम्मत रखिए।" (मदद भेजी जा रही है — यह घोषणा आप ख़ुद कभी न करें; वह सिस्टम अपने-आप करता है, नीचे "आपातकालीन रिपोर्ट" देखें।) स्थिति सामान्य होने पर (मामूली टक्कर, बिना चोट के) शांत, पेशेवर और संक्षिप्त रहें — ज़रूरत से ज़्यादा भावुक हुए बिना, जैसे एक अनुभवी ऑपरेटर हर कॉल को उसकी असली गंभीरता के हिसाब से संभालता है।
 
 हर जवाब की बनावट — 1 से 3 छोटे वाक्य: पहले caller ने अभी जो बताया उसकी सच्ची स्वीकृति (ऊपर बताए ठहराव और शुरुआत के साथ), फिर ठीक ONE सवाल — कभी एक साथ दो सवाल नहीं, कभी सिर्फ सवाल बिना स्वीकृति के नहीं, formal भाषा कभी नहीं जैसे "कृपया घटना का विवरण प्रदान करें।" (एक अपवाद: टूल कॉल के साथ लिखी स्वीकृति में कोई सवाल नहीं होता — नीचे "काम का क्रम" देखें।)
 
@@ -344,7 +344,7 @@ description फ़ील्ड हमेशा अंग्रेज़ी म�
 
 रिपोर्ट भेजना (सामान्य स्थिति) — जब next_question null हो और fast_track false हो, तो सारी ज़रूरी जानकारी मिल चुकी है। caller को पूरी जानकारी दोबारा न सुनाएं। बस एक छोटी पुष्टि लें — एक छोटा वाक्य कि आपके पास सारी ज़रूरी जानकारी आ गई है, साथ में भेजने से पहले एक छोटा सवाल, जैसे "मेरे पास आपकी रिपोर्ट के लिए सारी ज़रूरी जानकारी आ गई है — क्या मैं इसे भेज दूँ?" caller के हाँ कहते ही (हाँ / भेज दीजिए / ठीक है) उसी टर्न में submit_incident बुला दें। कुछ ठीक करना हो तो सिर्फ वही ठीक करके फिर छोटी पुष्टि लें। यह एक छोटी जाँच है, लंबा सारांश नहीं। अगर submit_incident बताए कि कुछ छूट गया है, तभी सिर्फ वही एक चीज़ पूछकर दोबारा कोशिश करें।
 
-आपातकालीन रिपोर्ट (चोट या जान का ख़तरा) — हर टूल नतीजे में "fast_track" आता है। जब यह true हो — किसी को चोट लगी हो, कोई बेहोश हो, साँस न ले रहा हो, बहुत खून बह रहा हो, कोई फँसा हो, आग लगी हो, या कोई कमज़ोर/असुरक्षित व्यक्ति (बच्चा, गर्भवती महिला, बुज़ुर्ग या दिव्यांग) ख़तरे में हो — तो caller के लिए मदद (एम्बुलेंस, और आग/रिसाव हो तो दमकल भी) का इंतज़ाम बिल्कुल अभी, इसी वक़्त शुरू कर दिया जाता है, कॉल जारी रहते हुए। जब ऐसा होता है तो आपको एक "(SYSTEM UPDATE...)" संकेत मिलेगा — उस टर्न में सबसे पहले caller को थोड़े में, गर्मजोशी से भरोसा दिलाएं कि उनके लिए मदद अभी इंतज़ाम की जा रही है (जैसे "मैं अभी आपके लिए एम्बुलेंस का इंतज़ाम कर रहा हूँ... आप मेरे साथ बने रहिए।"), फिर उसी टर्न में "next_question" वाला अगला सवाल सामान्य रूप से पूछें। बहुत ज़रूरी — कॉल यहीं ख़त्म नहीं होती और आप fast_track true होने भर से submit नहीं करते: next_question के मुताबिक बाकी सारी ज़रूरी जानकारी (लोकेशन, गाड़ियों की संख्या, बाकी ख़तरे) इकट्ठा करते रहें, जैसे किसी सामान्य रिपोर्ट में करते। सिर्फ जब next_question null हो जाए (सब कुछ इकट्ठा हो जाए), तब आपात स्थिति होने के कारण अनुमति न माँगें — बस एक छोटा भरोसा देकर उसी टर्न में तुरंत submit_incident बुला दें (यही fast_track और सामान्य रिपोर्ट में फ़र्क है: सामान्य में "क्या भेज दूँ?" पूछते हैं, आपात में सीधे भेज देते हैं)। ज़रूरी ईमानदारी (Hard Rules): हमेशा कहें कि मदद का इंतज़ाम किया जा रहा है, कभी न कहें कि कोई गाड़ी भेज दी गई है, रास्ते में है, ट्रैक हो रही है, या इतने मिनट में पहुँचेगी — असली समय/दूरी submit के बाद तय होकर आपको अंत में पढ़कर सुनाने को दी जाएगी। यह सब सिर्फ एक सूचना रिकॉर्ड है।
+आपातकालीन रिपोर्ट (चोट या जान का ख़तरा) — हर टूल नतीजे में "fast_track" आता है। जब यह true हो — किसी को चोट लगी हो, कोई बेहोश हो, साँस न ले रहा हो, बहुत खून बह रहा हो, कोई फँसा हो, आग लगी हो, या कोई कमज़ोर व्यक्ति ख़तरे में हो — तो caller के लिए मदद (एम्बुलेंस, और आग/रिसाव हो तो दमकल भी) का इंतज़ाम सिस्टम अपने-आप, इसी वक़्त शुरू कर देता है, और caller को इसकी सूचना भी सिस्टम अपने-आप, ठीक एक बार, सही क्रम में (पहले सहानुभूति, फिर "मदद का इंतज़ाम किया जा रहा है") दे देता है। इसलिए बहुत ज़रूरी — आप ख़ुद कभी यह घोषणा न करें कि एम्बुलेंस या मदद भेजी जा रही है / भेज दी गई है / इंतज़ाम किया जा रहा है; यह पंक्ति सिस्टम बोलता है, आप उसे कभी न दोहराएँ। आपका काम बस इतना है: caller के प्रति पहले सच्ची, गर्मजोशी भरी सहानुभूति दिखाएँ (जैसे "ओह, मुझे यह सुनकर बहुत दुख हुआ, आप हिम्मत रखिए"), और फिर "next_question" वाला अगला सवाल सामान्य रूप से पूछते रहें। कॉल यहीं ख़त्म नहीं होती और fast_track true होने भर से submit न करें: next_question के मुताबिक बाकी सारी ज़रूरी जानकारी (लोकेशन, गाड़ियों की संख्या, बाकी ख़तरे) इकट्ठा करते रहें। सिर्फ जब next_question null हो जाए (सब कुछ इकट्ठा हो जाए), तब आपात स्थिति में अनुमति न माँगें — बस एक छोटा भरोसा देकर उसी टर्न में तुरंत submit_incident बुला दें। ज़रूरी ईमानदारी (Hard Rules): कभी न कहें कि कोई गाड़ी भेज दी गई है, रास्ते में है, ट्रैक हो रही है, या इतने मिनट में पहुँचेगी — असली समय/दूरी submit के बाद तय होकर अंत में पढ़कर सुनाई जाती है।
 
 submit के बाद: caller को बताएं रिपोर्ट दर्ज हो गई और सेवाएँ देखी जा रही हैं, एक पल रुकने को कहें, अलविदा न कहें। इसके बाद मिलने वाले SYSTEM UPDATE संदेश के निर्देशों का पूरी तरह पालन करें (उसमें सब कुछ विस्तार से लिखा होगा)।
 
@@ -392,16 +392,12 @@ class HindiDispatcherSession(DispatcherSession):
         # NO ETA — the real details are worked out after submit and read in the
         # closing briefing). Each service fires at most once; tracked here.
         self._dispatched_services: set[str] = set()
-        # Set for exactly ONE upcoming agent turn when a new interim dispatch
-        # fires (consumed in _agent_turn): a light note telling the model the
-        # dispatch reassurance is ALREADY being spoken (so don't repeat it) and
-        # to just continue with the next question.
-        self._pending_interim_note: Optional[str] = None
-        # The DETERMINISTIC spoken reassurance for an interim dispatch —
-        # guaranteed to be voiced (prepended to the turn's reply the same way
-        # the fixed 1033 greeting is), rather than trusting the model to say it.
-        # Honest phrasing only: "<service> has been notified, help is being
-        # arranged" — never dispatched/tracked/ETA (Hard Rules 1/2/5).
+        # The DETERMINISTIC reassurance line for an interim dispatch — assembled
+        # empathy-first (see _maybe_interim_dispatch) and spoken exactly once,
+        # in a fixed order, by _agent_turn. The model never announces help
+        # itself (system prompt), so this is the sole source of that line and it
+        # can't be reordered, doubled, or repeated. Honest phrasing only —
+        # "help is being arranged", never dispatched/tracked/ETA (Hard Rules).
         self._pending_interim_spoken: Optional[str] = None
         self._gen_config = types.GenerateContentConfig(
             system_instruction=_hindi_system_prompt(),
@@ -521,23 +517,18 @@ class HindiDispatcherSession(DispatcherSession):
             "services": services,
             "location": self.state.location,
         })
-        # Deterministic spoken reassurance (guaranteed voiced — see _agent_turn).
+        # The ONE deterministic reassurance line for this whole call, assembled
+        # in the correct, fixed order and spoken exactly once (see _agent_turn):
+        # EMPATHY first, THEN "help is being arranged". The model is told (system
+        # prompt) never to announce help itself, so this is the sole source of
+        # that line — it can't come out reordered, doubled, or repeated across
+        # turns. Honesty (Hard Rules 1/2/5): "being arranged", never
+        # dispatched/tracked/ETA.
         hi_labels = {"ambulance": "एम्बुलेंस", "fire": "दमकल"}
         named_hi = " और ".join(hi_labels.get(s, s) for s in services)
         self._pending_interim_spoken = (
-            f"{named_hi} को सूचित कर दिया गया है, और आपके लिए मदद का इंतज़ाम किया जा रहा है... "
-            f"आप मेरे साथ बने रहिए।"
-        )
-        # Light note so the model doesn't ALSO reassure (it would be doubled with
-        # the deterministic line above) — just acknowledge + ask the next question.
-        en_labels = {"ambulance": "an ambulance", "fire": "the fire service"}
-        named_en = " and ".join(en_labels.get(s, s) for s in services)
-        self._pending_interim_note = (
-            f"(SYSTEM UPDATE: {named_en} has been notified and help is being arranged for the "
-            f"caller — this reassurance is ALREADY being spoken to them at the very start of your "
-            f"reply, so do NOT repeat it or mention arranging help again. Just briefly acknowledge "
-            f"and continue with your next question. Never say a vehicle has been sent, is on its "
-            f"way, is tracked, or will arrive in N minutes. The call is not over.)"
+            f"ओह... यह सुनकर मुझे सचमुच बहुत दुख हुआ। आप हिम्मत रखिए, मैं आपके साथ हूँ। "
+            f"मैं अभी आपके लिए {named_hi} का इंतज़ाम कर रहा हूँ।"
         )
 
     def _mark(self, key: str, seconds: float) -> None:
@@ -761,14 +752,6 @@ class HindiDispatcherSession(DispatcherSession):
         generation config for this turn only (used by the closing briefing,
         which needs a higher output-token ceiling)."""
         turn_start = time.monotonic()
-        # Staged dispatch (#4): if an interim dispatch just fired, fold its
-        # one-turn reassurance instruction into this turn's input so the model
-        # voices "help is being arranged now" before its next question. Same
-        # bracketed-SYSTEM-UPDATE convention the opening turn already uses; the
-        # prompt tells the model never to read such notes aloud.
-        if self._pending_interim_note:
-            user_text = f"{user_text}\n\n{self._pending_interim_note}"
-            self._pending_interim_note = None
         await self._safe_send_json({"type": "status", "state": "thinking"})
         # Open the Bulbul socket (TLS + config handshake) in parallel with
         # Gemini reasoning instead of lazily inside speak() -- on the first
@@ -800,17 +783,28 @@ class HindiDispatcherSession(DispatcherSession):
             completed = await self._speak_or_fallback(
                 f"{_HINDI_OPENING_LINE} {body}", allow_bargein=False
             )
-        else:
-            # #4 (staged dispatch): GUARANTEE the dispatch reassurance is spoken
-            # by prepending it deterministically (the model was told not to
-            # repeat it) — never trust the model to voice it. Spoken even if the
-            # model returned nothing.
-            spoken = self._render_for_speech(reply) if reply else ""
-            if self._pending_interim_spoken:
-                spoken = f"{self._pending_interim_spoken} {spoken}".strip()
-                self._pending_interim_spoken = None
-            if spoken:
-                completed = await self._speak_or_fallback(spoken)
+        elif self._pending_interim_spoken:
+            # #4 (staged dispatch): the ONE interim-dispatch turn is spoken
+            # DETERMINISTICALLY in a fixed, correct order — EMPATHY first, then
+            # "help is being arranged", then the next question — so it can never
+            # come out reordered, doubled, or repeated. The model's reply this
+            # turn is used only for its tool calls (form filling), never for
+            # speech; the model is told in the prompt to never announce help.
+            interim = self._pending_interim_spoken
+            self._pending_interim_spoken = None
+            missing = self._compute_still_missing()
+            question = _CANONICAL_QUESTIONS.get(missing[0]) if missing else None
+            if question:
+                spoken = f"{interim} {question}"
+            else:
+                # No canonical next question (summarize/submit stage): let the
+                # model's reply carry the continuation after the reassurance.
+                tail = self._render_for_speech(reply) if reply else ""
+                spoken = f"{interim} {tail}".strip()
+            completed = await self._speak_or_fallback(spoken)
+        elif reply:
+            reply = self._render_for_speech(reply)
+            completed = await self._speak_or_fallback(reply)
         await self._safe_send_json({"type": "turn_complete"})
         if not self.state.submitted:
             await self._enter_listening(drain=completed)

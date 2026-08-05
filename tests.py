@@ -1461,7 +1461,7 @@ check("#4 interim: NEVER dispatch before a location is known",
 check("#4 interim: a non-critical incident dispatches nothing early",
       _hi_staged(casualties=0)._pending_interim_services() == [])
 
-async def _interim_dispatch_sends_frame_and_arms_note():
+async def _interim_dispatch_sends_frame_and_arms_line():
     s = _hi_staged(flags={"Trapped"})
     await s._maybe_interim_dispatch()
     frame = s.websocket.sent[-1]
@@ -1470,30 +1470,35 @@ async def _interim_dispatch_sends_frame_and_arms_note():
         and frame["services"] == ["ambulance"]
         and frame["location"]["label"] == "NH-27"
     )
-    # A deterministic spoken reassurance is armed (guaranteed voiced in
-    # _agent_turn), honest wording only -- "<service> notified, help being
-    # arranged" -- and the model note tells the model NOT to repeat it.
-    spoken = s._pending_interim_spoken or ""
-    ok_spoken = "एम्बुलेंस" in spoken and "सूचित" in spoken and "मिनट" not in spoken
-    note = s._pending_interim_note or ""
-    ok_note = "do NOT repeat" in note and "arranged" in note.lower()
+    # The single deterministic reassurance line is armed EMPATHY-FIRST, then the
+    # "help is being arranged" part -- honest wording only (no ETA/minutes), and
+    # there is NO model note (the model never announces help itself).
+    line = s._pending_interim_spoken or ""
+    ok_line = (
+        "दुख" in line and "एम्बुलेंस का इंतज़ाम" in line
+        and line.index("दुख") < line.index("एम्बुलेंस")   # empathy BEFORE the ambulance line
+        and "मिनट" not in line
+        and not hasattr(s, "_pending_interim_note")       # note mechanism removed entirely
+    )
     # deduped: a second pass with the same state sends nothing new
     before = len(s.websocket.sent)
     await s._maybe_interim_dispatch()
     ok_dedup = len(s.websocket.sent) == before
-    return ok_frame and ok_spoken and ok_note and ok_dedup and s._dispatched_services == {"ambulance"}
+    return ok_frame and ok_line and ok_dedup and s._dispatched_services == {"ambulance"}
 
-check("#4 interim: _maybe_interim_dispatch sends one frame, arms an ETA-free spoken line + note, and dedups",
-      asyncio.run(_interim_dispatch_sends_frame_and_arms_note()))
+check("#4 interim: _maybe_interim_dispatch sends one frame + arms one empathy-first ETA-free line, and dedups",
+      asyncio.run(_interim_dispatch_sends_frame_and_arms_line()))
 
-async def _interim_reassurance_is_spoken_deterministically():
-    # #4: the dispatch reassurance is GUARANTEED spoken -- prepended to the turn's
-    # reply in _agent_turn even if the model itself says nothing about it.
+async def _interim_turn_is_empathy_then_help_then_question():
+    # #4: the interim turn is spoken DETERMINISTICALLY in the fixed order
+    # empathy -> "help being arranged" -> next question, exactly once. The
+    # model's own reply is IGNORED for speech this turn (used only for its tool
+    # calls), so it can never reorder, double, or repeat the help announcement.
     s = _hi_staged(flags={"Trapped"})
     await s._maybe_interim_dispatch()
     spoken = []
     async def fake_reason(client, user_text, config=None):
-        return "अच्छा... क्या कोई फँसा हुआ है?"   # model's own reply (no reassurance)
+        return "अच्छा... मैं एम्बुलेंस भेज रहा हूँ, क्या कोई फँसा है?"  # model tries to announce help
     async def fake_speak(text, allow_bargein=True):
         spoken.append(text); return True
     async def _noop(*a, **k):
@@ -1504,42 +1509,20 @@ async def _interim_reassurance_is_spoken_deterministically():
     s._enter_listening = _noop
     s._opening_line_pending = False
     await s._agent_turn(None, "कोई फँसा है")
+    out = spoken[0] if spoken else ""
+    canonical = "कुल कितनी गाड़ियाँ थीं, और क्या किसी को चोट लगी या कोई फँसा हुआ है?"
     return (
         len(spoken) == 1
-        and "एम्बुलेंस को सूचित कर दिया गया है" in spoken[0]   # reassurance spoken first
-        and spoken[0].strip().endswith("क्या कोई फँसा हुआ है?")  # ...then the model's question
-        and s._pending_interim_spoken is None                 # consumed
+        and out.startswith("ओह")                                   # empathy FIRST
+        and out.index("दुख") < out.index("एम्बुलेंस का इंतज़ाम")   # empathy before help line
+        and out.index("एम्बुलेंस का इंतज़ाम") < out.index(canonical)  # help before the question
+        and out.endswith(canonical)                                # ends with the canonical question
+        and "अच्छा" not in out                                     # the model's own reply is NOT spoken
+        and s._pending_interim_spoken is None                      # consumed (spoken once)
     )
 
-check("#4 interim: the dispatch reassurance is spoken deterministically (prepended), then cleared",
-      asyncio.run(_interim_reassurance_is_spoken_deterministically()))
-
-async def _interim_note_folds_into_next_agent_turn():
-    # The armed note is consumed by _agent_turn and folded into that turn's model
-    # input, then cleared -- so it is voiced exactly once.
-    s = _hi_staged(flags={"Trapped"})
-    await s._maybe_interim_dispatch()
-    captured = {}
-    async def fake_reason(client, user_text, config=None):
-        captured["text"] = user_text
-        return ""   # no spoken reply needed for this assertion
-    async def _noop(*a, **k):
-        return None
-    async def fake_speak(text, allow_bargein=True):
-        return True
-    s._reason = fake_reason
-    s._speak_or_fallback = fake_speak
-    s._preconnect_tts = _noop   # keep the turn hermetic (no Bulbul network)
-    s._opening_line_pending = False
-    await s._agent_turn(None, "मेरी कार दूसरी कार से टकरा गई")
-    return (
-        "SYSTEM UPDATE" in captured.get("text", "")
-        and "do NOT repeat" in captured.get("text", "")
-        and s._pending_interim_note is None   # consumed
-    )
-
-check("#4 interim: the reassurance note is folded into the next agent turn's input, then cleared",
-      asyncio.run(_interim_note_folds_into_next_agent_turn()))
+check("#4 interim: the turn is spoken empathy -> help-being-arranged -> question (model reply ignored, no repeat)",
+      asyncio.run(_interim_turn_is_empathy_then_help_then_question()))
 
 # Regression guard: the ENGLISH pipeline must be completely unaffected by #4 --
 # base DispatcherSession has no staged-dispatch machinery at all.
@@ -1851,8 +1834,7 @@ def _fresh_opening_session():
     s._ended = asyncio.Event()
     s._last_opener = None
     s._turn_stats = {}
-    s._pending_interim_note = None   # #4: mirrors __init__ (helper skips it)
-    s._pending_interim_spoken = None
+    s._pending_interim_spoken = None   # #4: mirrors __init__ (helper skips it)
     return s
 
 async def _hindi_opening_turn_greeting_one_utterance():
