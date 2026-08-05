@@ -687,6 +687,8 @@ export default function MapView() {
   // ssr:false dynamic import, so this reads on the client only; consume it into
   // initial state here (no setState-in-effect), then clear the store flag below.
   const [launchIntent] = useState(() => useAuthStore.getState().launchIntent);
+  // Voice-bot language chosen on the PWA home before entering (voice launch only).
+  const [launchVoiceLocale] = useState(() => useAuthStore.getState().launchVoiceLocale);
   const [reportOpen, setReportOpen] = useState(launchIntent === "voice");
   // PWA launch: force the report panel into a mode / auto-start the voice call.
   const [reportInitialMode, setReportInitialMode] = useState<ReportMode | undefined>(
@@ -1379,6 +1381,7 @@ export default function MapView() {
         open={reportOpen}
         initialMode={reportInitialMode}
         autoStartVoice={reportAutoStartVoice}
+        initialVoiceLocale={launchVoiceLocale ?? undefined}
         pinnedLocation={pinnedLocation}
         pinnedLabel={pinnedLabel}
         onRequestPin={requestPin}

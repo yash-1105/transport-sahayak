@@ -1,6 +1,6 @@
 "use client";
 import React, { useState } from "react";
-import { C, RADIUS, CTA_GRADIENT, BRAND_GRADIENT, HEADER_GRADIENT } from "@/lib/design";
+import { C, RADIUS, CTA_GRADIENT, BRAND_GRADIENT, SHADOW } from "@/lib/design";
 import { ShieldCrossIcon, UserIcon } from "@/components/ui/icons";
 import { useBilingual } from "@/hooks/useI18n";
 import { useAuthStore } from "@/store/authStore";
@@ -21,16 +21,21 @@ export default function PWAHome() {
   const gateInitialTab = useAuthStore((s) => s.gateInitialTab);
 
   const [showAuth, setShowAuth] = useState(false);
+  const [chooseLang, setChooseLang] = useState(false);
 
   const displayName =
     ((user?.user_metadata?.full_name as string | undefined)?.trim() || user?.email || "").trim();
   const initial = (displayName || "?").charAt(0).toUpperCase();
 
-  // Report Incident → straight into the voice dispatcher. Emergencies must never
-  // be blocked, so a signed-out user is dropped into guest mode first.
+  // Report Incident → first ask which language the voice dispatcher should speak.
   function handleReport() {
+    setChooseLang(true);
+  }
+  // Language chosen → into the voice dispatcher in that language. Emergencies
+  // must never be blocked, so a signed-out user is dropped into guest mode first.
+  function startVoice(locale: "en-IN" | "hi-IN") {
     if (!user) continueAsGuest();
-    setLaunchIntent("voice");
+    setLaunchIntent("voice", locale);
     enterPwa();
   }
   // View dashboard → signed in: their own profile; signed out: the guest app
@@ -49,7 +54,7 @@ export default function PWAHome() {
   return (
     <div
       className="fixed inset-0 z-[2500] flex flex-col"
-      style={{ background: HEADER_GRADIENT, color: "#fff" }}
+      style={{ background: C.page, color: C.ink }}
     >
       {/* ── Top bar: brand + auth affordance (safe-area top) ── */}
       <div
@@ -61,8 +66,8 @@ export default function PWAHome() {
             <ShieldCrossIcon size={19} style={{ color: "#fff" }} />
           </div>
           <div style={{ lineHeight: 1.15, minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }} className="truncate">Transport Sahayak</div>
-            {showHindi && <div style={{ fontSize: 12, color: "#93A3BE" }}>परिवहन सहायक</div>}
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.ink }} className="truncate">Transport Sahayak</div>
+            {showHindi && <div style={{ fontSize: 12, color: C.muted }}>परिवहन सहायक</div>}
           </div>
         </div>
 
@@ -70,58 +75,83 @@ export default function PWAHome() {
           <button
             onClick={handleProfile}
             className="flex items-center flex-none"
-            style={{ gap: 7, padding: "4px 10px 4px 5px", borderRadius: RADIUS.pill, border: "1px solid rgba(255,255,255,.16)", background: "rgba(255,255,255,.1)", color: "#fff", cursor: "pointer", maxWidth: 170 }}
+            style={{ gap: 7, padding: "4px 10px 4px 5px", borderRadius: RADIUS.pill, border: `1px solid ${C.border}`, background: "#fff", color: C.ink, cursor: "pointer", maxWidth: 170 }}
           >
-            <span className="flex items-center justify-center flex-none" style={{ width: 24, height: 24, borderRadius: "50%", background: "linear-gradient(135deg,#2456A6,#173B77)", fontSize: 12, fontWeight: 700 }}>{initial}</span>
+            <span className="flex items-center justify-center flex-none" style={{ width: 24, height: 24, borderRadius: "50%", background: "linear-gradient(135deg,#2456A6,#173B77)", fontSize: 12, fontWeight: 700, color: "#fff" }}>{initial}</span>
             <span className="truncate" style={{ fontSize: 12.5, fontWeight: 600, maxWidth: 120 }}>{displayName}</span>
           </button>
         ) : (
           <button
             onClick={() => setShowAuth(true)}
             className="flex items-center flex-none"
-            style={{ gap: 6, padding: "6px 12px", borderRadius: RADIUS.pill, border: "1px solid rgba(255,255,255,.18)", background: "rgba(255,255,255,.12)", color: "#fff", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}
+            style={{ gap: 6, padding: "6px 12px", borderRadius: RADIUS.pill, border: `1px solid ${C.border}`, background: "#fff", color: C.body, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}
           >
             <UserIcon size={15} />
-            <span>Sign in{showHindi && <span style={{ color: "#C6D0E2", fontWeight: 500 }}> · साइन इन</span>}</span>
+            <span>Sign in{showHindi && <span style={{ color: C.muted, fontWeight: 500 }}> · साइन इन</span>}</span>
           </button>
         )}
       </div>
 
-      {/* ── Center: big Report button ── */}
+      {/* ── Center: Report button, or the language choice once tapped ── */}
       <div className="flex flex-col items-center justify-center flex-1" style={{ gap: 20, padding: "12px 24px", overflowY: "auto" }}>
-        <div style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", color: "#7D8DA9", fontWeight: 600, textAlign: "center" }}>
-          Road accident first response
-        </div>
+        {chooseLang ? (
+          <>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: C.ink }}>
+                Choose a language{showHindi && <span style={{ fontWeight: 500, color: C.muted, fontSize: 15 }}> · भाषा चुनें</span>}
+              </div>
+              <p style={{ fontSize: 12.5, color: C.secondary, marginTop: 4 }}>Which language should the voice dispatcher speak?</p>
+            </div>
 
-        <button
-          onClick={handleReport}
-          aria-label="Report Incident"
-          className="flex flex-col items-center justify-center active:scale-95 transition-transform"
-          style={{
-            width: "min(72vw, 258px)", aspectRatio: "1", borderRadius: "50%",
-            border: "none", cursor: "pointer", color: "#fff", gap: 8,
-            background: CTA_GRADIENT, boxShadow: "0 16px 44px rgba(198,54,44,.5)",
-          }}
-        >
-          <AlertGlyph />
-          <span style={{ fontSize: 21, fontWeight: 800, letterSpacing: "-.01em" }}>Report Incident</span>
-          {showHindi && <span style={{ fontSize: 14, fontWeight: 600, opacity: 0.92 }}>रिपोर्ट करें</span>}
-        </button>
+            <div className="flex flex-col" style={{ gap: 12, width: "min(86vw, 320px)" }}>
+              <LangButton primary onClick={() => startVoice("en-IN")} title="English" sub="Talk to the dispatcher in English" />
+              <LangButton onClick={() => startVoice("hi-IN")} title="हिंदी" sub="वॉइस डिस्पैचर से हिंदी में बात करें" />
+            </div>
 
-        <p style={{ fontSize: 12.5, color: "#93A3BE", textAlign: "center", maxWidth: 300, lineHeight: 1.5 }}>
-          Tap to talk to the AI dispatcher — it takes your report in English or Hindi.
-        </p>
+            <button
+              onClick={() => setChooseLang(false)}
+              style={{ background: "transparent", border: "none", color: C.secondary, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: "6px 14px" }}
+            >
+              ‹ Back
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", color: C.muted, fontWeight: 600, textAlign: "center" }}>
+              Road accident first response
+            </div>
 
-        <button
-          onClick={handleDashboard}
-          style={{ background: "transparent", border: "none", color: "#C6D0E2", fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "8px 14px" }}
-        >
-          View dashboard{showHindi && <span style={{ color: "#7D8DA9", fontWeight: 500 }}> · डैशबोर्ड देखें</span>} ›
-        </button>
+            <button
+              onClick={handleReport}
+              aria-label="Report Incident"
+              className="flex flex-col items-center justify-center active:scale-95 transition-transform"
+              style={{
+                width: "min(72vw, 258px)", aspectRatio: "1", borderRadius: "50%",
+                border: "none", cursor: "pointer", color: "#fff", gap: 8,
+                background: CTA_GRADIENT, boxShadow: "0 18px 44px rgba(198,54,44,.34)",
+              }}
+            >
+              <AlertGlyph />
+              <span style={{ fontSize: 21, fontWeight: 800, letterSpacing: "-.01em" }}>Report Incident</span>
+              {showHindi && <span style={{ fontSize: 14, fontWeight: 600, opacity: 0.92 }}>रिपोर्ट करें</span>}
+            </button>
+
+            <p style={{ fontSize: 12.5, color: C.secondary, textAlign: "center", maxWidth: 300, lineHeight: 1.5 }}>
+              Tap to talk to the AI dispatcher — it takes your report in English or Hindi.
+            </p>
+
+            <button
+              onClick={handleDashboard}
+              style={{ background: "transparent", border: "none", color: C.blue, fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "8px 14px" }}
+            >
+              View dashboard{showHindi && <span style={{ color: C.muted, fontWeight: 500 }}> · डैशबोर्ड देखें</span>} ›
+            </button>
+          </>
+        )}
       </div>
 
       {/* ── Footer (safe-area bottom) ── */}
-      <div style={{ padding: "10px 20px calc(14px + env(safe-area-inset-bottom))", textAlign: "center", fontSize: 11, color: "#5F7093", letterSpacing: ".1em", textTransform: "uppercase", fontVariantNumeric: "tabular-nums" }}>
+      <div style={{ padding: "10px 20px calc(14px + env(safe-area-inset-bottom))", textAlign: "center", fontSize: 11, color: C.faint, letterSpacing: ".1em", textTransform: "uppercase", fontVariantNumeric: "tabular-nums" }}>
         Highway helpline 1033 · 210 km corridor
       </div>
 
@@ -138,6 +168,26 @@ export default function PWAHome() {
         </div>
       )}
     </div>
+  );
+}
+
+// Language choice tile (English / हिंदी) for the voice dispatcher.
+function LangButton({ title, sub, onClick, primary }: { title: string; sub: string; onClick: () => void; primary?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex flex-col active:scale-95 transition-transform"
+      style={{
+        textAlign: "left", padding: "14px 18px", borderRadius: 14, cursor: "pointer", gap: 2,
+        color: primary ? "#fff" : C.ink,
+        border: primary ? "none" : `1px solid ${C.border}`,
+        background: primary ? CTA_GRADIENT : "#fff",
+        boxShadow: primary ? "0 8px 24px rgba(198,54,44,.32)" : SHADOW.floatBtn,
+      }}
+    >
+      <span style={{ fontSize: 17, fontWeight: 700 }}>{title}</span>
+      <span style={{ fontSize: 12, color: primary ? "rgba(255,255,255,.85)" : C.muted, fontWeight: 500 }}>{sub}</span>
+    </button>
   );
 }
 

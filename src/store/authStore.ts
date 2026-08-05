@@ -42,6 +42,8 @@ interface AuthState {
   // moment the user leaves the home screen so the gate stops re-showing it;
   // it's in-memory only, so a fresh cold launch of the PWA resets to the home.
   launchIntent: "voice" | "dashboard" | "profile" | null;
+  // Voice-bot language chosen on the PWA home before entering (voice launch only).
+  launchVoiceLocale: "en-IN" | "hi-IN" | null;
   pwaEntered: boolean;
   signUp: (email: string, password: string, meta?: SignUpMeta) => Promise<AuthResult>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
@@ -50,7 +52,7 @@ interface AuthState {
   exitGuest: (tab?: "signup" | "signin") => void;
   beginOnboarding: () => void;
   finishOnboarding: () => void;
-  setLaunchIntent: (intent: "voice" | "dashboard" | "profile") => void;
+  setLaunchIntent: (intent: "voice" | "dashboard" | "profile", voiceLocale?: "en-IN" | "hi-IN") => void;
   clearLaunchIntent: () => void;
   enterPwa: () => void;
 }
@@ -103,6 +105,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   needsOnboarding: false,
   gateInitialTab: "signup",
   launchIntent: null,
+  launchVoiceLocale: null,
   pwaEntered: false,
 
   async signUp(email, password, meta) {
@@ -150,7 +153,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     if (typeof window !== "undefined") sessionStorage.removeItem(GUEST_KEY);
     // Also drop the PWA launch state so signing out returns to the home screen
     // (in a browser these are inert — pwaEntered is only ever set in standalone).
-    set({ isGuest: false, needsOnboarding: false, pwaEntered: false, launchIntent: null });
+    set({ isGuest: false, needsOnboarding: false, pwaEntered: false, launchIntent: null, launchVoiceLocale: null });
     if (!supabaseBrowser) return;
     await supabaseBrowser.auth.signOut();
   },
@@ -181,11 +184,11 @@ export const useAuthStore = create<AuthState>((set) => ({
   // PWA launch home → app. setLaunchIntent records the tapped action; enterPwa
   // dismisses the home screen so the app (children) mounts; MapView reads the
   // intent on mount and calls clearLaunchIntent once consumed.
-  setLaunchIntent(intent) {
-    set({ launchIntent: intent });
+  setLaunchIntent(intent, voiceLocale) {
+    set({ launchIntent: intent, launchVoiceLocale: voiceLocale ?? null });
   },
   clearLaunchIntent() {
-    set({ launchIntent: null });
+    set({ launchIntent: null, launchVoiceLocale: null });
   },
   enterPwa() {
     set({ pwaEntered: true });

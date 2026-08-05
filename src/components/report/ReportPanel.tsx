@@ -1231,6 +1231,9 @@ export interface ReportPanelProps {
   // dispatcher call once. Undefined → normal behaviour (opens on the last mode).
   initialMode?: ReportMode;
   autoStartVoice?: boolean;
+  // Voice-bot language chosen at launch (PWA). Seeds the dispatcher locale;
+  // undefined → derive from the app locale as before. The user can still switch.
+  initialVoiceLocale?: VoiceLocale;
 }
 
 export type ReportMode = "SOS" | "TEXT" | "VOICE" | "DISPATCHER" | "POTHOLE";
@@ -1246,6 +1249,7 @@ export default function ReportPanel({
   onAccidentSubmitted,
   initialMode,
   autoStartVoice,
+  initialVoiceLocale,
 }: ReportPanelProps) {
   // Initialise from initialMode when provided (the PWA launch passes it from the
   // very first render, so no setState-in-effect is needed to apply it).
@@ -1260,7 +1264,7 @@ export default function ReportPanel({
   const [selectedCategory, setSelectedCategory] = useState("");
   const appLocale = useLocaleStore((s) => s.locale);
   const { showHindi } = useBilingual();
-  const [locale, setLocale] = useState<VoiceLocale>(appLocale === "HI" ? "hi-IN" : "en-IN");
+  const [locale, setLocale] = useState<VoiceLocale>(initialVoiceLocale ?? (appLocale === "HI" ? "hi-IN" : "en-IN"));
   const [createdIncident, setCreatedIncident] = useState<AccidentReport | null>(null);
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
   const [dupMatch, setDupMatch] = useState<DuplicateMatch | null>(null);
