@@ -896,8 +896,20 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
   );
 
   // On unmount (operator navigates away / panel closes mid-call): flush metrics
-  // for an abandoned call, then tear down.
-  useEffect(() => () => { finalizeMetrics(); teardown(); }, [teardown, finalizeMetrics]);
+  // for an abandoned call, then tear down. The cleanup is held in a ref and the
+  // teardown effect has EMPTY deps, so it fires ONLY on a real unmount -- never
+  // when `teardown`/`finalizeMetrics` merely change identity. Real reported bug:
+  // the SOS button remounts the panel (new key) and auto-starts a call in the
+  // SAME commit; with these callbacks in the deps, a callback-identity change
+  // during that render storm re-ran this effect and its cleanup tore down the
+  // freshly-opened WebSocket mid-connect. sessionId had already advanced, so
+  // onclose saw a stale session and never reconnected -- leaving the UI stuck on
+  // "Connecting…". Manual start was fine because the panel was already stable.
+  const unmountCleanupRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    unmountCleanupRef.current = () => { finalizeMetrics(); teardown(); };
+  }, [finalizeMetrics, teardown]);
+  useEffect(() => () => { unmountCleanupRef.current(); }, []);
 
   return { supported, status, error, offline, agentText, start, stop, sendDispatchBriefing, attachIncidentId };
 }

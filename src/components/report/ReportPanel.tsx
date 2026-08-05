@@ -1444,6 +1444,14 @@ export default function ReportPanel({
     startDispatcher(locale);
   }, [open, autoStartVoice, mode, dispatcherSupported, dispatcherStatus, locale, startDispatcher]);
 
+  // Reset the one-shot guard on a REAL unmount so a mount → unmount → mount
+  // cycle (React StrictMode's dev double-invoke, fast-refresh, or the SOS key
+  // remount) re-fires the auto-start on the surviving mount instead of leaving
+  // it disabled after the unmount tore the call's WebSocket down. Pairs with the
+  // dispatcher hook's unmount-only teardown so exactly one live connection
+  // survives the cycle. Empty deps → only on unmount, never on prop churn.
+  useEffect(() => () => { autoStartedRef.current = false; }, []);
+
   useEffect(() => {
     if (!createdIncident || createdIncident.reportMode !== "DISPATCHER") return;
     if (briefingSentForRef.current === createdIncident.id) return;
