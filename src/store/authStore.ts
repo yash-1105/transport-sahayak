@@ -36,6 +36,13 @@ interface AuthState {
   isGuest: boolean; // client-only emergency bypass of the gate
   needsOnboarding: boolean; // post-signup guided flow is active
   gateInitialTab: "signup" | "signin"; // which tab the full-screen gate opens on
+  // ── PWA launch home (standalone only) ──────────────────────────────────────
+  // launchIntent = the action tapped on the standalone home screen (PWAHome),
+  // consumed once by MapView on mount then cleared. pwaEntered flips true the
+  // moment the user leaves the home screen so the gate stops re-showing it;
+  // it's in-memory only, so a fresh cold launch of the PWA resets to the home.
+  launchIntent: "voice" | "dashboard" | "profile" | null;
+  pwaEntered: boolean;
   signUp: (email: string, password: string, meta?: SignUpMeta) => Promise<AuthResult>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signOut: () => Promise<void>;
@@ -43,6 +50,9 @@ interface AuthState {
   exitGuest: (tab?: "signup" | "signin") => void;
   beginOnboarding: () => void;
   finishOnboarding: () => void;
+  setLaunchIntent: (intent: "voice" | "dashboard" | "profile") => void;
+  clearLaunchIntent: () => void;
+  enterPwa: () => void;
 }
 
 const GUEST_KEY = "ts_guest";
@@ -92,6 +102,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   isGuest: getInitialGuest(),
   needsOnboarding: false,
   gateInitialTab: "signup",
+  launchIntent: null,
+  pwaEntered: false,
 
   async signUp(email, password, meta) {
     if (!supabaseBrowser) return { error: "Accounts are not configured on this deployment." };
@@ -136,7 +148,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     // Clear the guest bypass and any in-flight onboarding first, so signing out
     // always returns to the gate (never leaves a stale guest/onboarding state).
     if (typeof window !== "undefined") sessionStorage.removeItem(GUEST_KEY);
-    set({ isGuest: false, needsOnboarding: false });
+    // Also drop the PWA launch state so signing out returns to the home screen
+    // (in a browser these are inert — pwaEntered is only ever set in standalone).
+    set({ isGuest: false, needsOnboarding: false, pwaEntered: false, launchIntent: null });
     if (!supabaseBrowser) return;
     await supabaseBrowser.auth.signOut();
   },
@@ -162,6 +176,19 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   finishOnboarding() {
     set({ needsOnboarding: false });
+  },
+
+  // PWA launch home → app. setLaunchIntent records the tapped action; enterPwa
+  // dismisses the home screen so the app (children) mounts; MapView reads the
+  // intent on mount and calls clearLaunchIntent once consumed.
+  setLaunchIntent(intent) {
+    set({ launchIntent: intent });
+  },
+  clearLaunchIntent() {
+    set({ launchIntent: null });
+  },
+  enterPwa() {
+    set({ pwaEntered: true });
   },
 }));
 

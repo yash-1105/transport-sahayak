@@ -292,7 +292,7 @@ export default function AuthLanding({
         onClick={() => setOperatorOpen(true)}
         title="Operator access"
         style={{
-          position: "fixed", right: 16, bottom: 12, zIndex: 5,
+          position: "fixed", right: 16, bottom: "max(12px, env(safe-area-inset-bottom))", zIndex: 5,
           display: "flex", alignItems: "center", gap: 6,
           background: "transparent", color: "#B4AFA2", fontSize: 11, fontWeight: 500,
           cursor: "pointer", padding: 6, lineHeight: 1,

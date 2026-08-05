@@ -14,7 +14,8 @@ import { useEventLog } from "@/store/eventLog";
 import TimelinePanel from "@/components/TimelinePanel";
 import LanguageToggle from "@/components/LanguageToggle";
 import AuthControl from "@/components/auth/AuthControl";
-import { useIsOperator } from "@/store/authStore";
+import SafetyProfileSheet from "@/components/auth/SafetyProfileSheet";
+import { useIsOperator, useAuthStore } from "@/store/authStore";
 import InstallPWA from "@/components/InstallPWA";
 import IncidentRecord from "@/components/IncidentRecord";
 import { useT, useBilingual } from "@/hooks/useI18n";
@@ -48,7 +49,7 @@ import type {
   GeoPoint,
 } from "@/lib/types";
 import { reverseGeocode } from "@/lib/geocode";
-import ReportPanel from "@/components/report/ReportPanel";
+import ReportPanel, { type ReportMode } from "@/components/report/ReportPanel";
 import OperatorDashboard from "@/components/operator/OperatorDashboard";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -682,7 +683,22 @@ export default function MapView() {
     new Set(ACCIDENT_LAYERS.map((l) => l.key))
   );
 
-  const [reportOpen, setReportOpen] = useState(false);
+  // PWA launch intent — set by PWAHome before the app mounted. MapView is an
+  // ssr:false dynamic import, so this reads on the client only; consume it into
+  // initial state here (no setState-in-effect), then clear the store flag below.
+  const [launchIntent] = useState(() => useAuthStore.getState().launchIntent);
+  const [reportOpen, setReportOpen] = useState(launchIntent === "voice");
+  // PWA launch: force the report panel into a mode / auto-start the voice call.
+  const [reportInitialMode, setReportInitialMode] = useState<ReportMode | undefined>(
+    launchIntent === "voice" ? "DISPATCHER" : undefined
+  );
+  const [reportAutoStartVoice, setReportAutoStartVoice] = useState(launchIntent === "voice");
+  const [profileOpen, setProfileOpen] = useState(launchIntent === "profile");
+  useEffect(() => {
+    // Clear the one-shot intent once consumed (a store action, not a React
+    // setState, so this never re-triggers a render loop).
+    if (launchIntent) useAuthStore.getState().clearLaunchIntent();
+  }, [launchIntent]);
   const [isPickingPin, setIsPickingPin] = useState(false);
   const [pinnedLocation, setPinnedLocation] = useState<GeoPoint | null>(null);
   const [pinnedLabel, setPinnedLabel] = useState("");
@@ -761,8 +777,8 @@ export default function MapView() {
     }
   }, []);
 
-  function openReport() { setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true); }
-  function closeReport() { setReportOpen(false); setIsPickingPin(false); }
+  function openReport() { setReportInitialMode(undefined); setReportAutoStartVoice(false); setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true); }
+  function closeReport() { setReportOpen(false); setIsPickingPin(false); setReportInitialMode(undefined); setReportAutoStartVoice(false); }
   function requestPin() { setIsPickingPin(true); setReportOpen(false); }
 
   function toggleService(key: ServiceLayerType) {
@@ -953,7 +969,7 @@ export default function MapView() {
       {/* ── Header (60px navy) ─────────────────────────────────────────────── */}
       <header
         className="flex items-center gap-5 px-4 flex-none"
-        style={{ height: 60, background: HEADER_GRADIENT, boxShadow: "0 1px 0 rgba(255,255,255,.06) inset, 0 2px 8px rgba(14,26,47,.25)" }}
+        style={{ minHeight: 60, paddingTop: "env(safe-area-inset-top)", background: HEADER_GRADIENT, boxShadow: "0 1px 0 rgba(255,255,255,.06) inset, 0 2px 8px rgba(14,26,47,.25)" }}
       >
         {/* Brand */}
         <div className="flex items-center gap-[11px] min-w-0">
@@ -1323,7 +1339,7 @@ export default function MapView() {
           className="absolute z-[500] flex items-center gap-2.5"
           style={{
             right: 22,
-            bottom: 22,
+            bottom: "calc(22px + env(safe-area-inset-bottom))",
             background: CTA_GRADIENT,
             color: "#fff",
             border: "none",
@@ -1361,6 +1377,8 @@ export default function MapView() {
       {/* ── Report panel ─────────────────────────────────────────────────────── */}
       <ReportPanel
         open={reportOpen}
+        initialMode={reportInitialMode}
+        autoStartVoice={reportAutoStartVoice}
         pinnedLocation={pinnedLocation}
         pinnedLabel={pinnedLabel}
         onRequestPin={requestPin}
@@ -1419,6 +1437,11 @@ export default function MapView() {
         incidentId={recordIncidentId}
         onClose={() => setRecordIncidentId(null)}
       />
+
+      {/* ── Safety profile — opened by the PWA "View dashboard" (signed in) or
+          the home-screen name chip. AuthControl also owns its own instance for
+          the header dropdown; this one is driven by the launch intent. ── */}
+      {profileOpen && <SafetyProfileSheet showHindi={showHindi} onClose={() => setProfileOpen(false)} />}
     </div>
   );
 }

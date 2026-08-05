@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans, Noto_Sans_Devanagari } from "next/font/google";
 import "./globals.css";
 
@@ -39,6 +39,16 @@ export const metadata: Metadata = {
     "mobile-web-app-capable": "yes",
     "msapplication-TileColor": "#dc2626",
   },
+};
+
+// viewportFit: "cover" lets the layout extend under notches so env(safe-area-
+// inset-*) padding (used on the PWA home, auth landing, header + FAB) can keep
+// content clear of the notch/home indicator in standalone mode.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#dc2626",
 };
 
 export default function RootLayout({

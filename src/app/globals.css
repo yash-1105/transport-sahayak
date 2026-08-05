@@ -185,11 +185,13 @@ button, a, select, label, [role="button"] {
   display: grid;
   grid-template-columns: minmax(380px, 5fr) minmax(0, 7fr);
   min-height: 100vh;
+  min-height: 100dvh;   /* dynamic viewport — correct in standalone / mobile */
 }
 .lg-brand {
   position: relative;
   overflow: hidden;
   max-height: 100vh;
+  max-height: 100dvh;
   background: linear-gradient(160deg, #14243E 0%, #0E1A2F 70%, #0B1526 100%);
   color: #fff;
   display: flex;
@@ -202,6 +204,7 @@ button, a, select, label, [role="button"] {
   justify-content: center;
   padding: 48px 32px;
   max-height: 100vh;
+  max-height: 100dvh;
   overflow-y: auto;   /* the form column scrolls on short desktop windows */
 }
 
@@ -251,11 +254,13 @@ button, a, select, label, [role="button"] {
 .lg-operator-link { transition: color .15s; }
 .lg-operator-link:hover { color: #5B6572; }
 
-/* Responsive: stack below ~860px — navy collapses to a compact header band. */
+/* Responsive: stack below ~860px — navy collapses to a compact header band.
+   dvh + safe-area insets keep it filling the standalone (PWA) viewport with
+   nothing cut off by the notch (top) or home indicator (bottom). */
 @media (max-width: 860px) {
-  .lg-auth { display: block; height: 100vh; overflow-y: auto; }
-  .lg-brand { max-height: none; padding: 28px 24px 22px; }
-  .lg-form { max-height: none; overflow: visible; padding: 32px 22px 40px; }
+  .lg-auth { display: block; height: 100vh; height: 100dvh; overflow-y: auto; }
+  .lg-brand { max-height: none; padding: max(28px, env(safe-area-inset-top)) 24px 22px; }
+  .lg-form { max-height: none; overflow: visible; padding: 32px 22px max(40px, env(safe-area-inset-bottom)); }
   .lg-brand-visual { display: none; }   /* route + chips hidden on mobile */
   /* ≥44px hit targets on touch */
   .lg-form input,

@@ -6,7 +6,7 @@ import AuthGate from "@/components/auth/AuthGate";
 const MapView = dynamic(() => import("@/components/MapView"), {
   ssr: false,
   loading: () => (
-    <div className="flex h-screen items-center justify-center bg-gray-100">
+    <div className="flex h-full items-center justify-center bg-gray-100">
       <p className="text-sm text-gray-500">Loading map…</p>
     </div>
   ),

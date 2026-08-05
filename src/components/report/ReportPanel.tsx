@@ -1226,9 +1226,14 @@ export interface ReportPanelProps {
   onClose: () => void;
   onPotholeSubmitted: (p: UserReportedPothole) => void;
   onAccidentSubmitted?: (r: AccidentReport) => void;
+  // When the panel is opened programmatically (e.g. the PWA "Report Incident"
+  // launch), force this mode on open; with autoStartVoice, also start the
+  // dispatcher call once. Undefined → normal behaviour (opens on the last mode).
+  initialMode?: ReportMode;
+  autoStartVoice?: boolean;
 }
 
-type ReportMode = "SOS" | "TEXT" | "VOICE" | "DISPATCHER" | "POTHOLE";
+export type ReportMode = "SOS" | "TEXT" | "VOICE" | "DISPATCHER" | "POTHOLE";
 type PanelStatus = "IDLE" | "BUSY" | "ASSESSING" | "MATCHING" | "COMPLETE" | "ERROR" | "POTHOLE_DONE";
 
 export default function ReportPanel({
@@ -1239,8 +1244,12 @@ export default function ReportPanel({
   onClose,
   onPotholeSubmitted,
   onAccidentSubmitted,
+  initialMode,
+  autoStartVoice,
 }: ReportPanelProps) {
-  const [mode, setMode] = useState<ReportMode>("SOS");
+  // Initialise from initialMode when provided (the PWA launch passes it from the
+  // very first render, so no setState-in-effect is needed to apply it).
+  const [mode, setMode] = useState<ReportMode>(() => initialMode ?? "SOS");
   const [panelStatus, setPanelStatus] = useState<PanelStatus>("IDLE");
   const [sosError, setSosError] = useState<string | null>(null);
   const [description, setDescription] = useState("");
@@ -1336,6 +1345,25 @@ export default function ReportPanel({
   useEffect(() => {
     if (createdIncident?.reportMode === "DISPATCHER") attachIncidentId(createdIncident.id);
   }, [createdIncident, attachIncidentId]);
+
+  // ── PWA launch: auto-start the dispatcher ────────────────────────────────────
+  // (initialMode is applied via the `mode` useState initializer above.)
+  // autoStartVoice → start the dispatcher call automatically (one shot), as a
+  // direct consequence of the launch tap. The browser prompts for mic; if it's
+  // denied / unsupported / start fails, DispatcherSection falls back to its
+  // normal mic button so the user can retry — never a dead screen.
+  const autoStartedRef = useRef(false);
+  const startDispatcher = dispatcher.start;
+  const dispatcherSupported = dispatcher.supported;
+  const dispatcherStatus = dispatcher.status;
+  useEffect(() => {
+    if (!open) { autoStartedRef.current = false; return; }
+    if (!autoStartVoice || autoStartedRef.current) return;
+    if (mode !== "DISPATCHER" || !dispatcherSupported) return;
+    if (dispatcherStatus !== "idle" && dispatcherStatus !== "ended") return;
+    autoStartedRef.current = true;
+    startDispatcher(locale);
+  }, [open, autoStartVoice, mode, dispatcherSupported, dispatcherStatus, locale, startDispatcher]);
 
   useEffect(() => {
     if (!createdIncident || createdIncident.reportMode !== "DISPATCHER") return;
