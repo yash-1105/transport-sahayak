@@ -2248,4 +2248,235 @@ async def _p2_call_intent_classification():
 check("#P2 call_intent: general -> 'information' (once), accident -> 'accident', info upgrades to accident",
       asyncio.run(_p2_call_intent_classification()))
 
+# ── Exotel telephony integration (transport adapter only) ─────────────────────
+# The adapter translates Exotel AgentStream <-> the browser protocol and runs the
+# SAME HindiDispatcherSession; ExotelHindiSession overrides ONLY location
+# acquisition (a composed GeocodeLocationProvider: geocode-from-speech + retry, no
+# default). Data/ETA/complaint reuse the app's real endpoints via services.py. The
+# browser pipeline must stay unchanged.
+import base64 as _b64
+import json as _json
+import integrations.exotel.services as _EXSV
+from integrations.exotel.session import ExotelWebSocketAdapter, ExotelHindiSession
+from integrations.exotel.location import GeocodeLocationProvider
+
+class _FakeExotelWS:
+    def __init__(self, inbound): self._in = list(inbound); self.sent = []
+    async def receive(self):
+        if self._in: return self._in.pop(0)
+        await asyncio.sleep(0.005); return {"type": "websocket.disconnect"}
+    async def send_json(self, f): self.sent.append(f)
+    async def close(self): pass
+
+def _ex_msg(d): return {"type": "websocket.receive", "text": _json.dumps(d)}
+
+async def _exotel_adapter_translates():
+    pcm = b"\x11\x00" * 160
+    ex = _FakeExotelWS([
+        _ex_msg({"event": "start", "stream_sid": "SS", "start": {"call_sid": "C1", "from": "+9199", "media_format": {"sample_rate": 16000}}}),
+        _ex_msg({"event": "media", "media": {"payload": _b64.b64encode(pcm).decode()}}),
+        _ex_msg({"event": "stop"}),
+    ])
+    ad = ExotelWebSocketAdapter(ex, exotel_rate=16000); ad.start()
+    m1 = await ad.receive(); m2 = await ad.receive()
+    await ad.send_bytes(b"\x22\x00" * 240)
+    await ad.send_json({"type": "interrupted"})
+    await ad.send_json({"type": "transcript", "role": "user", "text": "बागपत"})
+    return (m1.get("bytes") == pcm and m2["type"] == "websocket.disconnect"
+            and ad.call_sid == "C1" and ad.from_number == "+9199"
+            and ex.sent[-2]["event"] == "media" and ex.sent[-1]["event"] == "clear"
+            and ad.last_caller_utterance == "बागपत")
+check("#EX adapter translates media->16k / stop->disconnect / Bulbul->media / interrupted->clear / transcript",
+      asyncio.run(_exotel_adapter_translates()))
+
+def _ex_session():
+    return ExotelHindiSession(ExotelWebSocketAdapter(_FakeExotelWS([]), 16000))
+
+async def _exotel_location_geocode_retry():
+    async def _ok(_t): return {"lat": 28.9, "lng": 77.2, "label": "Baghpat"}
+    async def _fail(_t): return None
+    _EXSV.geocode_landmark = _ok
+    s = _ex_session(); s.websocket.last_caller_utterance = "NH-334 Baghpat"
+    ok = (await s._tool_get_current_location())["status"] == "ok" and s.state.location["label"] == "Baghpat"
+    _EXSV.geocode_landmark = _fail
+    s = _ex_session(); s.websocket.last_caller_utterance = "कुछ पता नहीं"
+    r1 = await s._tool_get_current_location(); r2 = await s._tool_get_current_location(); r3 = await s._tool_get_current_location()
+    retry_then_terminate = ("next_step" in r1 and s.state.location is None and "call back" in r3["next_step"])
+    up = _ex_session()  # upfront: no caller speech -> silent unavailable, no prompt
+    silent = ("next_step" not in (await up._tool_get_current_location()))
+    fac = _ex_session(); fac.websocket.last_caller_utterance = "मुझे हॉस्पिटल चाहिए"
+    facneeds = (await fac._tool_find_nearest_facility(facility_type="hospital"))["needs_location"] is True
+    return ok and retry_then_terminate and silent and facneeds
+check("#EX location: geocode success sets it; failure asks for a landmark, then terminates; upfront stays silent; no default",
+      asyncio.run(_exotel_location_geocode_retry()))
+
+# Composition: GeocodeLocationProvider is a standalone, injectable unit (the
+# geocode/retry/terminate policy lives here once, not duplicated in the session).
+async def _exotel_location_provider_composition():
+    async def _ok(_t): return {"lat": 28.9, "lng": 77.2, "label": "Baghpat"}
+    async def _fail(_t): return None
+    p_ok = GeocodeLocationProvider(lambda: "NH-334", geocode=_ok)
+    o1 = await p_ok.acquire()
+    p_silent = GeocodeLocationProvider(lambda: "", geocode=_ok)
+    o2 = await p_silent.acquire()
+    p_fail = GeocodeLocationProvider(lambda: "somewhere", geocode=_fail, max_attempts=3)
+    a = await p_fail.acquire(); b = await p_fail.acquire(); c = await p_fail.acquire()
+    return (o1.ok and o1.location["label"] == "Baghpat"
+            and o2.silent and not o2.ok and o2.next_step is None
+            and a.next_step and not a.terminate and not b.terminate and c.terminate)
+check("#EX GeocodeLocationProvider (composition): success / silent-when-empty / ask x2 then terminate — injectable, no default",
+      asyncio.run(_exotel_location_provider_composition()))
+
+async def _exotel_services_facility_roundtrip():
+    async def _resp(): return {"hospitals": [{"name": "AIIMS", "lat": 28.91, "lng": 77.21, "phone": "011"}]}
+    async def _no_routes(_o, _d): return None  # force the haversine fallback (hermetic, no HTTP)
+    _EXSV.fetch_responders = _resp
+    _EXSV.route_eta_minutes = _no_routes
+    a = ExotelWebSocketAdapter(_FakeExotelWS([]), 16000)
+    await a.send_json({"type": "request_facility", "requestId": "r1", "facilityType": "hospital", "location": {"lat": 28.9, "lng": 77.2}})
+    got = await asyncio.wait_for(a._inbound.get(), 2); p = _json.loads(got["text"])
+    return (p["type"] == "facility_result" and p["facility"]["name"] == "AIIMS"
+            and isinstance(p["facility"]["etaMinutes"], int))
+check("#EX request_facility is answered server-side (reuses responder data + ETA) and injected as facility_result",
+      asyncio.run(_exotel_services_facility_roundtrip()))
+
+# ETA reuse: hospital/police use the app's REAL Google-Routes ETA when available;
+# ambulance/fire/tow mirror matching.ts per-type haversine (tow 50 vs ambulance 40).
+async def _exotel_eta_reuses_app_logic():
+    resp = {
+        "hospitals": [{"name": "H", "lat": 28.6, "lng": 77.2, "phone": "1", "traumaLevel": 1}],
+        "ambulanceStations": [{"name": "A", "lat": 28.6, "lng": 77.2, "contactNumber": "2"}],
+        "towingStations": [{"name": "T", "lat": 28.6, "lng": 77.2, "contactNumber": "3"}],
+        "policeStations": [{"name": "P", "lat": 28.6, "lng": 77.2, "phone": "4"}],
+    }
+    pt = (28.7, 77.2)  # ~11 km north
+    async def _routes(_o, _d): return 42  # the app's real Routes ETA for hospital/police
+    _EXSV.route_eta_minutes = _routes
+    hosp = await _EXSV.nearest_facility(resp, "hospital", pt)
+    amb = await _EXSV.nearest_facility(resp, "ambulance", pt)
+    tow = await _EXSV.nearest_facility(resp, "tow", pt)
+    # same straight-line distance, but tow (50 km/h) must be FASTER than ambulance (40 km/h)
+    hospital_uses_routes = hosp["etaMinutes"] == 42
+    haversine_per_type = amb["etaMinutes"] > tow["etaMinutes"]
+    svc = await _EXSV.build_dispatch_update(resp, pt, set())
+    no_fire_without_flag = "fire" not in svc and "ambulance" in svc and "hospital" in svc
+    svc_fire = await _EXSV.build_dispatch_update(resp, pt, {"Fire"})
+    return hospital_uses_routes and haversine_per_type and no_fire_without_flag and ("hospital" in svc_fire)
+check("#EX ETA reuses the app's logic: Google-Routes for hospital/police, matching.ts per-type haversine for ambulance/tow",
+      asyncio.run(_exotel_eta_reuses_app_logic()))
+
+check("#EX browser HindiDispatcherSession is UNCHANGED (base GPS location tool); geocode override is isolated to ExotelHindiSession",
+      HindiDispatcherSession._tool_get_current_location is DispatcherSession._tool_get_current_location
+      and ExotelHindiSession._tool_get_current_location is not DispatcherSession._tool_get_current_location)
+
+# Startup validation: passes on defaults, raises ExotelConfigError on hard misconfig.
+import integrations.exotel.config as _EXCFG
+def _exotel_config_validation():
+    ok_default = True
+    try:
+        _EXCFG.validate()
+    except _EXCFG.ExotelConfigError:
+        ok_default = False
+    _orig_rate = _EXCFG._RAW_SAMPLE_RATE
+    _EXCFG._RAW_SAMPLE_RATE = "abc"
+    raised_rate = False
+    try:
+        _EXCFG.validate()
+    except _EXCFG.ExotelConfigError:
+        raised_rate = True
+    _EXCFG._RAW_SAMPLE_RATE = _orig_rate
+    _orig_path = _EXCFG.EXOTEL_WS_PATH
+    _EXCFG.EXOTEL_WS_PATH = "exotel/ws"  # missing leading slash
+    raised_path = False
+    try:
+        _EXCFG.validate()
+    except _EXCFG.ExotelConfigError:
+        raised_path = True
+    _EXCFG.EXOTEL_WS_PATH = _orig_path
+    return ok_default and raised_rate and raised_path
+check("#EX startup config validation passes on defaults; raises on bad EXOTEL_SAMPLE_RATE / EXOTEL_WS_PATH",
+      _exotel_config_validation())
+
+# /exotel/health payload reflects enabled + validation state.
+from integrations.exotel.websocket import health_payload as _health_payload
+def _exotel_health():
+    d = _health_payload()  # disabled by default in the test env
+    disabled_ok = (d["status"] == "disabled" and d["ok"] is False
+                   and {"errors", "warnings", "config"} <= set(d))
+    _orig_en = _EXCFG.EXOTEL_ENABLED
+    _EXCFG.EXOTEL_ENABLED = True
+    enabled_ok = (_health_payload()["status"] == "ok")
+    _orig_rate = _EXCFG._RAW_SAMPLE_RATE
+    _EXCFG._RAW_SAMPLE_RATE = "abc"
+    m = _health_payload()
+    misconf = (m["status"] == "misconfigured" and m["ok"] is False and bool(m["errors"]))
+    _EXCFG._RAW_SAMPLE_RATE = _orig_rate
+    _EXCFG.EXOTEL_ENABLED = _orig_en
+    return disabled_ok and enabled_ok and misconf
+check("#EX /exotel/health reports disabled / ok / misconfigured per enabled+validation state",
+      _exotel_health())
+
+# Every external call has a timeout + bounded retries: transient failures retry,
+# 4xx client errors do not.
+import types as _types
+async def _exotel_http_retry():
+    calls = {"n": 0}
+    class _R:
+        def __init__(self, s, p=None): self.status_code = s; self._p = p
+        def json(self): return self._p
+    class _CTransient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def request(self, method, url, **kw):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("transient")   # fail attempts 1 & 2
+            return _R(200, {"ok": True})           # succeed on attempt 3
+    class _C4xx:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def request(self, method, url, **kw):
+            calls["n"] += 1
+            return _R(404, None)
+    _orig_httpx = _EXSV.httpx
+    _orig_backoff = _EXSV.config.HTTP_BACKOFF
+    _orig_retries = _EXSV.config.HTTP_RETRIES
+    _EXSV.config.HTTP_BACKOFF = (0, 0, 0)  # no real sleeps in tests
+    _EXSV.config.HTTP_RETRIES = 2          # 3 attempts total
+    try:
+        _EXSV.httpx = _types.SimpleNamespace(AsyncClient=_CTransient)
+        got = await _EXSV._send("GET", "http://x", label="t")
+        retried_ok = (got == {"ok": True} and calls["n"] == 3)
+        calls["n"] = 0
+        _EXSV.httpx = _types.SimpleNamespace(AsyncClient=_C4xx)
+        got4 = await _EXSV._send("GET", "http://x", label="t")
+        no_retry_4xx = (got4 is None and calls["n"] == 1)
+    finally:
+        _EXSV.httpx = _orig_httpx
+        _EXSV.config.HTTP_BACKOFF = _orig_backoff
+        _EXSV.config.HTTP_RETRIES = _orig_retries
+    return retried_ok and no_retry_4xx
+check("#EX external calls have timeout+retries: transient failures retry to success, 4xx does not retry",
+      asyncio.run(_exotel_http_retry()))
+
+# Structured logging tags each message with the per-call id (contextvar-scoped).
+from integrations.exotel.logging_utils import get_logger as _ex_get_logger, set_call_id as _ex_set_call_id
+def _exotel_call_id_logging():
+    import logging as _lg
+    cap = []
+    class _H(_lg.Handler):
+        def emit(self, r): cap.append(self.format(r))
+    base = _lg.getLogger("exotel.test.cid"); h = _H(); h.setFormatter(_lg.Formatter("%(message)s"))
+    base.addHandler(h); base.setLevel(_lg.INFO)
+    log = _ex_get_logger("exotel.test.cid")
+    _ex_set_call_id("cafef00d"); log.info("started")
+    tagged = any("[call=cafef00d] started" in m for m in cap)
+    cap.clear(); _ex_set_call_id("-"); log.info("untagged")
+    untagged = any(m == "untagged" for m in cap)
+    return tagged and untagged
+check("#EX structured logging tags each message with the per-call id (and nothing when unset)",
+      _exotel_call_id_logging())
+
 print("\nALL TESTS PASSED")

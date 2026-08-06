@@ -350,3 +350,16 @@ async def dispatcher_ws(websocket: WebSocket) -> None:
             await websocket.close()
         except Exception:
             pass
+
+
+# ── Exotel AgentStream (telephony transport, Hindi-only) ──────────────────────
+# WHY this is the ONLY edit to app.py: this module owns the FastAPI `app` and
+# EVERY WebSocket route registration, so a new endpoint must be mounted here —
+# there is no other registration point. It is purely additive, guarded by
+# EXOTEL_ENABLED (off by default => zero effect on the existing browser service),
+# and touches no existing route. All Exotel code lives under integrations/exotel/.
+try:
+    from integrations.exotel.websocket import register as _register_exotel
+    _register_exotel(app)
+except Exception:
+    logger.exception("Failed to mount the Exotel integration (existing service left unaffected)")

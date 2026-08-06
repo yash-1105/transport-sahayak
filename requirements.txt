@@ -7,3 +7,6 @@ google-cloud-speech>=2.26
 google-cloud-texttospeech>=2.16
 google-genai>=1.0
 websockets>=13
+# Exotel integration (integrations/exotel): server-side reuse of the app's own
+# API routes (responders, potholes) + Nominatim geocoding for phone-call location.
+httpx>=0.27
