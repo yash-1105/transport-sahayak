@@ -20,7 +20,11 @@ import json
 import time
 from typing import Optional
 
-from severity_engine.dispatcher_hindi import HindiDispatcherSession
+from severity_engine.dispatcher_hindi import (
+    HindiDispatcherSession,
+    _HINDI_OPENING_LINE,
+    _OPENING_FALLBACK_QUESTION,
+)
 
 from . import config, protocol, services
 from .audio_adapter import AudioAdapter
@@ -28,6 +32,21 @@ from .location import GeocodeLocationProvider, LocationOutcome
 from .logging_utils import get_logger, mask_phone
 
 logger = get_logger("exotel.session")
+
+# Short Hindi "hold on, I'm looking" lines spoken WHILE a slow lookup (responder
+# search + drive-time ETA, both HTTP round-trips) runs, so a phone caller never
+# hears dead air and thinks the call dropped. One per facility kind; the model
+# then speaks the actual result once it returns.
+_FACILITY_FILLERS = {
+    "hospital": "एक पल... मैं आपके सबसे नज़दीकी अस्पताल की जानकारी निकाल रहा हूँ।",
+    "mechanic": "एक पल... मैं आपके पास का मैकेनिक ढूँढ रहा हूँ।",
+    "fuel": "एक पल... मैं आपके पास का पेट्रोल पंप देख रहा हूँ।",
+    "police": "एक पल... मैं आपके पास का पुलिस स्टेशन देख रहा हूँ।",
+    "tow": "एक पल... मैं आपके पास की टो और रिकवरी सेवा देख रहा हूँ।",
+    "ambulance": "एक पल... मैं आपके पास की एम्बुलेंस सेवा देख रहा हूँ।",
+}
+_FACILITY_FILLER_DEFAULT = "एक पल... मैं आपके लिए यह जानकारी निकाल रहा हूँ।"
+_COMPLAINT_FILLER = "एक पल... मैं आपकी शिकायत दर्ज कर रहा हूँ।"
 
 # Exotel requires outbound media payloads to be MULTIPLES OF 320 BYTES, <= 100 KB
 # per frame (per the AgentStream spec). Bulbul chunks are arbitrary sizes, so we
@@ -314,6 +333,30 @@ class ExotelHindiSession(HindiDispatcherSession):
         self._gen_config = self._gen_config.model_copy(update={"system_instruction": phone_prompt})
         self._briefing_config = self._briefing_config.model_copy(update={"system_instruction": phone_prompt})
 
+    async def _reason(self, gemini_client, user_text, config=None):
+        """Skip the Gemini call on the OPENING turn only. On a phone the worst
+        first impression is the multi-second wait (Vertex latency / 429 rate-limits)
+        before the welcome line even starts. The opening is a fixed greeting + a
+        generic open question anyway, so returning None here makes _agent_turn speak
+        its deterministic fallback (greeting + _OPENING_FALLBACK_QUESTION) instantly,
+        with no model round-trip. Every later turn reasons normally via super()."""
+        if self._opening_line_pending:
+            return None
+        return await super()._reason(gemini_client, user_text, config=config)
+
+    async def _speak_filler_during(self, filler: str, coro):
+        """Speak a short holding line WHILE `coro` (a slow lookup) runs, then wait
+        for both — so the filler finishes playing before the model's result reply is
+        spoken (no overlap), and the caller hears speech instead of silence."""
+        filler_task = asyncio.create_task(self._speak_or_fallback(filler, allow_bargein=False))
+        try:
+            return await coro
+        finally:
+            try:
+                await filler_task
+            except Exception:
+                logger.debug("filler speak failed", exc_info=True)
+
     async def _ensure_location(self) -> Optional[LocationOutcome]:
         """None if location is already known or was just acquired (state.location
         set as a side effect); otherwise the outcome the caller should act on
@@ -344,7 +387,9 @@ class ExotelHindiSession(HindiDispatcherSession):
             if outcome is not None:
                 return {"ok": False, "needs_location": True,
                         "message": outcome.next_step or "Ask the caller for a specific nearby landmark, then try again."}
-        return await super()._tool_find_nearest_facility(facility_type=facility_type, capability=capability)
+        filler = _FACILITY_FILLERS.get((facility_type or "").lower(), _FACILITY_FILLER_DEFAULT)
+        return await self._speak_filler_during(
+            filler, super()._tool_find_nearest_facility(facility_type=facility_type, capability=capability))
 
     async def _tool_lodge_complaint(self, description: str = "", complaint_type: str = "road_defect") -> dict:
         if not self.state.location:
@@ -352,4 +397,5 @@ class ExotelHindiSession(HindiDispatcherSession):
             if outcome is not None:
                 return {"ok": False, "needs_location": True,
                         "message": outcome.next_step or "Ask the caller where the problem is (a nearby landmark), then try again."}
-        return await super()._tool_lodge_complaint(description=description, complaint_type=complaint_type)
+        return await self._speak_filler_during(
+            _COMPLAINT_FILLER, super()._tool_lodge_complaint(description=description, complaint_type=complaint_type))

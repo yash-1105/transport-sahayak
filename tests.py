@@ -2609,4 +2609,27 @@ async def _exotel_google_geocode_first():
 check("#EX geocoding uses Google Places Text Search first (key set), falls back to Nominatim (no key)",
       asyncio.run(_exotel_google_geocode_first()))
 
+# Latency/UX: the opening line skips Gemini entirely (instant welcome, no 429 wait),
+# and slow lookups speak a holding line so the caller never hears dead air.
+async def _exotel_instant_opening_and_filler():
+    s = _ex_session()
+    s._opening_line_pending = True
+    opening_skips_gemini = (await s._reason(None, "(the call just connected)")) is None
+    spoken = []
+    async def _fake_speak(text, allow_bargein=True):
+        spoken.append((text, allow_bargein)); return True
+    s._speak_or_fallback = _fake_speak
+    async def _fake_lookup():
+        return {"ok": True, "name": "AIIMS Trauma Centre"}
+    result = await s._speak_filler_during("एक पल... देख रहा हूँ।", _fake_lookup())
+    filler_ok = (result == {"ok": True, "name": "AIIMS Trauma Centre"}
+                 and spoken == [("एक पल... देख रहा हूँ।", False)])  # spoken, uninterruptible
+    distinct_fillers = (_EXsession_fillers("hospital") != _EXsession_fillers("mechanic")
+                        and "अस्पताल" in _EXsession_fillers("hospital"))
+    return opening_skips_gemini and filler_ok and distinct_fillers
+from integrations.exotel.session import _FACILITY_FILLERS as _EX_FILLERS, _FACILITY_FILLER_DEFAULT as _EX_FILLER_DEF
+def _EXsession_fillers(k): return _EX_FILLERS.get(k, _EX_FILLER_DEF)
+check("#EX instant opening (no Gemini on the first turn) + spoken filler during slow lookups (no dead air)",
+      asyncio.run(_exotel_instant_opening_and_filler()))
+
 print("\nALL TESTS PASSED")
