@@ -41,3 +41,9 @@ class _CallAdapter(logging.LoggerAdapter):
 def get_logger(name: str) -> logging.LoggerAdapter:
     """A logger that automatically tags messages with the current call id."""
     return _CallAdapter(logging.getLogger(name), {})
+
+
+def mask_phone(number) -> str:
+    """PII-safe rendering of a phone number for logs: last 4 digits only."""
+    s = str(number or "")
+    return ("…" + s[-4:]) if len(s) >= 4 else ("…" if s else "-")

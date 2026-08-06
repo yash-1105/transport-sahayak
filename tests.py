@@ -2479,4 +2479,82 @@ def _exotel_call_id_logging():
 check("#EX structured logging tags each message with the per-call id (and nothing when unset)",
       _exotel_call_id_logging())
 
+# Protocol conformance: parse the EXACT documented Exotel AgentStream frames.
+from integrations.exotel import protocol as _EXP
+def _exotel_protocol_matches_spec():
+    _b = _b64
+    start = _EXP.parse_event({
+        "event": "start", "sequence_number": "1", "stream_sid": "MZ1",
+        "start": {"stream_sid": "MZ1", "call_sid": "CA1", "account_sid": "AC1",
+                  "from": "+919876543210", "to": "+918000", "custom_parameters": {"k": "v"},
+                  "media_format": {"encoding": "audio/x-raw", "sample_rate": "8000", "bit_rate": "16"}}})
+    media = _EXP.parse_event({
+        "event": "media", "sequence_number": "3", "stream_sid": "MZ1",
+        "media": {"chunk": "2", "timestamp": "200", "payload": _b.b64encode(b"\x01\x02").decode()}})
+    stop = _EXP.parse_event({"event": "stop", "stream_sid": "MZ1", "stop": {"reason": "callended"}})
+    outm = _EXP.media_frame("MZ1", b"\x01\x02")
+    return (start.kind == "start" and start.stream_sid == "MZ1" and start.call_sid == "CA1"
+            and start.from_number == "+919876543210" and start.to_number == "+918000"
+            and start.sample_rate == 8000 and start.custom_parameters == {"k": "v"}
+            and media.kind == "media" and media.audio == b"\x01\x02" and stop.kind == "stop"
+            and outm == {"event": "media", "media": {"payload": _b.b64encode(b"\x01\x02").decode()}, "stream_sid": "MZ1"})
+check("#EX protocol parses the documented Exotel frames (start/media/stop, string sample_rate) + builds spec media out",
+      _exotel_protocol_matches_spec())
+
+# Exotel's default stream rate is 8 kHz (the start frame can still override it).
+import integrations.exotel.audio_adapter as _EXAA
+def _exotel_default_sample_rate():
+    return (_EXAA.AudioAdapter().exotel_rate == 8000
+            and ExotelWebSocketAdapter(_FakeExotelWS([]))._audio.exotel_rate == 8000
+            and _EXCFG.summary()["sample_rate"] == "8000")
+check("#EX default Exotel sample rate is 8000 Hz (Exotel's default; start frame overrides)",
+      _exotel_default_sample_rate())
+
+# Outbound audio must be framed to 320-byte multiples; sub-320 remainder buffers
+# until more arrives, then is padded + flushed on call teardown.
+async def _exotel_outbound_framing():
+    ex = _FakeExotelWS([])
+    a = ExotelWebSocketAdapter(ex, exotel_rate=24000)  # 24k == Bulbul rate => passthrough, no resample
+    a.stream_sid = "SS"
+    await a.send_bytes(b"\x01\x02" * 300)  # 600B -> emit 320, buffer 280
+    await a.send_bytes(b"\x03\x04" * 60)   # +120 -> 400 -> emit 320, buffer 80
+    await a.send_bytes(b"\x05\x06" * 50)   # +100 -> 180 -> no full frame
+    mid = [f for f in ex.sent if f["event"] == "media"]
+    await a.close()                        # final flush pads the 180B remainder to 320
+    media = [f for f in ex.sent if f["event"] == "media"]
+    all_aligned = all(len(_b64.b64decode(f["media"]["payload"])) % 320 == 0 for f in media)
+    return all_aligned and len(mid) == 2 and len(media) == 3
+check("#EX outbound audio is framed to 320-byte multiples (remainder buffered, then padded+flushed on close)",
+      asyncio.run(_exotel_outbound_framing()))
+
+async def _exotel_bargein_drops_buffer():
+    ex = _FakeExotelWS([])
+    a = ExotelWebSocketAdapter(ex, exotel_rate=24000); a.stream_sid = "SS"
+    await a.send_bytes(b"\x01\x02" * 50)         # 100B buffered, below one frame
+    await a.send_json({"type": "interrupted"})   # barge-in: drop buffer + send clear
+    buf_cleared = len(a._out_buf) == 0
+    clear_sent = any(f["event"] == "clear" for f in ex.sent)
+    await a.close()
+    no_media = not any(f["event"] == "media" for f in ex.sent)
+    return buf_cleared and clear_sent and no_media
+check("#EX barge-in (interrupted) drops buffered outbound audio and sends a clear frame",
+      asyncio.run(_exotel_bargein_drops_buffer()))
+
+# A latency summary is logged when the call ends.
+async def _exotel_latency_summary():
+    import logging as _lg
+    cap = []
+    class _H(_lg.Handler):
+        def emit(self, r): cap.append(self.format(r))
+    base = _lg.getLogger("exotel.session"); h = _H(); h.setFormatter(_lg.Formatter("%(message)s"))
+    base.addHandler(h); base.setLevel(_lg.INFO)
+    try:
+        a = ExotelWebSocketAdapter(_FakeExotelWS([]))
+        await a.close()
+    finally:
+        base.removeHandler(h)
+    return any("[latency-summary]" in m for m in cap)
+check("#EX a latency summary line is logged when the call ends",
+      asyncio.run(_exotel_latency_summary()))
+
 print("\nALL TESTS PASSED")

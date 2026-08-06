@@ -31,8 +31,8 @@ _CHANNELS = 1              # mono
 class AudioAdapter:
     """Per-call resampler. One instance per Exotel session (state is per stream)."""
 
-    def __init__(self, exotel_rate: int = 16000):
-        self.exotel_rate = int(exotel_rate) or 16000
+    def __init__(self, exotel_rate: int = 8000):
+        self.exotel_rate = int(exotel_rate) or 8000
         # ratecv converter state, carried across chunks for each direction.
         self._in_state = None    # Exotel rate -> 16k
         self._out_state = None   # 24k -> Exotel rate

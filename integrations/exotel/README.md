@@ -120,9 +120,10 @@ dispatcher). All optional — with `EXOTEL_ENABLED` unset the endpoint isn't mou
 
 ```bash
 EXOTEL_ENABLED=true               # master switch (default false => WS endpoint not mounted)
+EXOTEL_DEBUG=false                # verbose per-event/size/latency logs (no PII/audio) — default off
 EXOTEL_WS_PATH=/exotel/ws         # WS endpoint path (default /exotel/ws)
 EXOTEL_HEALTH_PATH=/exotel/health # health endpoint path (default /exotel/health)
-EXOTEL_SAMPLE_RATE=16000          # Exotel stream PCM16 rate; auto-corrected from the `start` frame if it differs
+EXOTEL_SAMPLE_RATE=8000           # Exotel's DEFAULT PCM16 rate (8k; also 16k/24k). Auto-corrected from the `start` frame's media_format if it differs
 
 # services.py — server-side reuse of the app's own APIs for phone calls
 APP_BASE_URL=https://transport-sahayak.vercel.app   # where /api/aggregator/responders, /api/routes/matrix & /api/potholes live (default http://localhost:3000)
@@ -174,9 +175,10 @@ In the Exotel dashboard, build an **App Bazaar flow** for the ExoPhone:
 1. **Voicebot applet** (a.k.a. AgentStream / bidirectional streaming) as the flow's
    first/primary applet.
 2. **WebSocket URL:** `wss://<your-railway-domain>/exotel/ws`
-3. **Streaming format:** raw **PCM16, 16 kHz, mono** (match `EXOTEL_SAMPLE_RATE`).
-   The adapter also honours whatever `sample_rate` arrives in the `start` frame, so
-   8 kHz works too — but keep the applet and the env var in agreement.
+3. **Streaming format:** raw **PCM16 (linear16 / "slin"), mono, 8 kHz** (Exotel's
+   default; `EXOTEL_SAMPLE_RATE=8000`). 16 k/24 k also work — the adapter reads the
+   actual rate from the `start` frame's `media_format.sample_rate` and resamples
+   either way — but keep the applet and env var in agreement.
 4. **Bidirectional:** enabled (the bot must be able to send audio back, not just
    receive).
 5. Assign the applet to the trial **ExoPhone**; point the ExoPhone's incoming-call
@@ -185,6 +187,15 @@ In the Exotel dashboard, build an **App Bazaar flow** for the ExoPhone:
    frame and are captured, though v1 doesn't require any.
 
 No DTMF handling is required for v1 (digits are parsed but ignored).
+
+**Protocol conformance (verified against the Exotel AgentStream spec):** inbound
+`connected` / `start` / `media` / `dtmf` / `stop` and outbound `media` / `clear` /
+`mark` all match the documented JSON (snake_case `stream_sid`, `start.call_sid` /
+`from` / `to`, `media_format.sample_rate` as a string, `media.payload` base64).
+Outbound audio is emitted in **320-byte-multiple** frames (≤ 100 KB each) as the
+spec requires. **Timing constraint:** Exotel fails the session if the bot sends no
+audio within **10 s** of connect — the Hindi opening line is spoken immediately, so
+this is satisfied; keep it in mind if the pipeline ever cold-starts slowly.
 
 ---
 

@@ -17,28 +17,41 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Optional
 
 from severity_engine.dispatcher_hindi import HindiDispatcherSession
 
-from . import protocol, services
+from . import config, protocol, services
 from .audio_adapter import AudioAdapter
 from .location import GeocodeLocationProvider, LocationOutcome
-from .logging_utils import get_logger
+from .logging_utils import get_logger, mask_phone
 
 logger = get_logger("exotel.session")
+
+# Exotel requires outbound media payloads to be MULTIPLES OF 320 BYTES, <= 100 KB
+# per frame (per the AgentStream spec). Bulbul chunks are arbitrary sizes, so we
+# buffer resampled PCM and emit only 320-aligned frames. 320 bytes = 20 ms @ 8 kHz
+# and is a common divisor of a 20 ms frame at 8/16/24 kHz, so this holds at any rate.
+_OUT_FRAME_ALIGN = 320
+_OUT_FRAME_MAX = 32000  # 100 * 320; ~200 ms @ 8 kHz / ~100 ms @ 16 kHz, well under 100 KB
 
 
 class ExotelWebSocketAdapter:
     """Quacks like a FastAPI WebSocket for the session; wraps the real Exotel WS."""
 
-    def __init__(self, exotel_ws, exotel_rate: int = 16000):
+    def __init__(self, exotel_ws, exotel_rate: int = 8000):
         self._exotel = exotel_ws
         self._audio = AudioAdapter(exotel_rate)
         self._inbound: "asyncio.Queue[dict]" = asyncio.Queue()
         self._reader: Optional[asyncio.Task] = None
         self._responders: Optional[dict] = None
         self._closed = False
+        self._out_buf = bytearray()  # outbound PCM awaiting 320-byte-aligned framing
+        # latency milestones (monotonic seconds), stamped once each; see _stamp.
+        self._t: dict = {}
+        self._t0 = time.monotonic()
+        self._summary_logged = False
         # exposed to ExotelHindiSession's location override + the endpoint
         self.stream_sid: Optional[str] = None
         self.call_sid: Optional[str] = None
@@ -50,6 +63,12 @@ class ExotelWebSocketAdapter:
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
         self._reader = asyncio.create_task(self._read_loop())
+
+    def _stamp(self, name: str) -> None:
+        """Record a latency milestone the first time it happens."""
+        if name not in self._t:
+            self._t[name] = time.monotonic()
+            config.dbg(logger, "milestone %s @ +%.0fms", name, (self._t[name] - self._t0) * 1000)
 
     async def _read_loop(self) -> None:
         """Read the real Exotel WS, translate events, feed the session's inbound
@@ -66,17 +85,23 @@ class ExotelWebSocketAdapter:
                     ev = protocol.parse_event(json.loads(text))
                 except Exception:
                     continue  # invalid packet -> drop, keep the call alive
+                if ev.kind != "media":
+                    config.dbg(logger, "← %s", ev.kind)
                 if ev.kind == "start":
                     self.stream_sid = ev.stream_sid or self.stream_sid
                     self.call_sid = ev.call_sid
                     self.from_number = ev.from_number
                     if ev.sample_rate and ev.sample_rate != self._audio.exotel_rate:
                         self._audio = AudioAdapter(ev.sample_rate)  # trust the applet's actual rate
-                    logger.info("Exotel call started (call_sid=%s from=%s rate=%s)",
-                                self.call_sid, self.from_number, self._audio.exotel_rate)
+                    self._stamp("connected")
+                    logger.info("Exotel call started (call_sid=%s from=%s rate=%dHz)",
+                                self.call_sid, mask_phone(self.from_number), self._audio.exotel_rate)
                 elif ev.kind == "media" and ev.audio:
+                    self._stamp("first_audio_in")
                     pcm16k = self._audio.exotel_to_pipeline(ev.audio)
                     self._inbound.put_nowait({"type": "websocket.receive", "bytes": pcm16k})
+                    config.dbg(logger, "← media %dB @%dHz -> %dB @16k",
+                               len(ev.audio), self._audio.exotel_rate, len(pcm16k))
                 elif ev.kind == "stop":
                     break
                 # connected / dtmf / unknown: nothing to feed the pipeline (v1)
@@ -90,26 +115,56 @@ class ExotelWebSocketAdapter:
         return await self._inbound.get()
 
     async def send_bytes(self, data: bytes) -> None:
-        """Bulbul PCM16 @ 24 kHz -> Exotel media (resampled)."""
+        """Bulbul PCM16 @ 24 kHz -> Exotel media, resampled and framed to 320-byte
+        multiples (Exotel requires that; Bulbul chunks are arbitrary sizes)."""
         if self._closed or not data:
             return
-        pcm = self._audio.pipeline_to_exotel(data)
-        await self._send_exotel(protocol.media_frame(self.stream_sid, pcm))
+        self._stamp("first_reply_audio")
+        self._out_buf += self._audio.pipeline_to_exotel(data)
+        await self._flush_out(final=False)
+
+    async def _flush_out(self, final: bool) -> None:
+        """Emit buffered outbound PCM as 320-aligned media frames (<= _OUT_FRAME_MAX
+        each). Holds any sub-320-byte remainder for the next chunk; on `final` (call
+        teardown) pads the remainder to a 320 boundary with silence and flushes it."""
+        buf = self._out_buf
+        n = (len(buf) // _OUT_FRAME_ALIGN) * _OUT_FRAME_ALIGN
+        i = 0
+        while i < n:
+            end = min(i + _OUT_FRAME_MAX, n)  # min of two 320-multiples stays 320-aligned
+            frame = bytes(buf[i:end])
+            i = end
+            await self._send_exotel(protocol.media_frame(self.stream_sid, frame))
+            config.dbg(logger, "→ media %dB @%dHz", len(frame), self._audio.exotel_rate)
+        del buf[:n]
+        if final and buf:
+            pad = (-len(buf)) % _OUT_FRAME_ALIGN
+            frame = bytes(buf) + b"\x00" * pad
+            buf.clear()
+            await self._send_exotel(protocol.media_frame(self.stream_sid, frame))
+            config.dbg(logger, "→ media %dB (final, padded)", len(frame))
 
     async def send_json(self, payload: dict) -> None:
         """Handle the session's outgoing control events. Browser-only events are
         ignored; the round-trips are answered server-side and injected back."""
         t = payload.get("type")
         if t == "transcript" and payload.get("role") in ("user", "caller"):
+            self._stamp("first_stt")
             self.last_caller_utterance = payload.get("text") or self.last_caller_utterance
+            config.dbg(logger, "STT transcript (%d chars)", len(payload.get("text") or ""))
         elif t == "request_facility":
+            config.dbg(logger, "service → request_facility type=%s", payload.get("facilityType"))
             asyncio.create_task(self._service_facility(payload))
         elif t == "request_complaint":
+            config.dbg(logger, "service → request_complaint type=%s", payload.get("complaintType"))
             asyncio.create_task(self._service_complaint(payload))
         elif t == "submitted":
+            config.dbg(logger, "service → dispatch_update")
             asyncio.create_task(self._service_dispatch(payload))
         elif t == "interrupted":
-            await self._send_exotel(protocol.clear_frame(self.stream_sid))  # barge-in
+            self._out_buf.clear()  # drop our buffered outbound audio on barge-in...
+            await self._send_exotel(protocol.clear_frame(self.stream_sid))  # ...and Exotel's
+            config.dbg(logger, "→ clear (barge-in)")
         elif t == "call_complete":
             self.call_complete = True  # the endpoint hangs up after run() returns
         # ready / status / form_update / turn_complete / tts_text / call_intent /
@@ -121,7 +176,13 @@ class ExotelWebSocketAdapter:
         return None
 
     async def close(self) -> None:
+        if not self._closed:
+            try:
+                await self._flush_out(final=True)  # emit any buffered tail while the socket may still be open
+            except Exception:
+                logger.debug("final flush failed (socket likely closed)", exc_info=True)
         self._closed = True
+        self._log_latency_summary()
         if self._reader:
             self._reader.cancel()
         try:
@@ -130,6 +191,22 @@ class ExotelWebSocketAdapter:
             pass
 
     # ── internals ────────────────────────────────────────────────────────────
+    def _log_latency_summary(self) -> None:
+        """One INFO line per call: transport milestones from connect to teardown.
+        Gemini/Bulbul internal turn latencies come from the pipeline's own
+        `[latency]` logs — this is the end-to-end transport view."""
+        if self._summary_logged:
+            return
+        self._summary_logged = True
+
+        def ms(name: str) -> str:
+            return f"{(self._t[name] - self._t0) * 1000:.0f}ms" if name in self._t else "—"
+
+        logger.info(
+            "[latency-summary] first_audio_in=%s first_stt=%s first_reply_audio=%s total=%.1fs",
+            ms("first_audio_in"), ms("first_stt"), ms("first_reply_audio"),
+            time.monotonic() - self._t0)
+
     async def _send_exotel(self, frame: dict) -> None:
         if self._closed:
             return

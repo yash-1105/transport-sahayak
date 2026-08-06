@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 import uuid
 from datetime import date
 from typing import Any, Optional
@@ -53,6 +54,7 @@ async def _send(method: str, url: str, *, params: Optional[dict] = None,
     EXOTEL_HTTP_RETRIES (see config.py)."""
     attempts = config.HTTP_RETRIES + 1
     reason = "unknown"
+    t0 = time.monotonic()
     for i in range(attempts):
         try:
             async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT) as c:
@@ -63,6 +65,8 @@ async def _send(method: str, url: str, *, params: Optional[dict] = None,
                 logger.warning("%s: HTTP %s (client error, not retried)", label or url, r.status_code)
                 return None
             else:
+                config.dbg(logger, "%s: HTTP %s in %.0fms (attempt %d)",
+                           label or url, r.status_code, (time.monotonic() - t0) * 1000, i + 1)
                 try:
                     return r.json()
                 except Exception:
@@ -71,7 +75,8 @@ async def _send(method: str, url: str, *, params: Optional[dict] = None,
             reason = type(e).__name__
         if i < attempts - 1:
             await asyncio.sleep(config.HTTP_BACKOFF[min(i, len(config.HTTP_BACKOFF) - 1)])
-    logger.warning("%s: gave up after %d attempt(s) (%s)", label or url, attempts, reason)
+    logger.warning("%s: gave up after %d attempt(s), %.0fms (%s)",
+                   label or url, attempts, (time.monotonic() - t0) * 1000, reason)
     return None
 
 # ── Canonical ETA business logic — mirrors src/lib/matching.ts EXACTLY ─────────

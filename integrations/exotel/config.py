@@ -34,9 +34,13 @@ def _flag(name: str, default: bool = False) -> bool:
 
 # ── transport ─────────────────────────────────────────────────────────────────
 EXOTEL_ENABLED = _flag("EXOTEL_ENABLED", False)
+EXOTEL_DEBUG = _flag("EXOTEL_DEBUG", False)  # verbose per-event/latency logging (no PII/audio)
 EXOTEL_WS_PATH = (os.environ.get("EXOTEL_WS_PATH", "/exotel/ws").strip() or "/exotel/ws")
 EXOTEL_HEALTH_PATH = (os.environ.get("EXOTEL_HEALTH_PATH", "/exotel/health").strip() or "/exotel/health")
-_RAW_SAMPLE_RATE = os.environ.get("EXOTEL_SAMPLE_RATE", "16000")
+# Exotel AgentStream's DEFAULT stream rate is 8 kHz PCM16 mono (also supports
+# 16000/24000). The actual rate is read from the `start` frame's media_format and
+# the resampler auto-reconfigures — this is only the pre-start default.
+_RAW_SAMPLE_RATE = os.environ.get("EXOTEL_SAMPLE_RATE", "8000")
 
 # ── services reuse (the app's own endpoints) ──────────────────────────────────
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000").rstrip("/")
@@ -48,6 +52,14 @@ HTTP_RETRIES = int(os.environ.get("EXOTEL_HTTP_RETRIES", "2") or "2")     # extr
 # backoff (seconds) between attempts; kept short because some calls run inside a
 # live turn. Index clamps to the last entry for any further retries.
 HTTP_BACKOFF = (0.3, 0.8, 1.5)
+
+
+def dbg(log, msg: str, *args) -> None:
+    """Emit a verbose diagnostic line only when EXOTEL_DEBUG is on (at INFO level,
+    so it shows without changing the global log level). Callers must never pass raw
+    audio bytes, transcript text, or full phone numbers — sizes/rates/counts only."""
+    if EXOTEL_DEBUG:
+        log.info("[debug] " + msg, *args)
 
 
 def sample_rate() -> int:
@@ -108,6 +120,7 @@ def summary() -> dict:
     """Config snapshot for /exotel/health (no secrets)."""
     return {
         "enabled": EXOTEL_ENABLED,
+        "debug": EXOTEL_DEBUG,
         "ws_path": EXOTEL_WS_PATH,
         "health_path": EXOTEL_HEALTH_PATH,
         "sample_rate": _RAW_SAMPLE_RATE,
