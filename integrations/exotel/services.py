@@ -170,7 +170,36 @@ def _clean_landmark(text: str) -> str:
     return " ".join(kept).strip()
 
 
-async def _geocode_query(q: str) -> Optional[dict]:
+# Google Places Text Search (New) — the SAME server key the app uses. Far better
+# than Nominatim at Indian business / colloquial landmark queries ("Malviya Nagar
+# KFC", "मालवीय नगर मेन मार्केट"). Biased (softly) to the Delhi–Dehradun corridor.
+_PLACES_TEXT_URL = "https://places.googleapis.com/v1/places:searchText"
+_PLACES_BIAS = {"rectangle": {"low": {"latitude": 28.3, "longitude": 76.7},
+                              "high": {"latitude": 30.5, "longitude": 78.5}}}
+
+
+async def _google_geocode(q: str) -> Optional[dict]:
+    key = config.GOOGLE_MAPS_SERVER_KEY
+    if not key or len(q) < 3:
+        return None
+    body = {"textQuery": q, "locationBias": _PLACES_BIAS, "maxResultCount": 1, "regionCode": "IN"}
+    headers = {"Content-Type": "application/json", "X-Goog-Api-Key": key,
+               "X-Goog-FieldMask": "places.location,places.displayName,places.formattedAddress"}
+    data = await _send("POST", _PLACES_TEXT_URL, json=body, headers=headers, label="places")
+    if not isinstance(data, dict):
+        return None
+    places = data.get("places") or []
+    if not places:
+        return None
+    loc = places[0].get("location") or {}
+    lat, lng = loc.get("latitude"), loc.get("longitude")
+    if lat is None or lng is None:
+        return None
+    label = places[0].get("formattedAddress") or (places[0].get("displayName") or {}).get("text") or q
+    return {"lat": float(lat), "lng": float(lng), "label": str(label)[:120]}
+
+
+async def _nominatim_geocode(q: str) -> Optional[dict]:
     if len(q) < 3:
         return None
     params = {"format": "json", "q": q, "limit": "1", "viewbox": _CORRIDOR_VIEWBOX, "bounded": "1"}
@@ -186,22 +215,23 @@ async def _geocode_query(q: str) -> Optional[dict]:
 
 
 async def geocode_landmark(text: str) -> Optional[dict]:
-    """Forward-geocode an APPROXIMATE spoken location to {lat,lng,label} within the
-    corridor, or None. Tries the filler-stripped place name first (so a full spoken
-    sentence still resolves), then the raw text. Same Nominatim service the app uses.
-    This is deliberately approximate — an area/landmark centroid is enough; we never
-    demand an exact address."""
+    """Forward-geocode an APPROXIMATE spoken location to {lat,lng,label}, or None.
+    Tries the filler-stripped place name first (so a full spoken sentence resolves),
+    then the raw text; and for each, Google Places Text Search FIRST (best for Indian
+    landmarks/businesses), then Nominatim as a keyless fallback. Deliberately
+    approximate — an area/landmark centroid is enough; we never demand an address."""
     raw = (text or "").strip()
-    tried: list[str] = []
+    candidates: list[str] = []
     cleaned = _clean_landmark(raw)
-    if len(cleaned) >= 3 and cleaned.lower() != raw.lower():
-        tried.append(cleaned)
-    if len(raw) >= 3:
-        tried.append(raw)
-    for q in tried:
-        hit = await _geocode_query(q)
-        if hit:
-            return hit
+    if len(cleaned) >= 3:
+        candidates.append(cleaned)
+    if len(raw) >= 3 and raw.lower() != cleaned.lower():
+        candidates.append(raw)
+    for geocoder in (_google_geocode, _nominatim_geocode):
+        for q in candidates:
+            hit = await geocoder(q)
+            if hit:
+                return hit
     return None
 
 

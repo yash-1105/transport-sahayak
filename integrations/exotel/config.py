@@ -45,6 +45,10 @@ _RAW_SAMPLE_RATE = os.environ.get("EXOTEL_SAMPLE_RATE", "8000")
 # ── services reuse (the app's own endpoints) ──────────────────────────────────
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000").rstrip("/")
 NOMINATIM_URL = os.environ.get("NOMINATIM_URL", "https://nominatim.openstreetmap.org").rstrip("/")
+# Same server key the app uses for Places/Routes — Exotel geocodes spoken landmarks
+# via Google Places Text Search (far better than Nominatim for Indian business /
+# colloquial landmark names), falling back to Nominatim when unset.
+GOOGLE_MAPS_SERVER_KEY = os.environ.get("GOOGLE_MAPS_SERVER_KEY", "")
 
 # ── HTTP resilience for every external call in services.py ────────────────────
 HTTP_TIMEOUT = float(os.environ.get("EXOTEL_HTTP_TIMEOUT", "8") or "8")   # seconds, per attempt
@@ -99,6 +103,8 @@ def check() -> tuple[list[str], list[str]]:
         warnings.append(
             f"APP_BASE_URL={APP_BASE_URL} looks local — phone-call responder/ETA/complaint "
             "lookups will hit this, not the deployed app.")
+    if not GOOGLE_MAPS_SERVER_KEY:
+        warnings.append("GOOGLE_MAPS_SERVER_KEY is not set — landmark geocoding falls back to Nominatim (weaker for business/colloquial names).")
     if not os.environ.get("SARVAM_API_KEY"):
         warnings.append("SARVAM_API_KEY is not set — the Hindi STT/TTS pipeline Exotel drives will fail at call time.")
     if not (os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_BASE64") or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")):
@@ -127,4 +133,5 @@ def summary() -> dict:
         "app_base_url": APP_BASE_URL,
         "http_timeout_s": HTTP_TIMEOUT,
         "http_retries": HTTP_RETRIES,
+        "google_places_geocoding": bool(GOOGLE_MAPS_SERVER_KEY),
     }

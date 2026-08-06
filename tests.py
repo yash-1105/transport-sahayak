@@ -2293,20 +2293,24 @@ def _ex_session():
     return ExotelHindiSession(ExotelWebSocketAdapter(_FakeExotelWS([]), 16000))
 
 async def _exotel_location_geocode_retry():
+    _orig_geo = _EXSV.geocode_landmark  # restore after — the provider late-binds to this
     async def _ok(_t): return {"lat": 28.9, "lng": 77.2, "label": "Baghpat"}
     async def _fail(_t): return None
-    _EXSV.geocode_landmark = _ok
-    s = _ex_session(); s.websocket.last_caller_utterance = "NH-334 Baghpat"
-    ok = (await s._tool_get_current_location())["status"] == "ok" and s.state.location["label"] == "Baghpat"
-    _EXSV.geocode_landmark = _fail
-    s = _ex_session(); s.websocket.last_caller_utterance = "कुछ पता नहीं"
-    r1 = await s._tool_get_current_location(); r2 = await s._tool_get_current_location(); r3 = await s._tool_get_current_location()
-    retry_then_terminate = ("next_step" in r1 and s.state.location is None and "call back" in r3["next_step"])
-    up = _ex_session()  # upfront: no caller speech -> silent unavailable, no prompt
-    silent = ("next_step" not in (await up._tool_get_current_location()))
-    fac = _ex_session(); fac.websocket.last_caller_utterance = "मुझे हॉस्पिटल चाहिए"
-    facneeds = (await fac._tool_find_nearest_facility(facility_type="hospital"))["needs_location"] is True
-    return ok and retry_then_terminate and silent and facneeds
+    try:
+        _EXSV.geocode_landmark = _ok
+        s = _ex_session(); s.websocket.last_caller_utterance = "NH-334 Baghpat"
+        ok = (await s._tool_get_current_location())["status"] == "ok" and s.state.location["label"] == "Baghpat"
+        _EXSV.geocode_landmark = _fail
+        s = _ex_session(); s.websocket.last_caller_utterance = "कुछ पता नहीं"
+        r1 = await s._tool_get_current_location(); r2 = await s._tool_get_current_location(); r3 = await s._tool_get_current_location()
+        retry_then_terminate = ("next_step" in r1 and s.state.location is None and "call back" in r3["next_step"])
+        up = _ex_session()  # upfront: no caller speech -> silent unavailable, no prompt
+        silent = ("next_step" not in (await up._tool_get_current_location()))
+        fac = _ex_session(); fac.websocket.last_caller_utterance = "मुझे हॉस्पिटल चाहिए"
+        facneeds = (await fac._tool_find_nearest_facility(facility_type="hospital"))["needs_location"] is True
+        return ok and retry_then_terminate and silent and facneeds
+    finally:
+        _EXSV.geocode_landmark = _orig_geo
 check("#EX location: geocode success sets it; failure asks for a landmark, then terminates; upfront stays silent; no default",
       asyncio.run(_exotel_location_geocode_retry()))
 
@@ -2579,5 +2583,30 @@ def _exotel_location_extraction_and_prompt():
     return clean_ok and prompt_ok and wired
 check("#EX phone location: geocoder extracts place from a sentence; prompt drops map-pin for approximate (browser unchanged)",
       _exotel_location_extraction_and_prompt())
+
+# Geocoding tries Google Places Text Search first (best for Indian landmarks/
+# businesses), and falls back to Nominatim when there's no key.
+async def _exotel_google_geocode_first():
+    async def fake_send(method, url, **kw):
+        if "places.googleapis" in url:
+            return {"places": [{"location": {"latitude": 28.5369, "longitude": 77.2119},
+                                "formattedAddress": "KFC, Old Market, Malviya Nagar"}]}
+        return [{"lat": "28.5300", "lon": "77.2000", "display_name": "Malviya Nagar (Nominatim)"}]
+    _orig_send = _EXSV._send
+    _orig_key = _EXSV.config.GOOGLE_MAPS_SERVER_KEY
+    _EXSV._send = fake_send
+    try:
+        _EXSV.config.GOOGLE_MAPS_SERVER_KEY = "test-key"
+        r = await _EXSV.geocode_landmark("near Malviya Nagar KFC")
+        google_first = bool(r and abs(r["lat"] - 28.5369) < 1e-6 and "KFC" in r["label"])
+        _EXSV.config.GOOGLE_MAPS_SERVER_KEY = ""  # no key -> Nominatim fallback
+        r2 = await _EXSV.geocode_landmark("Malviya Nagar")
+        nominatim_fallback = bool(r2 and abs(r2["lat"] - 28.53) < 1e-6 and "Nominatim" in r2["label"])
+    finally:
+        _EXSV._send = _orig_send
+        _EXSV.config.GOOGLE_MAPS_SERVER_KEY = _orig_key
+    return google_first and nominatim_fallback
+check("#EX geocoding uses Google Places Text Search first (key set), falls back to Nominatim (no key)",
+      asyncio.run(_exotel_google_geocode_first()))
 
 print("\nALL TESTS PASSED")
