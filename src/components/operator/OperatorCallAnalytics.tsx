@@ -18,6 +18,8 @@ interface Summary {
   dispatched: number;
   abandoned: number;
   errored: number;
+  information: number;
+  accident_calls: number;
   dispatch_ready_rate: number | null;
   ttd_median_ms: number | null;
   ttd_mean_ms: number | null;
@@ -73,6 +75,7 @@ function outcomePill(outcome: string | null): React.CSSProperties {
     dispatched: { bg: C.greenSoftBg, bd: C.greenSoftBorder, tx: C.greenSoftText },
     abandoned: { bg: C.saffronSoftBg, bd: C.saffronSoftBorder, tx: "#8A5A17" },
     error: { bg: C.redSoftBg, bd: C.redSoftBorder, tx: C.redSoftText },
+    information: { bg: C.blueSoftBg, bd: C.blueSoftBorder, tx: C.blueSoftText },
   };
   const s = map[outcome ?? ""] ?? { bg: C.page, bd: C.border, tx: C.muted };
   return { fontSize: 11, fontWeight: 600, background: s.bg, border: `1px solid ${s.bd}`, color: s.tx, borderRadius: RADIUS.pill, padding: "2px 9px" };
@@ -129,7 +132,7 @@ export default function OperatorCallAnalytics() {
           </h2>
           {o && o.total_calls > 0 && (
             <p style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
-              Computed across {o.total_calls} call{o.total_calls === 1 ? "" : "s"} · measured until help is dispatched (never the briefing)
+              {o.total_calls} call{o.total_calls === 1 ? "" : "s"} · {o.accident_calls} accident, {o.information} information — the completion rate + time-to-dispatch cover accident calls only (never the briefing)
             </p>
           )}
         </div>
@@ -154,9 +157,10 @@ export default function OperatorCallAnalytics() {
         <>
           {/* KPI tiles — the 3 headline numbers (green on the positive one) */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 20 }}>
-            <Tile showHindi={showHindi} value={String(o.total_calls)} label="Total calls" hi="कुल कॉल" />
-            <Tile showHindi={showHindi} value={fmtPct(o.dispatch_ready_rate)} label="Completion rate" hi="पूर्णता दर" accent={C.green} tip="Share of calls that reached the point where help is dispatched." />
-            <Tile showHindi={showHindi} value={fmtDur(o.ttd_median_ms)} label="Typical time to dispatch" hi="सामान्य समय" tip="Typical (median) time from ready to dispatch — dispatched calls only, never the briefing." />
+            <Tile showHindi={showHindi} value={String(o.accident_calls)} label="Accident calls" hi="दुर्घटना कॉल" tip="Calls that reported an accident (dispatched or abandoned mid-report). Information calls are counted separately." />
+            <Tile showHindi={showHindi} value={fmtPct(o.dispatch_ready_rate)} label="Completion rate" hi="पूर्णता दर" accent={C.green} tip="Share of ACCIDENT calls that reached dispatch. Information/facility/scheme/complaint calls are excluded so they don't lower it." />
+            <Tile showHindi={showHindi} value={fmtDur(o.ttd_median_ms)} label="Typical time to dispatch" hi="सामान्य समय" tip="Typical (median) time from ready to dispatch — dispatched accident calls only, never the briefing." />
+            <Tile showHindi={showHindi} value={String(o.information)} label="Information calls" hi="जानकारी कॉल" accent={C.blue} tip="General helpline calls (nearest facility, scheme/legal info, complaint, breakdown) — answered, not dispatched, and kept out of the accident metrics." />
           </div>
 
           {/* English vs Hindi comparison */}
@@ -337,7 +341,9 @@ function CallDrilldown({ id, showHindi, onClose }: { id: string; showHindi: bool
               <div className="flex flex-wrap" style={{ gap: 8, marginBottom: 14 }}>
                 <span style={outcomePill(d.outcome)}>{d.outcome ?? "—"}</span>
                 <Chip label={localeLabel(d.locale)} />
-                <Chip label={`Time-to-dispatch ${fmtDur(d.time_to_dispatch_ms)}`} strong />
+                {d.outcome === "information"
+                  ? <Chip label="Information call — no dispatch" />
+                  : <Chip label={`Time-to-dispatch ${fmtDur(d.time_to_dispatch_ms)}`} strong />}
                 <Chip label={`${d.total_turns ?? 0} turns`} />
                 <Chip label={`${d.questions_asked ?? 0} questions`} />
                 <Chip label={`${d.productive_turns ?? 0} productive`} />

@@ -48,6 +48,13 @@ function summarize(rows: MetricRow[]) {
   const dispatched = rows.filter((r) => r.outcome === "dispatched");
   const abandoned = rows.filter((r) => r.outcome === "abandoned");
   const errored = rows.filter((r) => r.outcome === "error");
+  // Non-accident helpline calls (facility / scheme / complaint / breakdown) are
+  // tracked SEPARATELY and excluded from the accident completion rate — they
+  // never dispatch, so counting them was unfairly lowering it.
+  const information = rows.filter((r) => r.outcome === "information");
+  // Completion is over ACCIDENT calls only: those that either dispatched or were
+  // abandoned mid-report (errors are technical; information calls aren't accidents).
+  const accidentCalls = dispatched.length + abandoned.length;
 
   const ttd = dispatched
     .map((r) => r.time_to_dispatch_ms)
@@ -59,7 +66,9 @@ function summarize(rows: MetricRow[]) {
     dispatched: dispatched.length,
     abandoned: abandoned.length,
     errored: errored.length,
-    dispatch_ready_rate: total ? dispatched.length / total : null,
+    information: information.length,
+    accident_calls: accidentCalls,
+    dispatch_ready_rate: accidentCalls ? dispatched.length / accidentCalls : null,
     // time-to-dispatch (ms), dispatched calls only
     ttd_median_ms: median(ttd),
     ttd_mean_ms: mean(ttd),

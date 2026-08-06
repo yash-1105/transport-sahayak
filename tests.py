@@ -1372,6 +1372,7 @@ check("#2 Medical & Casualty never asks how many vehicles",
 # The combined question flows through the Hindi fast path verbatim from code.
 _hi_all = HindiDispatcherSession.__new__(HindiDispatcherSession)
 HindiDispatcherSession.__init__(_hi_all, _FakeWS())
+_hi_all._accident_mode = True  # Phase 2: the accident sequence is gated on this
 _hi_all.state.category = "Vehicle Collisions"
 _hi_all.state.sub_type = "X"
 _hi_all.state.description = "x"
@@ -1430,10 +1431,11 @@ class _CapWS:
 def _hi_staged(**state):
     s = HindiDispatcherSession.__new__(HindiDispatcherSession)
     HindiDispatcherSession.__init__(s, _CapWS())
+    s._accident_mode = True  # Phase 2: these tests exercise the accident branch
     s.state.category = "Vehicle Collisions"
     s.state.sub_type = "X"
     s.state.description = "x"
-    s.state.location = {"lat": 26.1, "lng": 91.7, "label": "NH-27"}
+    s.state.location = {"lat": 28.6, "lng": 77.2, "label": "NH-334"}
     for k, v in state.items():
         setattr(s.state, k, v)
     return s
@@ -1468,7 +1470,7 @@ async def _interim_dispatch_sends_frame_and_arms_line():
     ok_frame = (
         frame["type"] == "interim_dispatch"
         and frame["services"] == ["ambulance"]
-        and frame["location"]["label"] == "NH-27"
+        and frame["location"]["label"] == "NH-334"
     )
     # The single deterministic reassurance line is armed EMPATHY-FIRST, then the
     # "help is being arranged" part -- honest wording only (no ETA/minutes), and
@@ -1567,6 +1569,7 @@ check("#1 backstop: a vulnerable victim (child) in the narrative triggers fast_t
 def _fresh_hindi_session():
     s = HindiDispatcherSession.__new__(HindiDispatcherSession)
     HindiDispatcherSession.__init__(s, _FakeWS())
+    s._accident_mode = True  # Phase 2: fast-path tests exercise the accident branch
     s.state.sub_type = "Car vs. Car Collision"
     s.state.category = "Vehicle Collisions"
     s.state.description = "Car collided with another car"
@@ -1797,6 +1800,7 @@ async def _hindi_ambulance_request_is_critical():
     s.websocket = _FakeWS()
     s.state = DispatcherState(language="hi-IN")
     s._ambulance_requested = False
+    s._accident_mode = False   # Phase 2: bare ambulance latch still drives _is_critical
     before = s._is_critical()                     # no ambulance, no injury -> not critical
     s.state.caller_transcript = " एक्सीडेंट हुआ है, जल्दी एम्बुलेंस भेजो!"
     await s._apply_local_signals_from_transcript()
@@ -2049,5 +2053,199 @@ async def _keepalive_fires_periodically_and_cancels_cleanly():
 
 check("keepalive task sends periodic frames and cancels cleanly (no hang, no exception)",
       asyncio.run(_keepalive_fires_periodically_and_cancels_cleanly()))
+
+# ── Multi-intent helpline: curated knowledge base (Phase 1) ───────────────────
+# The scheme/legal/what-to-do answers must come from this curated, sourced KB --
+# never LLM invention. These tests lock the verified figures + structure so a
+# future edit can't silently drop a source, a note, or a key fact.
+from severity_engine.knowledge_base import (
+    KNOWLEDGE_BASE, INFO_TOPICS, lookup_info, describe_topics,
+)
+
+_EXPECTED_TOPICS = {
+    "golden_hour_cashless", "rah_veer_good_samaritan", "hit_and_run_compensation",
+    "ayushman_bharat", "insurance_claim", "move_vehicle", "night_safety",
+}
+check("KB has the expected helpline topics",
+      set(INFO_TOPICS) == _EXPECTED_TOPICS and set(KNOWLEDGE_BASE) == _EXPECTED_TOPICS)
+
+# Every entry is well-formed: non-empty Hindi + English answer + a source.
+_kb_ok = all(
+    e.get("hi", "").strip() and e.get("en", "").strip() and e.get("source", "").strip()
+    and isinstance(e.get("labels"), list) and e["labels"]
+    for e in KNOWLEDGE_BASE.values()
+)
+check("every KB entry has non-empty hi/en text, labels, and a source", _kb_ok)
+
+# Scheme entries carry the conservative "confirm current details" disclaimer.
+for _k in ("golden_hour_cashless", "rah_veer_good_samaritan", "hit_and_run_compensation",
+           "ayushman_bharat", "insurance_claim"):
+    _e = KNOWLEDGE_BASE[_k]
+    check(f"KB scheme entry {_k!r} carries a hi + en disclaimer note",
+          bool(_e.get("note_hi", "").strip()) and bool(_e.get("note_en", "").strip()))
+
+# Verified figures are present verbatim (guards against silent corruption).
+check("KB golden-hour/PM-RAHAT states ₹1.5 lakh + 7 days + §162",
+      "डेढ़ लाख" in KNOWLEDGE_BASE["golden_hour_cashless"]["hi"]
+      and "1.5 lakh" in KNOWLEDGE_BASE["golden_hour_cashless"]["en"]
+      and "सात दिन" in KNOWLEDGE_BASE["golden_hour_cashless"]["hi"]
+      and "162" in KNOWLEDGE_BASE["golden_hour_cashless"]["en"])
+check("KB Rah-Veer/Good-Samaritan states ₹25,000 + §134A",
+      "पच्चीस हज़ार" in KNOWLEDGE_BASE["rah_veer_good_samaritan"]["hi"]
+      and "25,000" in KNOWLEDGE_BASE["rah_veer_good_samaritan"]["en"]
+      and "134A" in KNOWLEDGE_BASE["rah_veer_good_samaritan"]["en"])
+check("KB hit-and-run states ₹2 lakh death / ₹50,000 grievous injury",
+      "दो लाख" in KNOWLEDGE_BASE["hit_and_run_compensation"]["hi"]
+      and "पचास हज़ार" in KNOWLEDGE_BASE["hit_and_run_compensation"]["hi"]
+      and "2,00,000" in KNOWLEDGE_BASE["hit_and_run_compensation"]["en"]
+      and "50,000" in KNOWLEDGE_BASE["hit_and_run_compensation"]["en"])
+check("KB Ayushman states ₹5 lakh + 70+ Vay Vandana",
+      "पाँच लाख" in KNOWLEDGE_BASE["ayushman_bharat"]["hi"]
+      and "5 lakh" in KNOWLEDGE_BASE["ayushman_bharat"]["en"]
+      and "वय वंदना" in KNOWLEDGE_BASE["ayushman_bharat"]["hi"])
+
+# lookup_info + describe_topics behave.
+check("lookup_info returns an entry for a valid topic and None for an unknown one",
+      lookup_info("golden_hour_cashless") is KNOWLEDGE_BASE["golden_hour_cashless"]
+      and lookup_info("does_not_exist") is None and lookup_info("") is None)
+check("describe_topics lists every topic key for the prompt",
+      all(k in describe_topics() for k in _EXPECTED_TOPICS))
+
+# ── Multi-intent helpline: backend routing + accident gating (Phase 2) ────────
+# The accident-collection flow is now ONE branch, entered only on an accident/
+# injury. General calls (facility/info/complaint/breakdown) must never be forced
+# into the incident form, and English must be byte-identical.
+from severity_engine.helpline_tools import HELPLINE_TOOL_DECLARATIONS, HelplineToolsMixin
+from severity_engine.dispatcher_live import _TOOL_DECLARATIONS
+
+def _hi_general():
+    s = HindiDispatcherSession.__new__(HindiDispatcherSession)
+    HindiDispatcherSession.__init__(s, _CapWS())
+    return s
+
+# Combined tool set: Hindi has the accident tools PLUS the 3 helpline tools;
+# English's shared _TOOL_DECLARATIONS is NOT mutated.
+_hi_tool_names = {d["name"] for d in _TOOL_DECLARATIONS} | {d["name"] for d in HELPLINE_TOOL_DECLARATIONS}
+check("#P2 Hindi tool set adds find_nearest_facility / answer_info_question / lodge_complaint",
+      {"find_nearest_facility", "answer_info_question", "lodge_complaint"} <= _hi_tool_names)
+check("#P2 the shared accident-tool declarations were NOT mutated (English-safe)",
+      all(d["name"] not in {"find_nearest_facility", "answer_info_question", "lodge_complaint"}
+          for d in _TOOL_DECLARATIONS)
+      and HelplineToolsMixin not in DispatcherSession.__mro__)
+
+check("#P2 general helpline mode imposes no accident next_question",
+      _hi_general()._accident_mode is False and _hi_general()._compute_still_missing() == [])
+
+async def _p2_interim_suppressed_in_general():
+    s = _hi_general(); s.state.location = {"lat": 28.6, "lng": 77.2, "label": "Delhi"}
+    s._ambulance_requested = True  # 'ambulance ka number' style -- must NOT dispatch
+    before = len(s.websocket.sent)
+    await s._maybe_interim_dispatch()
+    return len(s.websocket.sent) == before
+check("#P2 interim dispatch is suppressed in general mode (facility mention != emergency)",
+      asyncio.run(_p2_interim_suppressed_in_general()))
+
+async def _p2_accident_tool_enters_accident_mode():
+    s = _hi_general()
+    await s._dispatch_tool("search_incident_categories", {})
+    return s._accident_mode is True
+check("#P2 calling an accident tool enters accident mode",
+      asyncio.run(_p2_accident_tool_enters_accident_mode()))
+
+async def _p2_backstop_injury_enters_accident_mode():
+    inj = _hi_general(); inj.state.caller_transcript = " मेरी पत्नी घायल है, बहुत खून बह रहा है "
+    await inj._apply_local_signals_from_transcript()
+    gen = _hi_general(); gen.state.caller_transcript = " पास में कौन सा पेट्रोल पंप है "
+    await gen._apply_local_signals_from_transcript()
+    return inj._accident_mode is True and gen._accident_mode is False
+check("#P2 backstop: an injury transcript enters accident mode; a facility query stays general",
+      asyncio.run(_p2_backstop_injury_enters_accident_mode()))
+
+async def _p2_answer_info_question():
+    s = _hi_general()
+    good = await s._dispatch_tool("answer_info_question", {"topic": "golden_hour_cashless"})
+    miss = await s._dispatch_tool("answer_info_question", {"topic": "unknown_topic"})
+    return (good["ok"] and good["found"] and "डेढ़ लाख" in good["answer_hi"]
+            and miss["found"] is False and "known_topics" in miss
+            and s._accident_mode is False)   # an info query never enters accident mode
+check("#P2 answer_info_question returns KB facts, honest miss, and never enters accident mode",
+      asyncio.run(_p2_answer_info_question()))
+
+async def _p2_find_nearest_facility_roundtrip():
+    s = _hi_general(); s.state.location = {"lat": 28.6, "lng": 77.2, "label": "Delhi"}
+    task = asyncio.create_task(s._dispatch_tool("find_nearest_facility", {"facility_type": "hospital"}))
+    await asyncio.sleep(0.02)
+    frame = s.websocket.sent[-1]
+    ok_req = frame["type"] == "request_facility" and frame["facilityType"] == "hospital"
+    s._resolve_helpline_client_message("facility_result", {"requestId": frame["requestId"],
+        "facility": {"name": "AIIMS", "contactNumber": "011-1", "distanceKm": 3.2, "etaMinutes": 9}})
+    res = await task
+    # no-location path returns needs_location and sends no frame
+    s2 = _hi_general()
+    noloc = await s2._dispatch_tool("find_nearest_facility", {"facility_type": "mechanic"})
+    return (ok_req and res["ok"] and res["facility"]["name"] == "AIIMS"
+            and noloc.get("needs_location") is True and s._accident_mode is False)
+check("#P2 find_nearest_facility does the request/resolve round-trip (needs_location without GPS)",
+      asyncio.run(_p2_find_nearest_facility_roundtrip()))
+
+async def _p2_lodge_complaint_roundtrip():
+    s = _hi_general(); s.state.location = {"lat": 28.6, "lng": 77.2, "label": "NH-334"}
+    task = asyncio.create_task(s._dispatch_tool("lodge_complaint",
+        {"description": "large pothole", "complaint_type": "pothole"}))
+    await asyncio.sleep(0.02)
+    frame = s.websocket.sent[-1]
+    ok_req = frame["type"] == "request_complaint" and frame["complaintType"] == "pothole"
+    s._resolve_helpline_client_message("complaint_result",
+        {"requestId": frame["requestId"], "referenceId": "RPOT-ABCD"})
+    res = await task
+    return ok_req and res["ok"] and res["reference_id"] == "RPOT-ABCD" and s._accident_mode is False
+check("#P2 lodge_complaint does the request/resolve round-trip and returns a real reference id",
+      asyncio.run(_p2_lodge_complaint_roundtrip()))
+
+# English pipeline must be completely untouched by the multi-intent work.
+check("#P2 English (base DispatcherSession) has NO helpline tools and NO accident_mode",
+      not hasattr(DispatcherSession, "_tool_find_nearest_facility")
+      and not hasattr(DispatcherSession, "_tool_answer_info_question")
+      and not hasattr(DispatcherSession, "_dispatch_helpline_tool" if False else "_maybe_dispatch_helpline_tool"))
+_en_probe = DispatcherSession.__new__(DispatcherSession)
+_en_probe.state = DispatcherState(language="en-IN")
+_en_probe.state.category = "Vehicle Collisions"; _en_probe.state.sub_type = "X"
+_en_probe.state.description = "x"; _en_probe.state.location = {"lat": 1, "lng": 1, "label": "x"}
+_en_probe.state.flags = {"Trapped"}
+check("#P2 English fast-track short-circuit is unchanged (critical -> no further questions)",
+      _en_probe._compute_still_missing() == [] and not hasattr(_en_probe, "_accident_mode"))
+
+# call_intent classification for Post-Call Analytics: a general helpline call is
+# emitted as "information" (so it's logged with outcome "information" and kept out
+# of the accident completion rate); an accident call as "accident"; accident
+# outranks information and is emitted once per level.
+async def _p2_call_intent_classification():
+    def intents(sent):
+        return [f["intent"] for f in sent if f.get("type") == "call_intent"]
+
+    async def fac(facility_type="", capability=""):
+        return {"ok": True, "facility": {"name": "H"}, "needs_location": False}
+
+    async def comp(description="", complaint_type="road_defect"):
+        return {"ok": True, "reference_id": "HD-1"}
+
+    info = _hi_general(); info.state.location = {"lat": 28.6, "lng": 77.2, "label": "D"}
+    info._tool_find_nearest_facility = fac; info._tool_lodge_complaint = comp
+    await info._dispatch_tool("find_nearest_facility", {"facility_type": "hospital"})
+    await info._dispatch_tool("answer_info_question", {"topic": "golden_hour_cashless"})
+
+    acc = _hi_general()
+    await acc._dispatch_tool("search_incident_categories", {})
+
+    upg = _hi_general(); upg.state.location = {"lat": 28.6, "lng": 77.2, "label": "D"}
+    upg._tool_find_nearest_facility = fac
+    await upg._dispatch_tool("find_nearest_facility", {"facility_type": "tow"})
+    await upg._dispatch_tool("search_incident_type", {"description": "crash"})
+
+    return (intents(info.websocket.sent) == ["information"]
+            and intents(acc.websocket.sent) == ["accident"]
+            and intents(upg.websocket.sent) == ["information", "accident"])
+check("#P2 call_intent: general -> 'information' (once), accident -> 'accident', info upgrades to accident",
+      asyncio.run(_p2_call_intent_classification()))
 
 print("\nALL TESTS PASSED")

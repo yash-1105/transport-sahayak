@@ -6,6 +6,7 @@ import {
   useVoiceDispatcher,
   type DispatcherSubmitPayload,
   type DispatchBriefingServices,
+  type HelplineFacility,
 } from "@/hooks/useVoiceDispatcher";
 import { DispatcherSection } from "@/components/report/DispatcherSection";
 import { useEventLog } from "@/store/eventLog";
@@ -17,7 +18,7 @@ import { useRoutingStore } from "@/store/routingStore";
 import { useLocaleStore } from "@/store/localeStore";
 import { useBilingual } from "@/hooks/useI18n";
 import { useResponders } from "@/hooks/useResponders";
-import { haversineKm } from "@/lib/matching";
+import { haversineKm, haversineEtaMinutes } from "@/lib/matching";
 import type {
   AccidentReport,
   AssessmentResult,
@@ -1324,6 +1325,8 @@ export default function ReportPanel({
           : null) ?? dispatcherLocation?.point ?? pinnedLocation;
       handleInterimDispatch(services, point);
     },
+    onFacilityQuery: (req) => handleFacilityQuery(req),
+    onLodgeComplaint: (req) => handleLodgeComplaint(req),
     onSubmitReady: (payload: DispatcherSubmitPayload) => {
       const loc = dispatcherLocation?.point ?? payload.location ?? pinnedLocation;
       if (!loc) return;
@@ -1346,7 +1349,7 @@ export default function ReportPanel({
 
   // Responder/service lists from the Aggregator DPG — fetched once at mount
   // so they're ready long before an incident reaches the matching stage.
-  const { data: responders, allDone: respondersLoaded } = useResponders();
+  const { data: responders, results: respondersPlaces, allDone: respondersLoaded } = useResponders();
   const appendReport = useEventLog((s) => s.appendReport);
   const appendAssessment = useEventLog((s) => s.appendAssessment);
   const appendNote = useEventLog((s) => s.appendNote);
@@ -1401,6 +1404,113 @@ export default function ReportPanel({
     },
     [responders, appendNote]
   );
+
+  // Phase 3 (multi-intent helpline): answer the backend's find_nearest_facility
+  // tool from the in-memory responder data + Google POIs. ETA is a labelled
+  // STRAIGHT-LINE estimate (haversineEtaMinutes) — honest, no live tracking, and
+  // never an open/closed claim (that status isn't stored).
+  const handleFacilityQuery = useCallback(
+    (req: { facilityType: string; capability: string | null; location: { lat: number; lng: number; label?: string } | null }): HelplineFacility | null => {
+      const point: GeoPoint | null =
+        (req.location && typeof req.location.lat === "number" ? { lat: req.location.lat, lng: req.location.lng } : null)
+        ?? dispatcherLocation?.point ?? pinnedLocation;
+      if (!point) return null;
+      type Cand = { name: string; lat: number; lng: number; contact: string | null; trauma?: boolean };
+      const ft = req.facilityType;
+      let cands: Cand[];
+      switch (ft) {
+        case "hospital":
+          cands = responders.hospitals.map((h) => ({ name: h.name, lat: h.lat, lng: h.lng, contact: h.phone ?? null, trauma: h.traumaLevel != null }));
+          break;
+        case "ambulance":
+          cands = responders.ambulanceStations.map((a) => ({ name: a.name, lat: a.lat, lng: a.lng, contact: a.contactNumber ?? null }));
+          break;
+        case "fire":
+          cands = responders.fireStations.map((f) => ({ name: f.name, lat: f.lat, lng: f.lng, contact: f.contactNumber ?? null }));
+          break;
+        case "tow":
+          cands = responders.towingStations.map((t) => ({ name: t.name, lat: t.lat, lng: t.lng, contact: t.contactNumber ?? null }));
+          break;
+        case "police":
+          cands = responders.policeStations.map((p) => ({ name: p.name, lat: p.lat, lng: p.lng, contact: p.phone ?? null }));
+          break;
+        case "mechanic":
+          cands = (respondersPlaces.car_repair ?? []).map((g) => ({ name: g.name, lat: g.lat, lng: g.lng, contact: g.phone }));
+          break;
+        case "fuel":
+          cands = (respondersPlaces.gas_station ?? []).map((g) => ({ name: g.name, lat: g.lat, lng: g.lng, contact: g.phone }));
+          break;
+        default:
+          return null;
+      }
+      if (cands.length === 0) return null;
+      // Capability: for a hospital + a trauma/head-injury request, prefer a
+      // trauma-capable facility; if none, return the nearest with an honest note.
+      let note: string | null = null;
+      let pool = cands;
+      const wantsTrauma = ft === "hospital" && !!req.capability && /trauma|head|neuro|spinal|serious|गंभीर|सिर/i.test(req.capability);
+      if (wantsTrauma) {
+        const trauma = cands.filter((c) => c.trauma);
+        if (trauma.length) { pool = trauma; note = "trauma-capable"; }
+        else note = "nearest hospital; trauma capability not confirmed";
+      }
+      let best: Cand | null = null;
+      let bestKm = Infinity;
+      for (const c of pool) {
+        const km = haversineKm(point, { lat: c.lat, lng: c.lng });
+        if (km < bestKm) { bestKm = km; best = c; }
+      }
+      if (!best) return null;
+      appendNote("", `Helpline lookup — nearest ${ft}: ${best.name} (~${bestKm.toFixed(1)} km). Estimate only; open/closed not tracked.`);
+      return {
+        name: best.name,
+        contactNumber: best.contact,
+        distanceKm: Math.round(bestKm * 10) / 10,
+        etaMinutes: Math.round(haversineEtaMinutes(bestKm)),
+        note,
+      };
+    },
+    [responders, respondersPlaces, dispatcherLocation, pinnedLocation, appendNote]
+  );
+
+  // Phase 3: answer the backend's lodge_complaint tool by logging a road-defect
+  // record (reusing the pothole POST path) and returning a REAL reference id.
+  // Honest framing only — it's logged in the system; nothing is "escalated".
+  const handleLodgeComplaint = useCallback(
+    async (req: { description: string; complaintType: string; location: { lat: number; lng: number; label?: string } | null }): Promise<string | null> => {
+      const desc = (req.description || "").trim();
+      if (!desc) return null;
+      const point: GeoPoint | null =
+        (req.location && typeof req.location.lat === "number" ? { lat: req.location.lat, lng: req.location.lng } : null)
+        ?? dispatcherLocation?.point ?? pinnedLocation;
+      const label = req.location?.label || dispatcherLocation?.label || pinnedLabel || (point ? `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}` : "Unknown location");
+      // Mostly-numeric, easy for the voice bot to read out digit-by-digit.
+      const ref = `HD-${Math.floor(100000 + Math.random() * 900000)}`;
+      // A logged record on the map only makes sense with coordinates; without
+      // them we still keep a timeline record + return the reference.
+      if (point) {
+        try {
+          await fetch("/api/potholes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: ref,
+              lat: point.lat,
+              lng: point.lng,
+              road: label,
+              severity: "MEDIUM",
+              description: `[helpline:${req.complaintType}] ${desc}`.slice(0, 300),
+              reported_date: new Date().toISOString().slice(0, 10),
+            }),
+          });
+        } catch { /* best-effort: the timeline record + reference still stand */ }
+      }
+      appendNote("", `Helpline complaint logged (${req.complaintType}) — ref ${ref} at ${label}: ${desc}`);
+      return ref;
+    },
+    [dispatcherLocation, pinnedLocation, pinnedLabel, appendNote]
+  );
+
   const entries = useEventLog((s) => s.entries);
   const clearRoutes = useRoutingStore((s) => s.clearRoutes);
 

@@ -42,6 +42,17 @@ export interface DispatcherSubmitPayload {
   location: { lat: number; lng: number; label: string } | null;
 }
 
+/** Phase 3: one nearest-facility result for the helpline `find_nearest_facility`
+ * tool. `etaMinutes` is a labelled straight-line ESTIMATE, never a tracked time.
+ * `note` optionally qualifies the match (e.g. trauma-capability). */
+export interface HelplineFacility {
+  name: string;
+  contactNumber: string | null;
+  distanceKm: number;
+  etaMinutes: number;
+  note?: string | null;
+}
+
 export interface UseVoiceDispatcherCallbacks {
   onDescription: (v: string) => void;
   onVehiclesInvolved: (v: number) => void;
@@ -60,6 +71,23 @@ export interface UseVoiceDispatcherCallbacks {
     services: string[],
     location: { lat: number; lng: number; label?: string } | null
   ) => void;
+  /** Phase 3 (multi-intent helpline, Hindi): the backend's `find_nearest_facility`
+   * tool asks the frontend to find the nearest facility of a type from the
+   * responder data it already has, plus a labelled drive-time ESTIMATE. Returns
+   * the match (or null if none / no location). English never sends this. */
+  onFacilityQuery?: (req: {
+    facilityType: string;
+    capability: string | null;
+    location: { lat: number; lng: number; label?: string } | null;
+  }) => HelplineFacility | null | Promise<HelplineFacility | null>;
+  /** Phase 3: the backend's `lodge_complaint` tool asks the frontend to log a
+   * road-defect/complaint record (reusing the pothole path) and return a REAL
+   * reference id. Returns null on failure. English never sends this. */
+  onLodgeComplaint?: (req: {
+    description: string;
+    complaintType: string;
+    location: { lat: number; lng: number; label?: string } | null;
+  }) => string | null | Promise<string | null>;
   /** A manually-set incident location (map pin), or null if none is set. When
    * present it is used for the dispatcher's location instead of device GPS, so
    * a user who dropped a pin before starting isn't overridden by geolocation. */
@@ -127,6 +155,11 @@ interface CallMetricsState {
   transcript: { role: string; at_ms: number; text: string }[];
   reconnects: number;
   pendingProductive: boolean; // a form_update landed since the last turn_complete
+  // The call's classified intent (from the backend `call_intent` frame). A
+  // Hindi "information" call (facility/scheme/complaint/breakdown) is logged with
+  // outcome "information" so it is NOT counted as an abandoned accident call.
+  // null = accident call (English always) or a call that ended before any intent.
+  callType: "accident" | "information" | null;
 }
 
 function freshMetrics(locale: VoiceLocale): CallMetricsState {
@@ -134,7 +167,7 @@ function freshMetrics(locale: VoiceLocale): CallMetricsState {
     posted: false, incidentId: null, locale,
     startedAt: Date.now(), readyAt: null, dispatchedAt: null, firstDispatchAt: null,
     callerTurns: 0, agentTurns: 0, questionsAsked: 0, productiveTurns: 0,
-    fields: [], transcript: [], reconnects: 0, pendingProductive: false,
+    fields: [], transcript: [], reconnects: 0, pendingProductive: false, callType: null,
   };
 }
 
@@ -190,6 +223,11 @@ interface ServerEvent {
   text?: string;
   services?: unknown;
   location?: { lat: number; lng: number; label?: string } | null;
+  facilityType?: string;
+  capability?: string | null;
+  description?: string;
+  complaintType?: string;
+  intent?: string;
 }
 
 export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseVoiceDispatcher {
@@ -260,8 +298,19 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
     // `submitted` event as before. A call that dispatched an ambulance early
     // then dropped still counts as "dispatched".
     const dispatchMoment = m.firstDispatchAt ?? m.dispatchedAt;
+    // A general "information" call is its own outcome — never "abandoned" — so it
+    // doesn't drag down the accident completion rate. Accident calls (dispatched /
+    // abandoned / error) are unchanged. Priority: a real dispatch wins (an
+    // accident that both asked a question and dispatched), then information.
     const outcome =
-      forcedOutcome ?? (dispatchMoment ? "dispatched" : statusRef.current === "error" ? "error" : "abandoned");
+      forcedOutcome ??
+      (dispatchMoment
+        ? "dispatched"
+        : m.callType === "information"
+          ? "information"
+          : statusRef.current === "error"
+            ? "error"
+            : "abandoned");
     const body = {
       incident_id: m.incidentId,
       locale: m.locale,
@@ -611,6 +660,60 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
             metricsRef.current.firstDispatchAt = Date.now();
           }
           if (services.length) cb.onInterimDispatch?.(services, event.location ?? null);
+          break;
+        }
+        case "request_facility": {
+          // Phase 3 (helpline): find the nearest facility from responder data and
+          // reply. Answered by ReportPanel via onFacilityQuery; the backend awaits
+          // this reply (it times out gracefully if we can't answer).
+          const requestId = event.requestId;
+          if (!requestId) break;
+          const loc = event.location ?? null;
+          void (async () => {
+            let facility: HelplineFacility | null = null;
+            try {
+              facility = (await cb.onFacilityQuery?.({
+                facilityType: event.facilityType ?? "",
+                capability: event.capability ?? null,
+                location: loc,
+              })) ?? null;
+            } catch { /* reply null on any error */ }
+            if (isStale()) return;
+            wsRef.current?.send(JSON.stringify({
+              type: "facility_result",
+              requestId,
+              facility,
+              needsLocation: !facility && !loc && !cb.getManualLocation?.(),
+            }));
+          })();
+          break;
+        }
+        case "call_intent": {
+          // Classify the call for Post-Call Analytics. accident outranks
+          // information and is never downgraded.
+          const m = metricsRef.current;
+          if (m && (event.intent === "accident" || event.intent === "information")) {
+            if (m.callType !== "accident") m.callType = event.intent;
+          }
+          break;
+        }
+        case "request_complaint": {
+          // Phase 3 (helpline): log a road-defect/complaint and return a real
+          // reference id (ReportPanel reuses the pothole path).
+          const requestId = event.requestId;
+          if (!requestId) break;
+          void (async () => {
+            let referenceId: string | null = null;
+            try {
+              referenceId = (await cb.onLodgeComplaint?.({
+                description: event.description ?? "",
+                complaintType: event.complaintType ?? "other",
+                location: event.location ?? null,
+              })) ?? null;
+            } catch { /* reply null on any error */ }
+            if (isStale()) return;
+            wsRef.current?.send(JSON.stringify({ type: "complaint_result", requestId, referenceId }));
+          })();
           break;
         }
         case "submitted":

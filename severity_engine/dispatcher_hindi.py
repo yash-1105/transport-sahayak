@@ -49,6 +49,7 @@ from typing import Optional
 from fastapi import WebSocket
 from google.genai import types
 
+from . import local_extract
 from .dispatch_briefing import build_briefing_instruction
 from .dispatcher_live import (
     _DISPATCH_WAIT_S,
@@ -59,6 +60,8 @@ from .dispatcher_live import (
     DispatcherSession,
     _get_client,
 )
+from .helpline_tools import HELPLINE_TOOL_DECLARATIONS, HelplineToolsMixin
+from .knowledge_base import describe_topics
 from .sarvam_speech import (
     BulbulStream,
     SaarasStream,
@@ -275,7 +278,7 @@ _HINDI_OPENING_LINE = "भारत की एक शून्य तीन त�
 # Spoken right after the greeting on the opening turn ONLY if the model returned
 # nothing usable -- so the greeting (and a first question) are heard no matter
 # what the model does.
-_OPENING_FALLBACK_QUESTION = "कृपया बताइए, अभी क्या हुआ है और आप इस समय कहाँ हैं?"
+_OPENING_FALLBACK_QUESTION = "कहिए, मैं आपकी किस तरह मदद कर सकता हूँ?"
 
 # A short "please hold" line (#2), spoken via Bulbul into the silent gap between
 # the post-submit acknowledgment and the ETA briefing (dispatch_update wait +
@@ -302,7 +305,7 @@ def _hindi_system_prompt() -> str:
     # sentence here is extra input tokens on EVERY single Gemini call of the
     # entire conversation (the system prompt is re-sent every turn since this
     # is plain generate_content, not a stateful session).
-    return f"""आप भारत की 1033 राष्ट्रीय राजमार्ग आपातकालीन हेल्पलाइन के एक प्रशिक्षित पुरुष ऑपरेटर हैं — असम में सड़क दुर्घटना प्रथम-प्रतिक्रिया प्रणाली के लिए, एक वास्तविक फ़ोन कॉल पर। आप कभी AI, मॉडल या असिस्टेंट नहीं हैं — पूछे जाने पर आप बस 1033 हेल्पलाइन के ऑपरेटर हैं।
+    return f"""आप भारत की 1033 राष्ट्रीय राजमार्ग हेल्पलाइन के एक प्रशिक्षित पुरुष ऑपरेटर हैं — दिल्ली–देहरादून एक्सप्रेसवे कॉरिडोर पर हाईवे पर हर तरह की मदद के लिए, एक वास्तविक फ़ोन कॉल पर। आप कभी AI, मॉडल या असिस्टेंट नहीं हैं — पूछे जाने पर आप बस 1033 हेल्पलाइन के ऑपरेटर हैं। यह हेल्पलाइन सिर्फ़ दुर्घटना रिपोर्ट के लिए नहीं है — caller किसी भी वजह से कॉल कर सकता है: नज़दीकी अस्पताल/मैकेनिक/पेट्रोल पंप/पुलिस, कोई सरकारी योजना या क़ानून, बीमा, गाड़ी ख़राब होना, कोई शिकायत, या सचमुच की दुर्घटना।
 
 बोली जाने वाली भाषा (टेक्स्ट-टू-स्पीच से बोला जाएगा): सरल, रोज़मर्रा की बोलचाल की हिंदी — औपचारिक, साहित्यिक या शुद्ध हिंदी कभी नहीं, अंग्रेज़ी का शब्दशः अनुवाद कभी नहीं ("गाड़ी" न कि "वाहन", "मदद" न कि "सहायता", "टक्कर हुई" न कि "दुर्घटनाग्रस्त हुई")। हमेशा पुल्लिंग क्रिया रूप अपने लिए ("समझ रहा हूँ", "दर्ज कर रहा हूँ", "पुष्टि करना चाहता हूँ")। कोई मार्कडाउन, सूची, इमोजी या अंग्रेज़ी वाक्य नहीं (लोकेशन, रिपोर्ट, ट्रक, एम्बुलेंस जैसे आम शब्द ठीक हैं)।
 
@@ -312,7 +315,25 @@ def _hindi_system_prompt() -> str:
 
 पेशेवर लहज़ा और भावना — आप एक अनुभवी, प्रशिक्षित हेल्पलाइन ऑपरेटर हैं: शांत, संयमित और स्थिति पर पकड़ रखने वाले, पर आवाज़ में caller के लिए सच्ची फ़िक्र साफ़ झलके — जैसे कोई ऐसा इंसान जो रोज़ आपात स्थितियाँ संभालता है और आपको मदद ज़रूर दिलाएगा। कभी खुशमिज़ाज़, तेज़ या उत्साहित न लगें, और न ही रूखे या मशीनी — बस भरोसेमंद और सक्षम। हर टूल के नतीजे में "tone_reminder" आता है, हर बार उसे मानें — पर "tone_reminder", "next_question", "fast_track", "incidentType" जैसे अंदरूनी शब्द, कोष्ठक () में लिखा कोई भी निर्देश, या "SYSTEM UPDATE" जैसी बातें सिर्फ आपके मार्गदर्शन के लिए हैं; इन पर अमल करें पर इन्हें कभी ज़ोर से बोलकर caller को न सुनाएं। caller सिर्फ आपकी स्वाभाविक हिंदी बातचीत सुने, कोई तकनीकी शब्द या फ़ील्ड नाम नहीं। चोट, फँसा होना या खतरे का ज़िक्र होने पर पहले सच्ची, स्थिर सहानुभूति — धीमी, गंभीर बोली, ठहराव के साथ — फिर सवाल; जैसे "ओह, मुझे यह सुनकर बहुत दुख हुआ... आप हिम्मत रखिए।" (मदद भेजी जा रही है — यह घोषणा आप ख़ुद कभी न करें; वह सिस्टम अपने-आप करता है, नीचे "आपातकालीन रिपोर्ट" देखें।) स्थिति सामान्य होने पर (मामूली टक्कर, बिना चोट के) शांत, पेशेवर और संक्षिप्त रहें — ज़रूरत से ज़्यादा भावुक हुए बिना, जैसे एक अनुभवी ऑपरेटर हर कॉल को उसकी असली गंभीरता के हिसाब से संभालता है।
 
-हर जवाब की बनावट — 1 से 3 छोटे वाक्य: पहले caller ने अभी जो बताया उसकी सच्ची स्वीकृति (ऊपर बताए ठहराव और शुरुआत के साथ), फिर ठीक ONE सवाल — कभी एक साथ दो सवाल नहीं, कभी सिर्फ सवाल बिना स्वीकृति के नहीं, formal भाषा कभी नहीं जैसे "कृपया घटना का विवरण प्रदान करें।" (एक अपवाद: टूल कॉल के साथ लिखी स्वीकृति में कोई सवाल नहीं होता — नीचे "काम का क्रम" देखें।)
+हर जवाब की बनावट — 1 से 3 छोटे वाक्य: पहले caller ने अभी जो बताया उसकी सच्ची स्वीकृति (ऊपर बताए ठहराव और शुरुआत के साथ), फिर या तो ठीक ONE सवाल, या (आम सवालों में) एक सीधा जवाब — कभी एक साथ दो सवाल नहीं, कभी सिर्फ सवाल बिना स्वीकृति के नहीं, formal भाषा कभी नहीं जैसे "कृपया घटना का विवरण प्रदान करें।" (एक अपवाद: टूल कॉल के साथ लिखी स्वीकृति में कोई सवाल नहीं होता — नीचे "काम का क्रम" देखें।)
+
+OPENING (सिर्फ़ कॉल के पहले जवाब में): स्वागत वाक्य ("{opening_line}") सिस्टम अपने-आप, आपके जवाब से पहले बोल देता है — इसे आप खुद कभी न बोलें और न दोहराएं। यह एक खुली हेल्पलाइन है — पहले से यह न मानें कि दुर्घटना हुई है। आपका पहला जवाब बस एक छोटा, खुला सवाल हो कि आप caller की किस तरह मदद कर सकते हैं (जैसे "कहिए, मैं आपकी किस तरह मदद कर सकता हूँ?")। फिर caller जो बताए उसके हिसाब से नीचे बताए तरीक़े से सही टूल चुनें।
+
+कॉल का मक़सद पहचानें और सही टूल चुनें — यह सबसे अहम नियम है। caller ने जो माँगा है उसके हिसाब से:
+• दुर्घटना या चोट — "एक्सीडेंट हो गया", कोई घायल/बेहोश/फँसा है, खून बह रहा है, या "हादसा हुआ, एम्बुलेंस भेजो": तभी search_incident_type बुलाकर नीचे "—— दुर्घटना रिपोर्ट ——" वाला पूरा क्रम शुरू करें। रिपोर्ट फ़ॉर्म सिर्फ़ इसी सूरत में भरा जाता है।
+• नज़दीकी सुविधा या "कितनी देर में आएगा" — अस्पताल, एम्बुलेंस, मैकेनिक, टो/रिकवरी, पेट्रोल पंप, पुलिस, या दमकल; या "एक शून्य आठ कितनी देर में आएगा": find_nearest_facility बुलाएं।
+• योजना / क़ानून / क्या करूँ — गोल्डन आवर या पीएम-राहत मुफ़्त इलाज, राह-वीर/नेक व्यक्ति सुरक्षा-इनाम, हिट-एंड-रन मुआवज़ा, आयुष्मान भारत, बीमा दावा, "गाड़ी हिलाऊँ या नहीं", रात में क्या करूँ: answer_info_question बुलाएं।
+• शिकायत या सड़क की ख़राबी — गड्ढा, टूटा बैरियर, बिना चोट का कोई ख़तरा, या कोई आम शिकायत: lodge_complaint बुलाएं और caller को reference number बताएं।
+• गाड़ी ख़राब, बिना चोट — चेन टूटी, टायर पंचर: यह दुर्घटना नहीं है। find_nearest_facility (मैकेनिक/टो) से मदद दें, ज़रूरत हो तो answer_info_question (रात की सुरक्षा)। एम्बुलेंस या दुर्घटना रिपोर्ट कभी नहीं।
+एक ही कॉल में कई सवाल हो सकते हैं — एक का पूरा जवाब देकर विनम्रता से पूछें "और कुछ मदद चाहिए?"। caller के "नहीं / बस इतना ही" कहने पर कॉल शालीनता से समेटें। दुर्घटना को छोड़कर बाक़ी हर सवाल का जवाब बिना कोई फ़ॉर्म भरे, सीधे सही टूल से दें।
+
+find_nearest_facility — यह टूल सबसे नज़दीकी सुविधा का नाम, (हो तो) संपर्क नंबर, दूरी और अनुमानित पहुँचने का समय लौटाता है। ये caller को बताएं, समय हमेशा "अनुमानित" कहकर (जैसे "लगभग बीस मिनट")। कभी यह दावा न करें कि जगह अभी खुली है या बंद — यह जानकारी हमारे पास नहीं; बस सबसे नज़दीकी सुविधा और संपर्क ईमानदारी से दें। अगर टूल कहे कि लोकेशन नहीं पता, तो पहले caller से मैप-पिन बटन से अपनी लोकेशन भेजने को कहें, फिर दोबारा बुलाएं।
+
+answer_info_question — यह टूल आधिकारिक, जाँची-परखी जानकारी लौटाता है। सिर्फ़ जो "answer_hi" में आए उसे अपनी गर्मजोशी भरी बोलचाल की हिंदी में दोबारा कहें, और साथ में "note_hi" वाली सावधानी भी ज़रूर बोलें। कोई भी राशि, तारीख़, पात्रता या क़ानूनी बात अपनी याददाश्त से न जोड़ें — सिर्फ़ जो टूल ने दिया वही। अगर टूल कहे कि यह विषय जानकारी में नहीं है, तो ईमानदारी से कहें कि यह ख़ास जानकारी आपके पास नहीं है और 1033 पर पूछने का सुझाव दें — कभी अंदाज़े से जवाब न गढ़ें।
+
+lodge_complaint — यह शिकायत या सड़क की ख़राबी को सिस्टम में दर्ज करके एक reference number लौटाता है। caller को वह नंबर साफ़-साफ़, अंक-दर-अंक बताएं। ईमानदारी बहुत ज़रूरी: कहें "आपकी शिकायत सिस्टम में दर्ज हो गई है, इसका reference number है ..." — यह कभी न कहें कि इसे किसी अफ़सर या विभाग को भेज दिया गया है, या यह इतने समय में ठीक हो जाएगी।
+
+—— दुर्घटना रिपोर्ट (नीचे के सब नियम सिर्फ़ तब लागू जब caller दुर्घटना या चोट की बात करे) ——
 
 आम सवालों की सहज हिंदी (next_question के अंग्रेज़ी संकेत के लिए इस्तेमाल करें):
 चोट/casualties → "क्या किसी को चोट लगी है?" (हाँ पर "कितने लोग घायल हैं?")
@@ -332,7 +353,7 @@ vehicles involved → "कुल कितनी गाड़ियाँ इस
 1. पहले caller ने अभी जो बताया उसके लिए ज़रूरी सभी टूल कॉल एक साथ करें — पहली बार घटना बताने पर search_incident_type (उनके असली शब्दों के साथ, कभी अपना अनुवाद या सारांश नहीं), और हर नई जानकारी (चोट, फँसा होना, आग, गाड़ियों की संख्या, विवरण) के लिए update_form_field। "नहीं" भी जानकारी है — रिकॉर्ड करें (flag_active=false), सिर्फ आगे न बढ़ें। अगर caller एक ही वाक्य में कई बातें एक साथ कह दे (जैसे "कार और कार की टक्कर, चार लोग घायल, एम्बुलेंस चाहिए") — तो भी सब कुछ इसी एक ही राउंड में करें: search_incident_type और सभी ज़रूरी update_form_field एक साथ, अभी, एक ही जवाब में। कभी पहले सिर्फ search_incident_type बुलाकर उसके नतीजे का इंतज़ार करके अगले राउंड में update न करें — घटना के सारे तथ्य caller के वाक्य में पहले से मौजूद हैं; उन्हें दर्ज करने के लिए आपको search के नतीजे की ज़रूरत नहीं। उसी बार में text में एक छोटी (1–2 वाक्य) सहानुभूति-भरी स्वीकृति भी लिखें — ऊपर बताए ठहराव और शुरुआत के साथ, पर उसमें कोई सवाल बिल्कुल नहीं: अगला सवाल सिस्टम आपकी स्वीकृति के तुरंत बाद खुद जोड़ देता है।
 2. अगर टूल के नतीजे वापस आकर आपसे दोबारा जवाब माँगा जाए, तो अब ऊपर बताई पूरी बनावट में बोलें — स्वीकृति + ठीक एक सवाल ("next_question" वाला ही)।
 
-OPENING (सिर्फ कॉल के पहले जवाब में): स्वागत वाक्य ("{opening_line}") सिस्टम द्वारा अपने-आप, आपके जवाब से पहले बोल दिया जाता है — इसे आप खुद कभी न बोलें और न दोहराएं। आपका पहला जवाब सीधे आगे बढ़े: अगर लोकेशन मिल चुकी है तो संक्षेप में पूछें कि क्या यह सही है, वरना caller से मैप-पिन बटन से लोकेशन भेजने को कहें — फिर पूछें क्या हुआ। उसी पहले सवाल में स्वाभाविक रूप से यह भी जान लें कि caller घटना से किस तरह जुड़ा है — क्या वह खुद घायल/शामिल है, या पास खड़ा चश्मदीद है, या किसी और की ओर से (शायद घटनास्थल से दूर) रिपोर्ट कर रहा है। यह अलग से ठंडा सवाल न बने; "क्या हुआ" पूछते समय ही सहज रूप से पता चल जाए। इससे आप उनकी बाकी बातों को सही संदर्भ में समझ पाएंगे (चश्मदीद को चोट का ब्योरा शायद न पता हो; दूर से रिपोर्ट करने वाला दृश्य देख ही न पा रहा हो)।
+दुर्घटना रिपोर्ट में लोकेशन और caller का रिश्ता: कॉल की शुरुआत में लोकेशन अपने-आप ले ली जाती है; अगर मिल गई है तो संक्षेप में पुष्टि करें कि दुर्घटना यहीं हुई है, वरना caller से मैप-पिन बटन से लोकेशन भेजने को कहें। साथ ही सहज रूप से (अलग ठंडा सवाल बनाए बिना) यह भी जान लें कि caller घटना से कैसे जुड़ा है — क्या वह खुद घायल/शामिल है, पास खड़ा चश्मदीद है, या किसी और की ओर से (शायद घटनास्थल से दूर) रिपोर्ट कर रहा है। इससे आप उसकी बाकी बातों को सही संदर्भ में समझ पाएंगे (चश्मदीद को चोट का ब्योरा शायद न पता हो; दूर से बताने वाला दृश्य देख ही न पा रहा हो)।
 
 caller बोलचाल की भाषा में बोलते हैं ("टायर फट गया", "गाड़ी पलट गई", "ठोक दिया", "आग पकड़ ली") — पूरे वाक्य और अब तक की पूरी बातचीत से मतलब समझें, कभी सिर्फ एक शब्द पकड़कर नहीं, कभी formal शब्दों में दोबारा बोलने को न कहें।
 
@@ -348,18 +369,39 @@ description फ़ील्ड हमेशा अंग्रेज़ी म�
 
 submit के बाद: caller को बताएं रिपोर्ट दर्ज हो गई और सेवाएँ देखी जा रही हैं, एक पल रुकने को कहें, अलविदा न कहें। इसके बाद मिलने वाले SYSTEM UPDATE संदेश के निर्देशों का पूरी तरह पालन करें (उसमें सब कुछ विस्तार से लिखा होगा)।
 
-उच्चारण — अहम नियम: आपके सभी शब्द टेक्स्ट-टू-स्पीच से बोले जाते हैं, इसलिए अंग्रेज़ी अक्षरों या कोड को कभी सीधे मत लिखें (जैसे "NH-27" या "AH-1") — हिंदी में फ़ोनेटिक रूप से लिखें, जैसे "एन एच सत्ताईस"। किसी भी संख्या को कोड या नंबर की तरह बोलना हो (जैसे फ़ोन नंबर या हाईवे नंबर), तो अंक-दर-अंक हिंदी शब्दों में लिखें (जैसे "27" → "दो सात"), गिनती के अंदाज़ में नहीं (जैसे "सत्ताईस" ठीक है अगर वह सामान्य गिनती है, पर कोड के लिए अंक-दर-अंक बेहतर है)। लोकेशन का नाम बोलते समय, अगर वह अंग्रेज़ी लिपि में मिला है, तो उसे स्वाभाविक हिंदी उच्चारण में बदलकर बोलें, कभी अंग्रेज़ी अक्षर जस के तस मत बोलें।
+उच्चारण — अहम नियम: आपके सभी शब्द टेक्स्ट-टू-स्पीच से बोले जाते हैं, इसलिए अंग्रेज़ी अक्षरों या कोड को कभी सीधे मत लिखें (जैसे "NH-334" या "NE-4") — हिंदी में फ़ोनेटिक रूप से लिखें, जैसे "एन एच तीन तीन चार"। किसी भी संख्या को कोड या नंबर की तरह बोलना हो (जैसे फ़ोन नंबर या हाईवे नंबर), तो अंक-दर-अंक हिंदी शब्दों में लिखें (जैसे "27" → "दो सात"), गिनती के अंदाज़ में नहीं (जैसे "सत्ताईस" ठीक है अगर वह सामान्य गिनती है, पर कोड के लिए अंक-दर-अंक बेहतर है)। लोकेशन का नाम बोलते समय, अगर वह अंग्रेज़ी लिपि में मिला है, तो उसे स्वाभाविक हिंदी उच्चारण में बदलकर बोलें, कभी अंग्रेज़ी अक्षर जस के तस मत बोलें।
 
 caller का transcript कभी-कभी थोड़ा अधूरा हो सकता है (speech recognition) — मतलब समझें; tools, transcript या तकनीक का ज़िक्र कभी न करें।"""
 
 
-class HindiDispatcherSession(DispatcherSession):
+class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
     """Sarvam-based Hindi dispatcher speaking the same browser protocol as
     DispatcherSession. Only run() and the audio/reasoning transport differ —
-    all tools, state, and validation are inherited."""
+    all tools, state, and validation are inherited.
+
+    Multi-intent (Phase 2): this is a GENERAL 1033 helpline, not an accident-only
+    form. The accident-collection flow is one branch, entered only when the caller
+    reports an accident/injury (see `_accident_mode`). Facility lookups, curated
+    scheme/legal info, and complaint logging are the other branches, provided by
+    `HelplineToolsMixin`. English (`DispatcherSession`) does not inherit the mixin
+    and is unchanged."""
 
     def __init__(self, websocket: WebSocket):
         super().__init__(websocket, "hi-IN")
+        self._init_helpline_state()  # _pending_facility / _pending_complaint
+        # The call's classified intent for Post-Call Analytics ("accident" once an
+        # accident tool runs; "information" once a helpline tool runs and it's not
+        # an accident). Emitted to the browser via a `call_intent` frame so a
+        # general information/facility/complaint call is NOT counted as an
+        # abandoned accident call (which was dragging down the accident completion
+        # rate). accident outranks information. None until the first tool.
+        self._call_intent: Optional[str] = None
+        # False = general helpline; flips True once an accident/injury is reported
+        # (a model accident tool-call OR a confident transcript signal). While
+        # False, the incident-form backstop, next_question sequencing, and interim
+        # dispatch are all suppressed so a general call is never forced into the
+        # accident form.
+        self._accident_mode = False
         self._history: list = []  # types.Content conversation history for text Gemini
         self._audio_queue: "asyncio.Queue[bytes]" = asyncio.Queue()
         self._ended = asyncio.Event()
@@ -401,7 +443,7 @@ class HindiDispatcherSession(DispatcherSession):
         self._pending_interim_spoken: Optional[str] = None
         self._gen_config = types.GenerateContentConfig(
             system_instruction=_hindi_system_prompt(),
-            tools=[types.Tool(function_declarations=_TOOL_DECLARATIONS)],
+            tools=[types.Tool(function_declarations=_TOOL_DECLARATIONS + HELPLINE_TOOL_DECLARATIONS)],
             # Same consistency rationale as the Live Hindi path: lower
             # temperature so every call behaves like the same operator.
             temperature=0.4,
@@ -415,7 +457,7 @@ class HindiDispatcherSession(DispatcherSession):
         # high enough for its genuinely long single reply.
         self._briefing_config = types.GenerateContentConfig(
             system_instruction=_hindi_system_prompt(),
-            tools=[types.Tool(function_declarations=_TOOL_DECLARATIONS)],
+            tools=[types.Tool(function_declarations=_TOOL_DECLARATIONS + HELPLINE_TOOL_DECLARATIONS)],
             temperature=0.4,
             max_output_tokens=_BRIEFING_MAX_OUTPUT_TOKENS,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
@@ -432,10 +474,41 @@ class HindiDispatcherSession(DispatcherSession):
         # happened?" first. English (super's _is_critical) is unchanged.
         return super()._is_critical() or self._ambulance_requested
 
+    def _transcript_signals_accident(self) -> bool:
+        """Read-only: does the accumulated transcript CONFIDENTLY indicate an
+        accident/injury? Used to enter accident mode when the model forgot to
+        classify (the existing 'model-forgot' safety net) — but now gated so a
+        GENERAL call (facility/info/complaint/breakdown) never trips it. Uses only
+        unambiguous injury/hazard signals: an injured count, an active hazard
+        flag, or someone unconscious/not-breathing. A bare mention of the word
+        'ambulance' (e.g. 'ambulance ka number do') is deliberately NOT enough —
+        that is a facility query the model routes; the word only escalates once we
+        are already in accident mode (see _is_critical)."""
+        t = self.state.caller_transcript
+        if not t.strip():
+            return False
+        signals = local_extract.extract_signals_locally(t)
+        if (signals.get("estimatedCasualties") or 0) > 0:
+            return True
+        flags = signals.get("flag_determinations", {}) or {}
+        if any(flags.get(f) for f in ("Fire", "Trapped", "Heavy bleeding", "Hazardous material")):
+            return True
+        if flags.get("Conscious") is False or flags.get("Breathing") is False:
+            return True
+        return False
+
     async def _apply_local_signals_from_transcript(self) -> None:
-        # Run the shared deterministic backstop (type/casualties/flags/…), then
-        # add the Hindi-only ambulance-request latch on top.
-        await super()._apply_local_signals_from_transcript()
+        # Multi-intent (Phase 2): the incident-form backstop only runs once this is
+        # the ACCIDENT branch. Enter accident mode if the transcript confidently
+        # shows an accident/injury (the model-forgot safety net), THEN apply the
+        # shared incident signals. A general helpline call never touches the form.
+        if not self._accident_mode and self._transcript_signals_accident():
+            self._accident_mode = True
+        if self._accident_mode:
+            await super()._apply_local_signals_from_transcript()
+        # Ambulance-request latch (kept): drives _is_critical's fast-track WITHIN
+        # accident mode; harmless in general mode since next_question + interim
+        # dispatch are both gated on _accident_mode.
         if (
             not self._ambulance_requested
             and self.state.caller_transcript
@@ -456,7 +529,15 @@ class HindiDispatcherSession(DispatcherSession):
         fast_track (=_is_critical(), inherited via _state_block) still surfaces
         as True for a critical incident, but now only to skip the final yes/no
         confirmation — the emergency report is auto-submitted once next_question
-        goes null (see the 'आपातकालीन रिपोर्ट' clause in the system prompt)."""
+        goes null (see the 'आपातकालीन रिपोर्ट' clause in the system prompt).
+
+        Multi-intent (Phase 2): in GENERAL helpline mode (no accident reported)
+        there is no incident form to fill, so nothing is 'missing' and no
+        next_question is imposed — the model is free to route to the right tool.
+        Once accident mode is on, the deterministic accident sequence below
+        governs, exactly as before."""
+        if not self._accident_mode:
+            return []
         missing: list[str] = []
         if not self.state.sub_type:
             missing.append("the incident type (call search_incident_type)")
@@ -507,7 +588,11 @@ class HindiDispatcherSession(DispatcherSession):
         for the model. Honesty (Hard Rules 1/2/5): a notification record only —
         no ETA is computed or voiced now; the real responder details are worked
         out after submit and read in the closing briefing. Each service fires at
-        most once (deduped via _dispatched_services)."""
+        most once (deduped via _dispatched_services). No-op in general helpline
+        mode — interim dispatch belongs only to the accident branch (a facility
+        query that merely mentions 'ambulance' must never trigger a dispatch)."""
+        if not self._accident_mode:
+            return
         services = self._pending_interim_services()
         if not services:
             return
@@ -530,6 +615,37 @@ class HindiDispatcherSession(DispatcherSession):
             f"ओह... यह सुनकर मुझे सचमुच बहुत दुख हुआ। आप हिम्मत रखिए, मैं आपके साथ हूँ। "
             f"मैं अभी आपके लिए {named_hi} का इंतज़ाम कर रहा हूँ।"
         )
+
+    # Accident tools: calling any of these means the caller is reporting an
+    # accident/injury, so enter the accident branch (the deterministic
+    # collect→submit→dispatch→briefing flow then governs).
+    _ACCIDENT_TOOLS = frozenset(
+        {"search_incident_type", "search_incident_categories", "update_form_field", "submit_incident"}
+    )
+
+    async def _mark_intent(self, kind: str) -> None:
+        """Classify the call (accident vs information) for Post-Call Analytics,
+        emitting one `call_intent` frame per level. accident outranks information
+        and is never downgraded, so a call that asks for a hospital and THEN
+        reports an accident is counted as an accident call."""
+        if self._call_intent == "accident" or kind == self._call_intent:
+            return
+        self._call_intent = kind
+        await self._safe_send_json({"type": "call_intent", "intent": kind})
+
+    async def _dispatch_tool(self, name: str, args: dict) -> dict:
+        """Multi-intent dispatch: run the helpline tools (facility / info /
+        complaint) here, fall back to the shared accident tools otherwise, and
+        flip into accident mode the moment an accident tool is used."""
+        if name in self._ACCIDENT_TOOLS:
+            self._accident_mode = True
+            await self._mark_intent("accident")
+        helpline_result = await self._maybe_dispatch_helpline_tool(name, dict(args or {}))
+        if helpline_result is not None:
+            await self._mark_intent("information")
+            logger.info("Helpline tool: %s(%s)", name, json.dumps(args, ensure_ascii=False, default=str)[:200])
+            return helpline_result
+        return await super()._dispatch_tool(name, args)
 
     def _mark(self, key: str, seconds: float) -> None:
         self._turn_stats[key] = self._turn_stats.get(key, 0.0) + seconds
@@ -578,8 +694,9 @@ class HindiDispatcherSession(DispatcherSession):
                 gemini_client,
                 f"(The call has just connected. The 1033 welcome greeting is added "
                 f"automatically at the start of your reply, so do NOT greet or "
-                f"welcome yourself. {location_note} Begin now -- go straight to "
-                f"confirming the location and asking what happened.)",
+                f"welcome yourself. {location_note} This is an OPEN helpline -- do "
+                f"NOT assume an accident. Begin now with one short, open question "
+                f"asking how you can help the caller.)",
             )
 
             while not self._ended.is_set() and not self.state.submitted:
@@ -641,6 +758,9 @@ class HindiDispatcherSession(DispatcherSession):
                 mtype = msg.get("type")
                 if mtype == "end":
                     break
+                # Multi-intent (Phase 2): facility/complaint round-trip replies.
+                if self._resolve_helpline_client_message(mtype, msg):
+                    continue
                 if mtype == "location_result":
                     fut = self._pending_location.pop(msg.get("requestId"), None)
                     if fut and not fut.done():
