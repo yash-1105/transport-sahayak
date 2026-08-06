@@ -2557,4 +2557,27 @@ async def _exotel_latency_summary():
 check("#EX a latency summary line is logged when the call ends",
       asyncio.run(_exotel_latency_summary()))
 
+# Phone-call location: the geocoder extracts the place from a full spoken sentence
+# (Nominatim can't), and the Exotel prompt drops the browser's map-pin instruction
+# for accepting the caller's APPROXIMATE spoken location — browser prompt untouched.
+from integrations.exotel.services import _clean_landmark as _EX_clean
+from integrations.exotel.session import _phone_location_prompt as _EX_phoneprompt
+from severity_engine.dispatcher_hindi import _hindi_system_prompt as _EX_hiprompt
+def _exotel_location_extraction_and_prompt():
+    clean_ok = (_EX_clean("I am injured near Malviya Nagar").lower() == "malviya nagar"
+                and _EX_clean("मैं मालवीय नगर के पास घायल हूँ") == "मालवीय नगर"
+                and _EX_clean("Malviya Nagar").lower() == "malviya nagar")  # clean input preserved
+    base = _EX_hiprompt()
+    phone = _EX_phoneprompt(base)
+    prompt_ok = ("मैप-पिन बटन" in base                    # browser base still instructs map-pin
+                 and "मैप-पिन बटन" not in phone           # phone path: instruction removed
+                 and "यह एक असली फ़ोन कॉल है" in phone      # phone override present
+                 and "अनुमानित लोकेशन को स्वीकार" in phone)  # accept approximate
+    sess = _ex_session()  # wiring: the session applies the phone prompt to its gen configs
+    wired = ("मैप-पिन बटन" not in sess._gen_config.system_instruction
+             and "यह एक असली फ़ोन कॉल है" in sess._briefing_config.system_instruction)
+    return clean_ok and prompt_ok and wired
+check("#EX phone location: geocoder extracts place from a sentence; prompt drops map-pin for approximate (browser unchanged)",
+      _exotel_location_extraction_and_prompt())
+
 print("\nALL TESTS PASSED")

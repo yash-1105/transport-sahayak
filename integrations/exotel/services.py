@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 import time
 import uuid
 from datetime import date
@@ -142,10 +143,34 @@ async def _eta_for(facility_type: str, facility_point: tuple[float, float],
     return _haversine_eta_minutes(distance_km, facility_type)
 
 
-async def geocode_landmark(text: str) -> Optional[dict]:
-    """Forward-geocode a spoken landmark to {lat,lng,label} within the corridor,
-    or None if nothing usable is found. Same Nominatim service the app uses."""
-    q = (text or "").strip()
+# A caller says a WHOLE sentence ("I am injured near Malviya Nagar" / "मैं मालवीय
+# नगर के पास घायल हूँ"). Nominatim can't pull the place out of a sentence — only a
+# bare place name resolves — so we strip these self-reference / injury / preposition
+# filler words first and geocode what's left. English + Hindi (Devanagari).
+_LANDMARK_STOPWORDS = {
+    # English
+    "i", "im", "i'm", "am", "is", "are", "was", "were", "the", "a", "an", "my", "me",
+    "we", "us", "injured", "hurt", "help", "please", "near", "nearby", "at", "by",
+    "to", "on", "in", "of", "close", "here", "there", "around", "somewhere", "side",
+    "accident", "crash", "stuck", "stranded", "phas", "location",
+    # Hindi (Devanagari)
+    "मैं", "मुझे", "मेरे", "मेरी", "मेरा", "हम", "के", "की", "का", "को", "पास", "घायल",
+    "हूँ", "हूं", "है", "हैं", "था", "थी", "यहाँ", "यहां", "वहाँ", "पर", "में", "और",
+    "चोट", "लगी", "लगा", "हुई", "हुआ", "हो", "गया", "गई", "नज़दीक", "नजदीक", "करीब",
+    "कृपया", "एक्सीडेंट", "दुर्घटना", "मदद", "फँसा", "फंसा", "फँसे", "आस", "पड़ोस",
+    "लोकेशन", "जगह",
+}
+
+
+def _clean_landmark(text: str) -> str:
+    """Drop filler/self-reference words, leaving the place-name tokens Nominatim
+    can actually resolve. Devanagari-aware (mirrors the project's tokenizer)."""
+    tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9\-']*|[ऀ-ॿ]+", text or "")
+    kept = [t for t in tokens if t.lower() not in _LANDMARK_STOPWORDS]
+    return " ".join(kept).strip()
+
+
+async def _geocode_query(q: str) -> Optional[dict]:
     if len(q) < 3:
         return None
     params = {"format": "json", "q": q, "limit": "1", "viewbox": _CORRIDOR_VIEWBOX, "bounded": "1"}
@@ -158,6 +183,26 @@ async def geocode_landmark(text: str) -> Optional[dict]:
         return {"lat": float(top["lat"]), "lng": float(top["lon"]), "label": top.get("display_name", q)[:120]}
     except Exception:
         return None
+
+
+async def geocode_landmark(text: str) -> Optional[dict]:
+    """Forward-geocode an APPROXIMATE spoken location to {lat,lng,label} within the
+    corridor, or None. Tries the filler-stripped place name first (so a full spoken
+    sentence still resolves), then the raw text. Same Nominatim service the app uses.
+    This is deliberately approximate — an area/landmark centroid is enough; we never
+    demand an exact address."""
+    raw = (text or "").strip()
+    tried: list[str] = []
+    cleaned = _clean_landmark(raw)
+    if len(cleaned) >= 3 and cleaned.lower() != raw.lower():
+        tried.append(cleaned)
+    if len(raw) >= 3:
+        tried.append(raw)
+    for q in tried:
+        hit = await _geocode_query(q)
+        if hit:
+            return hit
+    return None
 
 
 async def fetch_responders() -> Optional[dict]:

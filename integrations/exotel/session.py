@@ -36,6 +36,41 @@ logger = get_logger("exotel.session")
 _OUT_FRAME_ALIGN = 320
 _OUT_FRAME_MAX = 32000  # 100 * 320; ~200 ms @ 8 kHz / ~100 ms @ 16 kHz, well under 100 KB
 
+# The shared Hindi system prompt tells the model to ask the caller to send their
+# location via the browser's MAP-PIN BUTTON — there is no such button on a phone,
+# so the model improvises ("pin your location via text message"). For the Exotel
+# (phone) path only, rewrite those instructions: accept the caller's APPROXIMATE
+# spoken location (area / landmark / town / highway) and move forward; never ask
+# them to pin, text, or open an app; ask at most once for a nearby landmark.
+_EXOTEL_LOCATION_ADDENDUM = (
+    "\n\n—— फ़ोन कॉल — लोकेशन नियम (यह ऊपर की हर 'मैप-पिन'/'लोकेशन भेजने' वाली बात पर भारी पड़ता है) ——\n"
+    "यह एक असली फ़ोन कॉल है — यहाँ कोई ऐप, कोई स्क्रीन, कोई बटन, कोई मैसेज या SMS नहीं है। "
+    "caller से कभी भी लोकेशन 'पिन' करने, कोई मैसेज/टेक्स्ट भेजने, या ऐप/स्क्रीन खोलने को न कहें। "
+    "caller जो भी जगह बोले — इलाका, मोहल्ला, लैंडमार्क, पेट्रोल पंप, टोल प्लाज़ा, हाईवे नंबर, या शहर/गाँव का नाम — "
+    "उसी अनुमानित लोकेशन को स्वीकार करके आगे बढ़ें। सटीक पता या GPS कभी न माँगें। "
+    "अगर caller ने अभी तक जगह नहीं बताई, तो सिर्फ़ एक बार सहजता से पास का कोई लैंडमार्क पूछ लें "
+    "(जैसे \"आप किस इलाके या किस लैंडमार्क के पास हैं?\"), और जो बताएं उसी अनुमानित जगह से काम चलाएं।"
+)
+
+
+def _phone_location_prompt(base: str) -> str:
+    """Rewrite the shared Hindi prompt's browser map-pin location instructions for
+    a phone call (approximate spoken location, never pin/text). Returns the base
+    unchanged (plus the override addendum) if the wording drifts — the addendum
+    still steers the model, and tests assert no 'map-pin' instruction survives."""
+    if not isinstance(base, str):
+        return base
+    p = base.replace(
+        "अगर टूल कहे कि लोकेशन नहीं पता, तो पहले caller से मैप-पिन बटन से अपनी लोकेशन भेजने को कहें, फिर दोबारा बुलाएं।",
+        "अगर टूल कहे कि लोकेशन नहीं पता, तो caller से पास का कोई इलाका या लैंडमार्क पूछकर वही अनुमानित जगह इस्तेमाल करें, फिर टूल दोबारा बुलाएं।",
+    ).replace(
+        "वरना caller से मैप-पिन बटन से लोकेशन भेजने को कहें।",
+        "वरना caller से पास का कोई इलाका या लैंडमार्क पूछकर उसी अनुमानित जगह से आगे बढ़ें।",
+    )
+    # Safety net for any remaining mention if the base wording drifts.
+    p = p.replace("मैप-पिन बटन", "पास का लैंडमार्क")
+    return p + _EXOTEL_LOCATION_ADDENDUM
+
 
 class ExotelWebSocketAdapter:
     """Quacks like a FastAPI WebSocket for the session; wraps the real Exotel WS."""
@@ -271,6 +306,13 @@ class ExotelHindiSession(HindiDispatcherSession):
         # tracks. The dispatcher doesn't know or care that location came from speech.
         self._location = GeocodeLocationProvider(
             landmark_source=lambda: getattr(self.websocket, "last_caller_utterance", "") or "")
+        # Phone-call location prompt: rewrite the two gen configs the parent built
+        # so the model accepts an APPROXIMATE spoken location and never asks the
+        # caller to use a (non-existent) map-pin button. Scoped to THIS session's
+        # configs only — the shared prompt and the browser path are untouched.
+        phone_prompt = _phone_location_prompt(self._gen_config.system_instruction)
+        self._gen_config = self._gen_config.model_copy(update={"system_instruction": phone_prompt})
+        self._briefing_config = self._briefing_config.model_copy(update={"system_instruction": phone_prompt})
 
     async def _ensure_location(self) -> Optional[LocationOutcome]:
         """None if location is already known or was just acquired (state.location
