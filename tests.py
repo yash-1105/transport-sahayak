@@ -1880,6 +1880,7 @@ def _fresh_opening_session():
     s._quota_hits = 0
     s._turn_index = 0
     s._call_turns = []
+    s._fp_skip = None
     s._pending_interim_spoken = None   # #4: mirrors __init__ (helper skips it)
     return s
 

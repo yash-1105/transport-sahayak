@@ -597,6 +597,7 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         self._sarvam_http: Optional[httpx.AsyncClient] = None  # persistent keep-alive client (opened in run())
         self._turn_index = 0                        # per-turn [latency] line index
         self._call_turns: list = []                 # compact per-turn records -> one end-of-call summary line
+        self._fp_skip: Optional[str] = None         # why the fast path bailed this turn (rides the summary line)
 
     def _is_critical(self) -> bool:
         # Hindi-scoped: an explicit ambulance request from the caller counts as
@@ -798,7 +799,10 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         for k, short in (("sarvam", "s"), ("sarvam_fail", "sX"), ("gemini", "g"), ("tts_total", "tts")):
             if k in self._turn_stats:
                 rec += f" {short}={self._turn_stats[k] * 1000:.0f}"
+        if not fastpath and self._fp_skip:  # WHY this turn didn't fast-path (diagnostic)
+            rec += f" fp!{self._fp_skip}"
         self._call_turns.append(rec)
+        self._fp_skip = None  # fresh for the next turn
 
     def _log_call_summary(self) -> None:
         """One end-of-call line listing EVERY turn's backend + timings, so a full
@@ -1380,18 +1384,30 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
           - the deterministic next_question exists AND has a canonical Hindi
             phrasing (next_question=None is the summarize-and-confirm stage,
             which genuinely needs the model)."""
+        # Diagnostic: capture WHY the fast path bails, into a field that rides the
+        # always-visible end-of-call summary line (per-round logs scroll out of
+        # `railway logs` under the media-debug flood on a real call).
+        _tools = ",".join(sorted(fc_names)) or "none"
+        _ackpv = (ack or "").strip().replace("\n", " ")[:40]
         if not fc_names or fc_names - _FAST_PATH_TOOLS:
+            self._fp_skip = f"nonfast-tool[{_tools}]"
             return None
         # Strip leaked meta BEFORE the guards so it neither reaches speech nor
         # falsely trips the "?" guard (a leaked "(next_question: ...?)").
         ack = _strip_meta_leak((ack or "").strip())
-        if "?" in ack or self.state.submitted:  # NOTE: empty ack is allowed (see below)
+        if self.state.submitted:
+            self._fp_skip = "submitted"
+            return None
+        if "?" in ack:  # NOTE: empty ack is allowed (see below)
+            self._fp_skip = f"ack-has-q[{_ackpv}]"
             return None
         missing = self._compute_still_missing()
         if not missing:
+            self._fp_skip = "nothing-missing"
             return None
         question = _CANONICAL_QUESTIONS.get(missing[0])
         if question is None:
+            self._fp_skip = f"no-canonical-q[{missing[0][:30]}]"
             return None
         if not ack:
             # Empty ack: Sarvam returns tool calls with NO content on EVERY tool
@@ -1404,10 +1420,12 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
             # case (round 1 still has tool calls to make), so keep bailing there
             # -- this keeps English/Gemini semantics byte-identical.
             if self._turn_backend != "sarvam":
+                self._fp_skip = f"empty-ack-{self._turn_backend or 'none'}"
                 return None
             ack = self._default_fast_ack()
         if ack[-1] not in "।.!…":
             ack += "।"
+        self._fp_skip = None  # fired -> no bail reason
         logger.info("Single-round fast path: appended canonical question for %r", missing[0])
         return f"{ack} {question}"
 
