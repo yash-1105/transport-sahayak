@@ -342,6 +342,19 @@ class ExotelHindiSession(HindiDispatcherSession):
         with no model round-trip. Every later turn reasons normally via super()."""
         if self._opening_line_pending:
             return None
+        # Location backstop: the model does NOT reliably re-call get_current_location
+        # when the caller names a place, so resolve it from the caller's own words
+        # BEFORE reasoning while it's still unknown. try_opportunistic only geocodes
+        # a place-looking utterance and only accepts a verified hit, so an accident
+        # description is a no-op (no bogus location, no wasted lookup). Fixes the live
+        # bug where the bot stayed stuck asking for location for 5 turns after the
+        # caller had already said "Malviya Nagar near KFC".
+        if not self.state.location:
+            loc = await self._location.try_opportunistic()
+            if loc:
+                self.state.location = loc
+                await self._safe_send_json({"type": "form_update", "field": "location", "value": loc})
+                logger.info("Location backstop resolved: %s", loc.get("label", "")[:80])
         return await super()._reason(gemini_client, user_text, config=config)
 
     async def _speak_filler_during(self, filler: str, coro):

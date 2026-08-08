@@ -19,11 +19,48 @@ location or inject fake coordinates.
 """
 from __future__ import annotations
 
+import re
 from typing import Awaitable, Callable, Optional
 
 from . import services
 
 MAX_ATTEMPTS = 3
+
+# Devanagari place cues. Their presence marks a caller utterance as a LOCATION
+# statement, so the opportunistic backstop never geocodes a bare accident
+# description ("दो कारें टकराईं") -- which Google Places would happily resolve to
+# some unrelated business (verified live: it returns a Noida shop for that text).
+_HI_LOCATION_CUES = (
+    "नगर", "सेक्टर", "रोड", "मार्ग", "चौक", "बाज़ार", "बाजार", "मार्केट", "हाईवे",
+    "पुल", "गली", "कॉलोनी", "कालोनी", "मोहल्ला", "गाँव", "गांव", "टोल", "पंप",
+    "स्टैंड", "मंदिर", "गेट", "पास", "प्लाज़ा", "प्लाजा", "फ्लाईओवर", "बाईपास",
+    "मोड़", "विहार", "पुरी", "गंज", "बस्ती", "एक्सप्रेसवे", "इलाके", "इलाका", "चौराहा",
+)
+
+
+def looks_like_location(text: str) -> bool:
+    """Cheap pre-filter: is this utterance plausibly a PLACE statement (worth a
+    geocode)? True if it has any Latin token >=3 chars (a romanized place/brand:
+    'Malviya Nagar', 'KFC', 'sector 62') OR a Devanagari location cue. A pure-
+    Devanagari accident description ('दो कारें टकराईं') has neither, so it is
+    skipped -- never geocoded into a bogus business match."""
+    t = text or ""
+    if re.search(r"[A-Za-z]{3,}", t):
+        return True
+    return any(cue in t for cue in _HI_LOCATION_CUES)
+
+
+def label_verifies(query: str, label: str) -> bool:
+    """Guard against Google Places returning SOME business for a non-place query.
+    If the query has Latin tokens, require at least one to appear in the geocoded
+    label ('ambulance please' -> 'Max Hospital' is rejected). A Devanagari-cue-only
+    query (no Latin tokens) is trusted -- the cue already marked it a place and the
+    English label can't be token-matched across scripts."""
+    q = {t.lower() for t in re.findall(r"[A-Za-z0-9]{3,}", query or "")}
+    if not q:
+        return True  # Devanagari-cue path: trust (no cross-script token match possible)
+    l = {t.lower() for t in re.findall(r"[A-Za-z0-9]{3,}", label or "")}
+    return bool(q & l)
 
 _ASK = (
     "You do not have the caller's location yet. Warmly ask them for ONE specific "
@@ -87,3 +124,21 @@ class GeocodeLocationProvider:
         if self._attempts >= self._max_attempts:
             return LocationOutcome(next_step=_TERMINATE, terminate=True)
         return LocationOutcome(next_step=_ASK)
+
+    async def try_opportunistic(self) -> Optional[dict]:
+        """Backstop for when the MODEL forgets to call get_current_location after
+        the caller states their location (observed live: it recorded other facts
+        for 5 turns while never re-triggering the geocode, so location stayed
+        unset and it re-asked every turn). Geocode the latest utterance IF it
+        looks like a place, accept only a VERIFIED hit, and NEVER count a failure
+        toward the ask/terminate budget (that budget is the model-driven loop's).
+        Returns the location dict or None. Mirrors the incident-type/hazard-flag
+        transcript backstops: don't depend on the model remembering to call a tool."""
+        landmark = (self._landmark_source() or "").strip()
+        if len(landmark) < 3 or not looks_like_location(landmark):
+            return None
+        geocode = self._geocode or services.geocode_landmark
+        loc = await geocode(landmark)
+        if loc and label_verifies(landmark, loc.get("label", "")):
+            return loc
+        return None

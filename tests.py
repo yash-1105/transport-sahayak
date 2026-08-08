@@ -2374,6 +2374,37 @@ async def _exotel_location_provider_composition():
 check("#EX GeocodeLocationProvider (composition): success / silent-when-empty / ask x2 then terminate — injectable, no default",
       asyncio.run(_exotel_location_provider_composition()))
 
+# Location BACKSTOP (2026-08): the model doesn't reliably re-call
+# get_current_location after the caller names a place (live bug: stuck asking for
+# location for 5 turns after "Malviya Nagar near KFC"). try_opportunistic resolves
+# it from the caller's own words, but ONLY for a place-looking utterance and ONLY a
+# verified hit -- an accident description must never set a bogus location.
+from integrations.exotel.location import looks_like_location, label_verifies
+check("#EX looks_like_location: place text (Latin token / Devanagari cue) True; accident description False",
+      looks_like_location("malviya nagar near kfc") and looks_like_location("मालवीय नगर के पास")
+      and looks_like_location("सेक्टर 62") and not looks_like_location("दो कारें आपस में टकराई हैं")
+      and not looks_like_location("तीन लोग घायल हैं") and not looks_like_location("हाँ ठीक है"))
+check("#EX label_verifies: Latin query needs a token in the label; mismatch rejected; Devanagari-only trusted",
+      label_verifies("malviya nagar kfc", "Old Market, Malviya Nagar, New Delhi")
+      and not label_verifies("ambulance please", "Max Super Speciality Hospital, Saket")
+      and label_verifies("मालवीय नगर के पास", "Malviya Nagar, New Delhi"))
+
+async def _exotel_backstop_opportunistic():
+    async def _geo(text):  # a place resolves; a non-place returns Google's bogus business
+        if "malviya" in text.lower() or "मालवीय" in text:
+            return {"lat": 28.53, "lng": 77.21, "label": "Malviya Nagar, New Delhi"}
+        return {"lat": 28.6, "lng": 77.3, "label": "Some Random Shop, Noida"}  # bogus
+    resolved = GeocodeLocationProvider(lambda: "मालवीय नगर के पास", geocode=_geo)
+    accident = GeocodeLocationProvider(lambda: "दो कारें आपस में टकराई हैं", geocode=_geo)
+    latin_nonplace = GeocodeLocationProvider(lambda: "ambulance please", geocode=_geo)
+    r1 = await resolved.try_opportunistic()
+    r2 = await accident.try_opportunistic()      # not place-looking -> never geocoded
+    r3 = await latin_nonplace.try_opportunistic()  # geocoded but label fails verification
+    return (r1 and r1["label"].startswith("Malviya") and r2 is None and r3 is None
+            and resolved._attempts == 0)  # opportunistic must NOT touch the ask/terminate budget
+check("#EX backstop try_opportunistic: resolves a place, no-ops an accident description / unverified match, never counts an attempt",
+      asyncio.run(_exotel_backstop_opportunistic()))
+
 async def _exotel_services_facility_roundtrip():
     async def _resp(): return {"hospitals": [{"name": "AIIMS", "lat": 28.91, "lng": 77.21, "phone": "011"}]}
     async def _no_routes(_o, _d): return None  # force the haversine fallback (hermetic, no HTTP)
