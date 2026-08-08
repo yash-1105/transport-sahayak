@@ -95,7 +95,7 @@ TTS_PACE = float(os.environ.get("SARVAM_TTS_PACE", "1.1"))
 # (fewer, larger synthesis segments = less per-segment "reset", a plausible
 # contributor to a choppy/robotic-sounding cadence) matters more.
 TTS_TEMPERATURE = float(os.environ.get("SARVAM_TTS_TEMPERATURE", "0.2"))
-TTS_MIN_BUFFER_CHARS = int(os.environ.get("SARVAM_TTS_MIN_BUFFER_CHARS", "50"))
+TTS_MIN_BUFFER_CHARS = int(os.environ.get("SARVAM_TTS_MIN_BUFFER_CHARS", "30"))  # 50->30: faster tts_first_chunk (trades a little prosody smoothing); env-tunable
 TTS_MAX_CHUNK_CHARS = int(os.environ.get("SARVAM_TTS_MAX_CHUNK_CHARS", "150"))
 # Optional Saaras v3 VAD tuning for barge-in robustness -- unset by default
 # (server default applies); raise this if speaker echo without headphones

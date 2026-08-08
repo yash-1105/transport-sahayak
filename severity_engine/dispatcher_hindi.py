@@ -46,6 +46,7 @@ import re
 import time
 from typing import Optional
 
+import httpx
 from fastapi import WebSocket
 from google import genai
 from google.genai import types
@@ -141,6 +142,18 @@ def _get_hindi_text_client() -> genai.Client:
 # keeps its own, longer timeout below so it is never cut off.
 _GEMINI_TIMEOUT_S = float(os.environ.get("GEMINI_TEXT_TIMEOUT_S", "7"))
 _BRIEFING_TIMEOUT_S = float(os.environ.get("GEMINI_BRIEFING_TIMEOUT_S", "15"))
+# FAIL-FAST Gemini fallback (used ONLY after Sarvam already failed this turn): a
+# single generate_content call HARD-CAPPED by asyncio.wait_for so the SDK's internal
+# 429 backoff can never 15s-stall the caller. With Sarvam capped too (2 short
+# attempts), a turn's total reasoning time is bounded well under 15s -- an
+# intermittent 15s stall is impossible.
+_GEMINI_FALLBACK_TIMEOUT_S = float(os.environ.get("GEMINI_FALLBACK_TIMEOUT_S", "3.5"))
+_SARVAM_ATTEMPTS = int(os.environ.get("HINDI_SARVAM_ATTEMPTS", "2"))  # primary + one retry before falling back
+# Hard per-attempt cap on the Sarvam call (asyncio.wait_for, dispatcher-level) so the
+# whole turn is bounded regardless of the keep-alive client's own httpx timeout:
+# worst case = _SARVAM_ATTEMPTS x _SARVAM_TIMEOUT_S + _GEMINI_FALLBACK_TIMEOUT_S
+# (2 x 5 + 3.5 = 13.5s < 15s). Sarvam p50 is ~1.8s, so this only bites the rare tail.
+_SARVAM_TIMEOUT_S = float(os.environ.get("SARVAM_REASONING_TIMEOUT_S", "5"))
 # Each round is a full network round-trip to Vertex. The prompt now demands
 # ALL of a turn's tool calls happen together in one round (see FORM FILLING),
 # so 4 is generous headroom (typically 1 tool round + 1 final-text round).
@@ -148,7 +161,7 @@ _MAX_TOOL_ROUNDS = 4
 # Kept tight -- a real operator's reply is 1-3 short sentences; this is a
 # ceiling against runaway generation, not a target length, and every extra
 # token here is extra time-to-last-token before Bulbul can start.
-_MAX_OUTPUT_TOKENS = 300
+_MAX_OUTPUT_TOKENS = int(os.environ.get("HINDI_MAX_OUTPUT_TOKENS", "160"))  # tightened 300->160: a terse ack fits, and fewer tokens = less TTS to speak
 # The one deliberate exception: the final closing briefing (responder ETAs +
 # safety instructions + follow-up script — see dispatch_briefing.py) is a
 # genuinely long single turn; 300 tokens would truncate it mid-sentence. This
@@ -168,7 +181,7 @@ _BRIEFING_MAX_OUTPUT_TOKENS = 1200
 # turn, so it's kept as short as is still safe: Saaras's own VAD already
 # requires a silence window before emitting END_SPEECH, so this only needs to
 # cover segment-to-segment gaps, not redo silence detection from scratch.
-_UTTERANCE_GRACE_S = 0.45
+_UTTERANCE_GRACE_S = float(os.environ.get("HINDI_UTTERANCE_GRACE_S", "0.35"))  # 0.45->0.35: shaves ~100ms/turn; env-tunable if it clips mid-sentence pausers
 # END_SPEECH arrives before its segment's transcript; never close the turn
 # while a transcript is still owed, but don't wait forever if none comes.
 _PENDING_TRANSCRIPT_MAX_S = 2.5
@@ -442,6 +455,8 @@ vehicles involved → "कुल कितनी गाड़ियाँ इस
 1. पहले caller ने अभी जो बताया उसके लिए ज़रूरी सभी टूल कॉल एक साथ करें — पहली बार घटना बताने पर search_incident_type (उनके असली शब्दों के साथ, कभी अपना अनुवाद या सारांश नहीं), और हर नई जानकारी (चोट, फँसा होना, आग, गाड़ियों की संख्या, विवरण) के लिए update_form_field। "नहीं" भी जानकारी है — रिकॉर्ड करें (flag_active=false), सिर्फ आगे न बढ़ें। अगर caller एक ही वाक्य में कई बातें एक साथ कह दे (जैसे "कार और कार की टक्कर, चार लोग घायल, एम्बुलेंस चाहिए") — तो भी सब कुछ इसी एक ही राउंड में करें: search_incident_type और सभी ज़रूरी update_form_field एक साथ, अभी, एक ही जवाब में। कभी पहले सिर्फ search_incident_type बुलाकर उसके नतीजे का इंतज़ार करके अगले राउंड में update न करें — घटना के सारे तथ्य caller के वाक्य में पहले से मौजूद हैं; उन्हें दर्ज करने के लिए आपको search के नतीजे की ज़रूरत नहीं। उसी बार में text में एक छोटी (1–2 वाक्य) सहानुभूति-भरी स्वीकृति भी लिखें — ऊपर बताए ठहराव और शुरुआत के साथ, पर उसमें कोई सवाल बिल्कुल नहीं: अगला सवाल सिस्टम आपकी स्वीकृति के तुरंत बाद खुद जोड़ देता है।
 2. अगर टूल के नतीजे वापस आकर आपसे दोबारा जवाब माँगा जाए, तो अब ऊपर बताई पूरी बनावट में बोलें — स्वीकृति + ठीक एक सवाल ("next_question" वाला ही)।
 
+संक्षिप्तता — पक्का नियम (यह एक आपातकालीन फ़ोन कॉल है): हर जवाब बहुत छोटा रखें — एक बहुत छोटी स्वीकृति या सहानुभूति (कुछ ही शब्द: "ठीक है।", "समझ गया।", या गंभीर हाल में "ओह... आप हिम्मत रखिए।") और फिर ठीक एक छोटा सवाल — बस इतना, इससे ज़्यादा कभी नहीं। लंबे वाक्य, दोहराव, भूमिका, या caller की बात को दोबारा पूरा दोहराना कभी नहीं। caller फ़ोन पर इंतज़ार कर रहा है और उसे तुरंत, कम शब्दों में जवाब चाहिए — हर अतिरिक्त वाक्य उसका इंतज़ार और आपकी आवाज़ का समय बढ़ाता है। सहानुभूति बनी रहे, पर छोटी और सच्ची रहे — गंभीर हाल में गर्मजोशी, सामान्य हाल में सिर्फ़ एक-दो शब्द।
+
 दुर्घटना रिपोर्ट में लोकेशन और caller का रिश्ता: कॉल की शुरुआत में लोकेशन अपने-आप ले ली जाती है; अगर मिल गई है तो संक्षेप में पुष्टि करें कि दुर्घटना यहीं हुई है, वरना caller से मैप-पिन बटन से लोकेशन भेजने को कहें। साथ ही सहज रूप से (अलग ठंडा सवाल बनाए बिना) यह भी जान लें कि caller घटना से कैसे जुड़ा है — क्या वह खुद घायल/शामिल है, पास खड़ा चश्मदीद है, या किसी और की ओर से (शायद घटनास्थल से दूर) रिपोर्ट कर रहा है। इससे आप उसकी बाकी बातों को सही संदर्भ में समझ पाएंगे (चश्मदीद को चोट का ब्योरा शायद न पता हो; दूर से बताने वाला दृश्य देख ही न पा रहा हो)।
 
 caller बोलचाल की भाषा में बोलते हैं ("टायर फट गया", "गाड़ी पलट गई", "ठोक दिया", "आग पकड़ ली") — पूरे वाक्य और अब तक की पूरी बातचीत से मतलब समझें, कभी सिर्फ एक शब्द पकड़कर नहीं, कभी formal शब्दों में दोबारा बोलने को न कहें।
@@ -566,6 +581,9 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         self._openai_tools = gemini_tools_to_openai(_TOOL_DECLARATIONS + HELPLINE_TOOL_DECLARATIONS)
         self._turn_backend: Optional[str] = None  # which backend served the last round
         self._quota_hits = 0                        # Vertex 429 / RESOURCE_EXHAUSTED count for this call
+        self._sarvam_http: Optional[httpx.AsyncClient] = None  # persistent keep-alive client (opened in run())
+        self._turn_index = 0                        # per-turn [latency] line index
+        self._call_turns: list = []                 # compact per-turn records -> one end-of-call summary line
 
     def _is_critical(self) -> bool:
         # Hindi-scoped: an explicit ambulance request from the caller counts as
@@ -755,10 +773,27 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         self._turn_stats[key] = self._turn_stats.get(key, 0.0) + seconds
 
     def _log_turn_stats(self) -> None:
+        self._turn_index += 1
+        fastpath = "single_round" in self._turn_stats
         if _LOG_LATENCY and self._turn_stats:
             stats = "  ".join(f"{k}={v * 1000:.0f}ms" for k, v in self._turn_stats.items())
-            logger.info("[latency] %s  backend=%s  q429=%d",
-                        stats, self._turn_backend or "-", self._quota_hits)
+            logger.info("[latency] turn=%d  %s  backend=%s  fastpath=%s  q429=%d",
+                        self._turn_index, stats, self._turn_backend or "-", fastpath, self._quota_hits)
+        # Accumulate a compact per-turn record so a WHOLE call's turns are retrievable
+        # in ONE end-of-call line even when `railway logs` only shows the last turn.
+        rec = f"t{self._turn_index}:{self._turn_backend or '-'}{'/fp' if fastpath else ''}"
+        for k, short in (("sarvam", "s"), ("sarvam_fail", "sX"), ("gemini", "g"), ("tts_total", "tts")):
+            if k in self._turn_stats:
+                rec += f" {short}={self._turn_stats[k] * 1000:.0f}"
+        self._call_turns.append(rec)
+
+    def _log_call_summary(self) -> None:
+        """One end-of-call line listing EVERY turn's backend + timings, so a full
+        call is retrievable even if the per-turn lines scrolled out of `railway logs`.
+        q429_total=0 across the whole call proves no turn fell back to Gemini + stalled."""
+        if _LOG_LATENCY and self._call_turns:
+            logger.info("[call-latency] turns=%d  q429_total=%d  |  %s",
+                        len(self._call_turns), self._quota_hits, "  ".join(self._call_turns))
 
     # ── Session lifecycle ────────────────────────────────────────────────────
 
@@ -782,6 +817,14 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         # on a dedicated Bulbul stream) so the first conversational turn already has
         # cached audio to play during its thinking gap.
         asyncio.create_task(self._prewarm_fillers())
+        # Persistent Sarvam keep-alive connection: reuse ONE warm pooled connection
+        # across every turn so a turn doesn't pay ~200-300ms of TLS+connect setup each
+        # time (mirrors the Bulbul pre-connect idea). Opened eagerly so the first turn
+        # is already warm; closed in finally. sarvam_generate uses it when passed;
+        # never cancelled mid-handshake. Timeout above the wait_for cap so the
+        # dispatcher-level _SARVAM_TIMEOUT_S stays the single binding bound.
+        if self._use_sarvam:
+            self._sarvam_http = httpx.AsyncClient(timeout=_SARVAM_TIMEOUT_S + 1.0)
         try:
             # Resolve GPS upfront (needed to build the first turn's instruction);
             # the pump is already running so the browser's location_result can
@@ -840,6 +883,12 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
                     pass
             await self._stt.close()
             await self._tts.close()
+            if self._sarvam_http is not None:
+                try:
+                    await self._sarvam_http.aclose()
+                except Exception:
+                    pass
+            self._log_call_summary()  # one retrievable line of the whole call's turns
 
     async def _pump_client(self) -> None:
         """Browser → backend: binary mic audio to the STT queue, JSON control
@@ -1243,29 +1292,44 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         overridden) system instruction, so the deterministic flow is identical."""
         briefing = config is self._briefing_config
         if self._use_sarvam:
+            system_prompt = (self._briefing_config if briefing else self._gen_config).system_instruction
+            messages = gemini_history_to_openai_messages(self._history, system_prompt)
+            max_tokens = _BRIEFING_MAX_OUTPUT_TOKENS if briefing else _MAX_OUTPUT_TOKENS
             t0 = time.monotonic()
-            try:
-                system_prompt = (self._briefing_config if briefing else self._gen_config).system_instruction
-                messages = gemini_history_to_openai_messages(self._history, system_prompt)
-                max_tokens = _BRIEFING_MAX_OUTPUT_TOKENS if briefing else _MAX_OUTPUT_TOKENS
-                result = await sarvam_generate(messages, self._openai_tools, max_tokens=max_tokens)
-                self._mark("sarvam", time.monotonic() - t0)
-                self._turn_backend = "sarvam"
-                if result.reasoning_tokens:  # expected 0 with reasoning_effort:low -- warn loudly if not
-                    logger.warning("Sarvam returned %d reasoning tokens (reasoning_effort:low expected 0)",
-                                   result.reasoning_tokens)
-                fcs = [types.FunctionCall(id=tc.id, name=tc.name, args=tc.args) for tc in result.tool_calls]
-                model_parts = ([types.Part(text=result.text)] if result.text else []) + \
-                    [types.Part(function_call=fc) for fc in fcs]
-                return result.text, fcs, model_parts
-            except SarvamReasoningError as e:
-                self._mark("sarvam_fail", time.monotonic() - t0)
-                logger.warning("Sarvam reasoning failed -> Gemini fallback: %s", str(e)[:180])
-                # fall through to the Gemini fallback below
+            for attempt in range(_SARVAM_ATTEMPTS):  # primary + one retry BEFORE falling back
+                try:
+                    result = await asyncio.wait_for(
+                        sarvam_generate(messages, self._openai_tools, max_tokens=max_tokens, client=self._sarvam_http),
+                        timeout=_SARVAM_TIMEOUT_S)
+                    self._mark("sarvam", time.monotonic() - t0)
+                    self._turn_backend = "sarvam"
+                    if result.reasoning_tokens:  # expected 0 with reasoning_effort:low -- warn loudly if not
+                        logger.warning("Sarvam returned %d reasoning tokens (reasoning_effort:low expected 0)",
+                                       result.reasoning_tokens)
+                    fcs = [types.FunctionCall(id=tc.id, name=tc.name, args=tc.args) for tc in result.tool_calls]
+                    model_parts = ([types.Part(text=result.text)] if result.text else []) + \
+                        [types.Part(function_call=fc) for fc in fcs]
+                    return result.text, fcs, model_parts
+                except (SarvamReasoningError, asyncio.TimeoutError) as e:
+                    label = "timeout" if isinstance(e, asyncio.TimeoutError) else str(e)[:140]
+                    if attempt + 1 < _SARVAM_ATTEMPTS:
+                        logger.warning("Sarvam attempt %d failed (%s), retrying once", attempt + 1, label)
+                        continue
+                    self._mark("sarvam_fail", time.monotonic() - t0)
+                    logger.warning("Sarvam failed %dx (%s) -> FAIL-FAST Gemini fallback", _SARVAM_ATTEMPTS, label)
+            # every Sarvam attempt failed -> FAIL-FAST Gemini (hard-capped, no 15s stall)
+            return await self._gemini_round(gemini_client, config, fast=True)
 
-        # Gemini fallback (also the primary path when HINDI_REASONING_BACKEND=gemini).
+        # Gemini primary (HINDI_REASONING_BACKEND=gemini): its own 2-attempt retry.
+        return await self._gemini_round(gemini_client, config, fast=False)
+
+    async def _gemini_round(self, gemini_client, config, fast: bool):
+        """Gemini generate + parse -> (text, function_calls, model_parts) or None,
+        SAME shape as the Sarvam path. fast=True is the fail-fast FALLBACK (1 attempt,
+        short hard-capped timeout, no sleep) so a Sarvam-failed turn can never
+        15s-stall; fast=False is the gemini-primary path (2-attempt retry)."""
         t0 = time.monotonic()
-        response = await self._generate_with_retry(gemini_client, config=config)
+        response = await self._generate_gemini(gemini_client, config, fast)
         self._mark("gemini", time.monotonic() - t0)
         self._turn_backend = "gemini"
         if response is None:
@@ -1309,13 +1373,23 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         logger.info("Single-round fast path: appended canonical question for %r", missing[0])
         return f"{ack} {question}"
 
-    async def _generate_with_retry(self, gemini_client, config=None):
-        # The closing briefing (config is self._briefing_config) is a longer
-        # single generation, so it gets the longer briefing timeout; every
-        # normal conversational turn gets the tight one, so a stuck call fails
-        # fast rather than hanging the caller on "Thinking...".
-        timeout = _BRIEFING_TIMEOUT_S if config is self._briefing_config else _GEMINI_TIMEOUT_S
-        for attempt in range(2):
+    async def _generate_gemini(self, gemini_client, config, fast: bool):
+        """One (fast=True) or up-to-two (fast=False) Gemini generate_content calls,
+        each HARD-CAPPED by asyncio.wait_for so an SDK-internal 429 backoff can never
+        stall the caller. Counts 429/RESOURCE_EXHAUSTED into q429. Returns the
+        response or None.
+
+        fast=True is the Sarvam FALLBACK path: a single call with a tight timeout and
+        NO inter-attempt sleep, so a fallback turn is bounded to ~_GEMINI_FALLBACK_
+        TIMEOUT_S -- combined with Sarvam's capped attempts, a 15s stall is
+        impossible. fast=False is the gemini-primary path (2 attempts + 0.5s sleep,
+        the briefing keeps its longer timeout)."""
+        if fast:
+            timeout, attempts, sleep_s = _GEMINI_FALLBACK_TIMEOUT_S, 1, 0.0
+        else:
+            timeout = _BRIEFING_TIMEOUT_S if config is self._briefing_config else _GEMINI_TIMEOUT_S
+            attempts, sleep_s = 2, 0.5
+        for attempt in range(attempts):
             try:
                 return await asyncio.wait_for(
                     gemini_client.aio.models.generate_content(
@@ -1326,8 +1400,9 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
             except Exception as e:
                 if getattr(e, "code", None) == 429 or "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
                     self._quota_hits += 1  # counted into the [latency] q429 field
-                logger.exception("Gemini text call failed (attempt %d/2)", attempt + 1)
-                await asyncio.sleep(0.5)
+                logger.exception("Gemini text call failed (attempt %d/%d, fast=%s)", attempt + 1, attempts, fast)
+                if sleep_s and attempt + 1 < attempts:
+                    await asyncio.sleep(sleep_s)
         return None
 
     # ── Speaking (Bulbul) ────────────────────────────────────────────────────

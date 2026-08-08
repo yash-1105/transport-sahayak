@@ -34,9 +34,12 @@ import httpx
 logger = logging.getLogger("sarvam_reasoning")
 
 _CHAT_URL = os.environ.get("SARVAM_CHAT_URL", "https://api.sarvam.ai/v1/chat/completions")
-_MODEL = os.environ.get("SARVAM_REASONING_MODEL", "sarvam-105b-conversations")
+# HINDI_REASONING_MODEL selects the model; default is the reliability-proven
+# sarvam-105b-conversations. Phase 2 benchmarks smaller/faster models (sarvam-30b,
+# gemma) and only lowers this default if one passes the tool-calling reliability bar.
+_MODEL = os.environ.get("HINDI_REASONING_MODEL") or os.environ.get("SARVAM_REASONING_MODEL", "sarvam-105b-conversations")
 _REASONING_EFFORT = os.environ.get("SARVAM_REASONING_EFFORT", "low")
-_TIMEOUT_S = float(os.environ.get("SARVAM_REASONING_TIMEOUT_S", "8"))
+_TIMEOUT_S = float(os.environ.get("SARVAM_REASONING_TIMEOUT_S", "5"))  # tight: p50 ~1.8s, max ~4.9s; keeps the 2-attempt budget small
 _TEMPERATURE = float(os.environ.get("SARVAM_REASONING_TEMPERATURE", "0.4"))
 
 
@@ -167,13 +170,14 @@ def _api_key() -> str:
 
 async def sarvam_generate(messages: list, tools: list, *, max_tokens: int = 300,
                           temperature: Optional[float] = None, timeout: Optional[float] = None,
-                          client: Optional[httpx.AsyncClient] = None) -> NormalizedResult:
+                          client: Optional[httpx.AsyncClient] = None, model: Optional[str] = None) -> NormalizedResult:
     """One streaming Sarvam chat completion, aggregated + parsed into a
     NormalizedResult. Raises SarvamReasoningError on transport/HTTP/empty/malformed
     so the dispatcher falls back to Gemini for that turn. `client` is injectable for
-    offline tests (no live call)."""
+    offline tests / a persistent keep-alive connection; `model` overrides _MODEL
+    (the Phase-2 benchmark drives several models through this one path)."""
     body = {
-        "model": _MODEL,
+        "model": model or _MODEL,
         "messages": messages,
         "reasoning_effort": _REASONING_EFFORT,
         "stream": True,

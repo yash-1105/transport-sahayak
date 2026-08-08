@@ -1840,6 +1840,8 @@ def _fresh_opening_session():
     s._turn_stats = {}
     s._turn_backend = None             # reasoning backend: mirrors __init__ (helper skips it)
     s._quota_hits = 0
+    s._turn_index = 0
+    s._call_turns = []
     s._pending_interim_spoken = None   # #4: mirrors __init__ (helper skips it)
     return s
 
@@ -2856,27 +2858,36 @@ def _mk_reason_session(use_sarvam):
     from severity_engine import dispatcher_hindi as dh
     s = dh.HindiDispatcherSession.__new__(dh.HindiDispatcherSession)
     s._history = [_T.Content(role="user", parts=[_T.Part(text="hi")])]
-    s._turn_stats = {}; s._turn_backend = None; s._quota_hits = 0
+    s._turn_stats = {}; s._turn_backend = None; s._quota_hits = 0; s._sarvam_http = None
     s._use_sarvam = use_sarvam; s._openai_tools = []
     class _Cfg: system_instruction = "SYS"
     s._gen_config = _Cfg(); s._briefing_config = object()
     return s, dh
 
-async def _sarvam_fail_falls_back_to_gemini():
+def _gemini_response(text):
+    return _T.GenerateContentResponse(candidates=[_T.Candidate(content=_T.Content(role="model", parts=[_T.Part(text=text)]))])
+
+async def _sarvam_retry_then_fallback():
     s, dh = _mk_reason_session(use_sarvam=True)
     orig = dh.sarvam_generate
-    async def _boom(*a, **k): raise dh.SarvamReasoningError("boom")
+    calls = {"sarvam": 0, "fast": None}
+    async def _boom(*a, **k): calls["sarvam"] += 1; raise dh.SarvamReasoningError("boom")
     dh.sarvam_generate = _boom
-    async def _fake_gemini(gemini_client=None, config=None):
-        return _T.GenerateContentResponse(candidates=[_T.Candidate(content=_T.Content(role="model", parts=[_T.Part(text="जी")]))])
-    s._generate_with_retry = _fake_gemini
+    async def _fake_gemini(gemini_client=None, config=None, fast=False):
+        calls["fast"] = fast
+        return _gemini_response("जी")
+    s._generate_gemini = _fake_gemini
     try:
         text, fcs, parts = await s._reason_round(None, None)
     finally:
         dh.sarvam_generate = orig
-    return text == "जी" and s._turn_backend == "gemini" and not fcs and "sarvam_fail" in s._turn_stats
-check("#HI Sarvam failure -> Gemini fallback for the round (backend=gemini, sarvam_fail logged)",
-      asyncio.run(_sarvam_fail_falls_back_to_gemini()))
+    # Sarvam is retried (HINDI_SARVAM_ATTEMPTS=2) BEFORE falling back, and the
+    # Gemini fallback is the FAIL-FAST path (fast=True) -> no 15s stall possible.
+    return (text == "जी" and s._turn_backend == "gemini" and not fcs
+            and "sarvam_fail" in s._turn_stats
+            and calls["sarvam"] == dh._SARVAM_ATTEMPTS and calls["fast"] is True)
+check("#HI Sarvam retried N× then FAIL-FAST Gemini fallback (fast=True) -> a 15s stall is impossible",
+      asyncio.run(_sarvam_retry_then_fallback()))
 
 async def _backend_env_gemini_skips_sarvam():
     s, dh = _mk_reason_session(use_sarvam=False)   # HINDI_REASONING_BACKEND=gemini equivalent
@@ -2884,9 +2895,9 @@ async def _backend_env_gemini_skips_sarvam():
     called = {"sarvam": False}
     async def _spy(*a, **k): called["sarvam"] = True; raise dh.SarvamReasoningError("should not be called")
     dh.sarvam_generate = _spy
-    async def _fake_gemini(gemini_client=None, config=None):
-        return _T.GenerateContentResponse(candidates=[_T.Candidate(content=_T.Content(role="model", parts=[_T.Part(text="जी")]))])
-    s._generate_with_retry = _fake_gemini
+    async def _fake_gemini(gemini_client=None, config=None, fast=False):
+        return _gemini_response("जी")
+    s._generate_gemini = _fake_gemini
     try:
         text, fcs, parts = await s._reason_round(None, None)
     finally:
@@ -2894,7 +2905,8 @@ async def _backend_env_gemini_skips_sarvam():
     return text == "जी" and s._turn_backend == "gemini" and called["sarvam"] is False
 check("#HI backend env var: _use_sarvam False skips Sarvam entirely and uses Gemini (default constant is 'sarvam')",
       asyncio.run(_backend_env_gemini_skips_sarvam())
-      and _SR and __import__("severity_engine.dispatcher_hindi", fromlist=["_HINDI_REASONING_BACKEND"])._HINDI_REASONING_BACKEND == "sarvam")
+      and _SR and __import__("severity_engine.dispatcher_hindi", fromlist=["_HINDI_REASONING_BACKEND"])._HINDI_REASONING_BACKEND == "sarvam"
+      and __import__("severity_engine.dispatcher_hindi", fromlist=["_MAX_OUTPUT_TOKENS"])._MAX_OUTPUT_TOKENS <= 200)
 
 def _fastpath_backend_agnostic():
     from severity_engine import dispatcher_hindi as dh
