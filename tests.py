@@ -1603,17 +1603,18 @@ check("fast path refuses at the summarize-and-confirm stage (nothing missing)",
 # round-1 timeout that fell back to Gemini. The fast path must now FIRE with an
 # empty ack by substituting a short deterministic ack.
 s_empty = _fresh_hindi_session()
-s_empty._turn_backend = "sarvam"     # empty-ack composing is SARVAM-only (Gemini bails -> split rounds)
+s_empty._use_sarvam = True           # empty-ack composing fires whenever Sarvam is PRIMARY...
+s_empty._turn_backend = "gemini"     # ...even a round Gemini served as the FALLBACK (Sarvam timed out)
 composed_empty = s_empty._compose_single_round_reply("", {"update_form_field"})
-check("fast path FIRES with an EMPTY ack on SARVAM (tool-call, no content): default ack + canonical question",
+check("fast path FIRES with an EMPTY ack in Sarvam-primary mode (incl. Gemini-served fallback round)",
       composed_empty is not None and "?" in composed_empty
       and any(composed_empty.startswith(a) for a in _FAST_ACK_NEUTRAL))
 s_gem = _fresh_hindi_session()
-s_gem._turn_backend = "gemini"       # a Gemini empty-ack round is the "split" case -> must still bail
-check("empty ack on GEMINI still bails (split-across-rounds preserved, English/Gemini untouched)",
+s_gem._use_sarvam = False            # pure Gemini-PRIMARY: an empty ack is the "split" case -> must bail
+check("empty ack in Gemini-PRIMARY mode still bails (split-across-rounds preserved, English/Gemini untouched)",
       s_gem._compose_single_round_reply("", {"update_form_field"}) is None)
 s_crit = _fresh_hindi_session()
-s_crit._turn_backend = "sarvam"
+s_crit._use_sarvam = True
 s_crit._ambulance_requested = True   # -> _is_critical() True -> warmer ack pool
 composed_crit = s_crit._compose_single_round_reply("", {"update_form_field"})
 check("fast path empty-ack uses the WARMER pool for a critical incident",
@@ -1727,13 +1728,14 @@ check("empty round-0 ack on SARVAM now composes in ONE round (no second round), 
       asyncio.run(_reason_composes_with_empty_ack()))
 
 async def _reason_composes_after_split_update_round():
-    # Issue 2: the model splits its work -- round 0 has a tool call but NO ack,
-    # round 1 has a tool call WITH a question-free ack. The fast path now
-    # composes after round 1 (2 rounds), instead of needing a 3rd spoken-reply
-    # round. Only 2 fake responses are provided, so fake.calls==2 proves it did
-    # not fall through to a 3rd round.
+    # Issue 2 (Gemini-PRIMARY mode only): the model splits its work -- round 0 has
+    # a tool call but NO ack, round 1 has a tool call WITH a question-free ack. In
+    # this mode an empty round-0 ack must NOT compose (it would skip round 1's tool
+    # call); the fast path composes after round 1 (2 rounds), not a 3rd round. Only
+    # 2 fake responses are provided, so fake.calls==2 proves no 3rd round.
     from google.genai import types as gtypes
     s = _fresh_hindi_session()
+    s._use_sarvam = False   # Gemini-PRIMARY: the split-across-rounds path this test pins
     fake = _FakeGeminiClient([
         _model_response([  # round 0: tool call, NO ack
             gtypes.Part(function_call=gtypes.FunctionCall(

@@ -153,7 +153,7 @@ _SARVAM_ATTEMPTS = int(os.environ.get("HINDI_SARVAM_ATTEMPTS", "2"))  # primary 
 # whole turn is bounded regardless of the keep-alive client's own httpx timeout:
 # worst case = _SARVAM_ATTEMPTS x _SARVAM_TIMEOUT_S + _GEMINI_FALLBACK_TIMEOUT_S
 # (2 x 5 + 3.5 = 13.5s < 15s). Sarvam p50 is ~1.8s, so this only bites the rare tail.
-_SARVAM_TIMEOUT_S = float(os.environ.get("SARVAM_REASONING_TIMEOUT_S", "5"))
+_SARVAM_TIMEOUT_S = float(os.environ.get("SARVAM_REASONING_TIMEOUT_S", "6.5"))  # 5->6.5: on a longer multi-turn context Sarvam runs ~2.8-5s/round; a 5s cap tripped genuine-but-slow rounds into the (trial, slower) Gemini fallback
 # Each round is a full network round-trip to Vertex. The prompt now demands
 # ALL of a turn's tool calls happen together in one round (see FORM FILLING),
 # so 4 is generous headroom (typically 1 tool round + 1 final-text round).
@@ -173,7 +173,7 @@ _MAX_OUTPUT_TOKENS = int(os.environ.get("HINDI_MAX_OUTPUT_TOKENS", "160"))  # ti
 # tokenizes less efficiently than Latin text, so this path is if anything more
 # exposed to the same risk. A higher ceiling only ever prevents truncation,
 # it can't cause a regression, so there's no downside to the margin.
-_BRIEFING_MAX_OUTPUT_TOKENS = 1200
+_BRIEFING_MAX_OUTPUT_TOKENS = 700  # 1200->700: a live call's briefing ran 56s of audio; the instruction now demands ONE short clause per service (see build_briefing_instruction), so concise content finishes well under this -- the ceiling is only a truncation guard, never the target
 
 # After Saaras finalizes an utterance, wait this long for the caller to keep
 # going (a natural mid-answer pause produces two segments) before treating the
@@ -1384,48 +1384,48 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
           - the deterministic next_question exists AND has a canonical Hindi
             phrasing (next_question=None is the summarize-and-confirm stage,
             which genuinely needs the model)."""
-        # Diagnostic: capture WHY the fast path bails, into a field that rides the
-        # always-visible end-of-call summary line (per-round logs scroll out of
-        # `railway logs` under the media-debug flood on a real call).
+        # Diagnostic: capture WHY the fast path bails, ACCUMULATED across the
+        # turn's rounds (">"-joined), into a field that rides the always-visible
+        # end-of-call summary line (per-round logs scroll out of `railway logs`
+        # under the media-debug flood on a real call).
+        def _skip(reason: str):
+            self._fp_skip = f"{self._fp_skip}>{reason}" if self._fp_skip else reason
+            return None
         _tools = ",".join(sorted(fc_names)) or "none"
         _ackpv = (ack or "").strip().replace("\n", " ")[:40]
         if not fc_names or fc_names - _FAST_PATH_TOOLS:
-            self._fp_skip = f"nonfast-tool[{_tools}]"
-            return None
+            return _skip(f"nonfast-tool[{_tools}]")
         # Strip leaked meta BEFORE the guards so it neither reaches speech nor
         # falsely trips the "?" guard (a leaked "(next_question: ...?)").
         ack = _strip_meta_leak((ack or "").strip())
         if self.state.submitted:
-            self._fp_skip = "submitted"
-            return None
+            return _skip("submitted")
         if "?" in ack:  # NOTE: empty ack is allowed (see below)
-            self._fp_skip = f"ack-has-q[{_ackpv}]"
-            return None
+            return _skip(f"ack-has-q[{_ackpv}]")
         missing = self._compute_still_missing()
         if not missing:
-            self._fp_skip = "nothing-missing"
-            return None
+            return _skip("nothing-missing")
         question = _CANONICAL_QUESTIONS.get(missing[0])
         if question is None:
-            self._fp_skip = f"no-canonical-q[{missing[0][:30]}]"
-            return None
+            return _skip(f"no-canonical-q[{missing[0][:30]}]")
         if not ack:
             # Empty ack: Sarvam returns tool calls with NO content on EVERY tool
             # turn AND (per the prompt + observed behavior) makes ALL of a
             # statement's tool calls in this one round, so composing now is
             # correct -- rather than lose the fast path to a second reasoning
-            # round (double latency + a verbose free-form reply + the round-1
-            # timeout seen on a real call), substitute a short tone-aware ack.
-            # A GEMINI round with an empty ack is the rarer "split across rounds"
-            # case (round 1 still has tool calls to make), so keep bailing there
-            # -- this keeps English/Gemini semantics byte-identical.
-            if self._turn_backend != "sarvam":
-                self._fp_skip = f"empty-ack-{self._turn_backend or 'none'}"
-                return None
+            # round (double latency + verbose reply + the round-1 timeout seen on
+            # a real call). This holds whenever Sarvam is the PRIMARY backend --
+            # including a turn Gemini served as the FALLBACK (Sarvam timed out),
+            # since that Gemini call ran the SAME "all tools in one round" prompt.
+            # Only a pure Gemini-PRIMARY config (_use_sarvam False) has the rarer
+            # split-across-rounds behavior, so keep bailing there -- English/Gemini
+            # semantics stay byte-identical.
+            if not self._use_sarvam:
+                return _skip(f"empty-ack-gemini-primary")
             ack = self._default_fast_ack()
         if ack[-1] not in "।.!…":
             ack += "।"
-        self._fp_skip = None  # fired -> no bail reason
+        self._fp_skip = None  # fired -> clear any earlier-round bail reason
         logger.info("Single-round fast path: appended canonical question for %r", missing[0])
         return f"{ack} {question}"
 

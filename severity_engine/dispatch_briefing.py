@@ -347,6 +347,13 @@ def build_briefing_instruction(state, services: Optional[dict], language_code: s
         "Speak in simple, natural spoken Hindi as before (the material below is already in Hindi — "
         "deliver it faithfully; any facility or hospital name written in English letters must be "
         "spoken with natural Hindi pronunciation, and numbers are already written out as words). "
+        # Phone-call brevity: a live call's briefing ran ~56s of audio -- far too long
+        # for a caller in an emergency. Keep every part to ONE short clause; the caller
+        # needs the facts fast, not a padded speech. (Hindi-only path.)
+        "बहुत संक्षिप्त रहें — यह फ़ोन कॉल है और caller आपात स्थिति में है। हर सेवा, हर सुरक्षा-निर्देश और "
+        "समापन की हर बात को सिर्फ़ एक छोटे वाक्यांश में कहें — कोई दोहराव नहीं, कोई भूमिका नहीं, कोई "
+        "अतिरिक्त शब्द नहीं। जहाँ स्वाभाविक हो, दो सेवाओं को एक ही छोटे वाक्य में जोड़ दें। पूरी बात तेज़ी "
+        "से, गर्मजोशी से, पर बहुत कम शब्दों में पूरी करें। "
         if hindi
         else "Speak in natural, warm English as before. "
     )
