@@ -982,7 +982,7 @@ async def _hindi_briefing_speaks_hold_line_first():
     s._turn_stats = {}
     s._briefing_config = None
     order = []
-    async def fake_speak(text):
+    async def fake_speak(text, *_a, **_kw):
         order.append(("speak", text)); return True
     async def fake_agent_turn(client, instruction, config=None):
         order.append(("agent_turn", instruction))
@@ -1501,7 +1501,7 @@ async def _interim_turn_is_empathy_then_help_then_question():
     spoken = []
     async def fake_reason(client, user_text, config=None):
         return "अच्छा... मैं एम्बुलेंस भेज रहा हूँ, क्या कोई फँसा है?"  # model tries to announce help
-    async def fake_speak(text, allow_bargein=True):
+    async def fake_speak(text, allow_bargein=True, **_kw):
         spoken.append(text); return True
     async def _noop(*a, **k):
         return None
@@ -1851,7 +1851,7 @@ async def _hindi_opening_turn_greeting_one_utterance():
     spoken = []
     async def fake_reason(client, user_text, config=None):
         return "क्या यह लोकेशन सही है? क्या हुआ, बताइए?"
-    async def fake_speak(text, allow_bargein=True):
+    async def fake_speak(text, allow_bargein=True, **_kw):
         spoken.append((text, allow_bargein)); return True
     async def fake_noop(*a, **k):
         return None
@@ -1883,7 +1883,7 @@ async def _hindi_greeting_still_spoken_when_model_silent():
     spoken = []
     async def fake_reason(client, user_text, config=None):
         return ""                       # model produced nothing usable
-    async def fake_speak(text, allow_bargein=True):
+    async def fake_speak(text, allow_bargein=True, **_kw):
         spoken.append(text); return True
     async def fake_noop(*a, **k):
         return None
@@ -2616,7 +2616,7 @@ async def _exotel_instant_opening_and_filler():
     s._opening_line_pending = True
     opening_skips_gemini = (await s._reason(None, "(the call just connected)")) is None
     spoken = []
-    async def _fake_speak(text, allow_bargein=True):
+    async def _fake_speak(text, allow_bargein=True, **_kw):
         spoken.append((text, allow_bargein)); return True
     s._speak_or_fallback = _fake_speak
     async def _fake_lookup():
@@ -2631,5 +2631,105 @@ from integrations.exotel.session import _FACILITY_FILLERS as _EX_FILLERS, _FACIL
 def _EXsession_fillers(k): return _EX_FILLERS.get(k, _EX_FILLER_DEF)
 check("#EX instant opening (no Gemini on the first turn) + spoken filler during slow lookups (no dead air)",
       asyncio.run(_exotel_instant_opening_and_filler()))
+
+# ── Change 3: filler acknowledgment (rotation + cached playback + mutual excl.) ─
+import severity_engine.dispatcher_hindi as _HI
+
+class _FillerWS:
+    def __init__(self): self.sent = []; self.query_params = {"locale": "hi-IN"}
+    async def send_json(self, f): pass
+    async def send_bytes(self, b): self.sent.append(b)
+    async def receive(self): return {"type": "websocket.disconnect"}
+    async def close(self): pass
+
+async def _hi_filler_rotation_and_play():
+    _HI._filler_pcm_cache.clear()
+    for i, t in enumerate(_HI._FILLER_TEXTS):
+        _HI._filler_pcm_cache[t] = b"\x01\x00" * (100 * (i + 1))  # fake cached PCM
+    s = _HI.HindiDispatcherSession(_FillerWS())
+    picks = [s._next_filler_text() for _ in range(6)]
+    no_repeat = all(picks[i] != picks[i + 1] for i in range(len(picks) - 1))
+    all_valid = all(p in _HI._FILLER_TEXTS for p in picks)
+    before = len(s.websocket.sent)
+    await s._play_filler()                     # streams cached PCM (never reads self._stt)
+    played = len(s.websocket.sent) > before
+    _HI._filler_pcm_cache.clear()
+    return no_repeat and all_valid and played
+check("#HI Change 3: filler rotates without immediate repeat + plays cached PCM (no per-turn synth, no STT read)",
+      asyncio.run(_hi_filler_rotation_and_play()))
+
+async def _hi_filler_synth_caches_once():
+    # _synthesize_fillers hits Bulbul only for uncached texts; a mocked stream proves
+    # the once-per-process caching (no live API).
+    _HI._filler_pcm_cache.clear()
+    calls = []
+    class _FakeBulbul:
+        async def speak(self, text):
+            calls.append(text)
+            yield b"\x02\x00" * 50
+    await _HI._synthesize_fillers(_FakeBulbul())
+    first = sorted(calls)
+    await _HI._synthesize_fillers(_FakeBulbul())     # cache warm -> no more synths
+    cached_all = all(t in _HI._filler_pcm_cache for t in _HI._FILLER_TEXTS)
+    _HI._filler_pcm_cache.clear()
+    return first == sorted(_HI._FILLER_TEXTS) and len(calls) == len(_HI._FILLER_TEXTS) and cached_all
+check("#HI Change 3: fillers synthesized once per process and cached (second call hits no API)",
+      asyncio.run(_hi_filler_synth_caches_once()))
+
+async def _ex_filler_mutual_exclusion():
+    a = ExotelWebSocketAdapter(_FakeExotelWS([]), 16000)
+    s = ExotelHindiSession(a)
+    spoke = []
+    async def _fake_speak(t, allow_bargein=True): spoke.append(t); return True
+    s._speak_or_fallback = _fake_speak
+    async def _coro(): return {"ok": True}
+    s._ack_filler_active = False
+    r1 = await s._speak_filler_during("lookup filler", _coro())   # thinking filler NOT active -> speaks
+    s._ack_filler_active = True
+    r2 = await s._speak_filler_during("lookup filler", _coro())   # thinking filler active -> defers
+    return r1 == {"ok": True} and r2 == {"ok": True} and spoke == ["lookup filler"]
+check("#EX Change 3: Exotel lookup filler defers to the thinking-gap filler (at most one filler/turn)",
+      asyncio.run(_ex_filler_mutual_exclusion()))
+
+# ── Change 2: stream/pipeline the fast-path reply's sentences to Bulbul ────────
+from severity_engine.sarvam_speech import _split_for_synthesis as _C2_split
+def _change2_force_split():
+    short = "ओह, समझ गया। कुल कितनी गाड़ियाँ थीं?"
+    normal = _C2_split(short)                          # short -> one synthesis (unchanged)
+    forced = _C2_split(short, force_sentences=True)    # pipelined -> one piece per sentence
+    long_ = "क ख ग। " * 80                             # > cap -> splits either way (voice consistency)
+    return normal == [short] and len(forced) == 2 and forced[0].startswith("ओह") and len(_C2_split(long_)) > 1
+check("#HI Change 2: force_split pipelines a short reply into per-sentence pieces (non-force unchanged)",
+      _change2_force_split())
+
+async def _change2_pipeline_plumbing():
+    s = _HI.HindiDispatcherSession(_FillerWS())
+    seen = {}
+    async def _fake_speak(text, force_split=False):
+        seen["force_split"] = force_split
+        yield b"\x00\x00" * 240
+    s._tts.speak = _fake_speak
+    await s._speak_or_fallback("जी। ठीक है।", allow_bargein=False, pipeline=True)
+    fast = seen.get("force_split")
+    seen.clear()
+    await s._speak_or_fallback("जी।", allow_bargein=False, pipeline=False)
+    slow = seen.get("force_split")
+    return fast is True and slow is False
+check("#HI Change 2: _speak_or_fallback forwards pipeline -> Bulbul force_split (fast path only)",
+      asyncio.run(_change2_pipeline_plumbing()))
+
+def _change2_guards_unchanged():
+    s = _HI.HindiDispatcherSession(_FillerWS())
+    non_fast_tool = s._compose_single_round_reply("ओह ठीक है", {"submit_incident"})  # tool guard -> None
+    ack_has_question = s._compose_single_round_reply("क्या हुआ?", {"update_form_field"})  # '?' guard -> None
+    empty_ack = s._compose_single_round_reply("", {"update_form_field"})  # empty ack -> None
+    return non_fast_tool is None and ack_has_question is None and empty_ack is None
+check("#HI Change 2: fast-path guards unchanged (non-fast tool / ack-with-'?' / empty ack all still fall back)",
+      _change2_guards_unchanged())
+
+# ── Change 1: per-call Hindi region selection ─────────────────────────────────
+check("#HI Change 1: Hindi Gemini region is asia-south1 by default, separate from English's us-central1",
+      _HI._HINDI_TEXT_LOCATION == "asia-south1"
+      and __import__("severity_engine.dispatcher_live", fromlist=["_LOCATION"])._LOCATION == "us-central1")
 
 print("\nALL TESTS PASSED")

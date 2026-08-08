@@ -180,6 +180,43 @@ _STT_FAILURE_LINE = (
     "कृपया एक पल रुकें और फिर से बोलें।"
 )
 
+# ── Change 3: instant filler acknowledgment (perceived latency) ───────────────
+# The moment STT finalizes an utterance -- BEFORE the Gemini round-trip returns --
+# play a short, content-free Hindi acknowledgment so the caller hears a human-like
+# "जी..." instead of dead air during the "thinking" gap. These are acknowledgments,
+# NOT information (no facts / ETAs / dispatch claims), so they violate no honesty
+# rule. Each is synthesized via Bulbul ONCE per process and its PCM cached at module
+# level -> zero per-turn synthesis latency, just cached audio bytes. Rotated with no
+# immediate repeat; never played on the scripted opening greeting or the closing
+# briefing. Crucially the filler NEVER reads self._stt, so the single-reader barge-in
+# rule is preserved exactly (the real reply's _speak_or_fallback stays the one and
+# only STT reader); it is short, and barge-in is fully handled the instant the real
+# reply begins.
+_FILLER_ENABLED = os.environ.get("HINDI_FILLER", "true").strip().lower() not in ("0", "false", "no")
+_FILLER_TEXTS = ["जी...", "एक सेकंड...", "जी, समझ रहा हूँ..."]
+_filler_pcm_cache: dict = {}            # text -> PCM16/24kHz bytes (synth once per process)
+_filler_synth_lock = asyncio.Lock()
+
+
+async def _synthesize_fillers(tts) -> None:
+    """Synthesize each filler once via `tts` (a BulbulStream) and cache its PCM at
+    module level. Idempotent + lock-guarded: only the FIRST call in the whole
+    process hits Bulbul; every later turn and later call reuses the cache. Failures
+    are non-fatal -- a missing filler is simply skipped at play time and the turn
+    proceeds exactly as it does today."""
+    if all(t in _filler_pcm_cache for t in _FILLER_TEXTS):
+        return
+    async with _filler_synth_lock:
+        for t in _FILLER_TEXTS:
+            if t in _filler_pcm_cache:
+                continue
+            try:
+                pcm = b"".join([chunk async for chunk in tts.speak(t)])
+                if pcm:
+                    _filler_pcm_cache[t] = pcm
+            except Exception:
+                logger.debug("Filler pre-synthesis failed for %r (will retry next call)", t, exc_info=True)
+
 # Speech-rendering layer (see HindiDispatcherSession._render_for_speech):
 # Bulbul v3 has no SSML/pitch/emotion/style API (reconfirmed against
 # Sarvam's current docs) -- it's built on an LLM that infers pauses,
@@ -463,6 +500,12 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         # with, if any -- lets _render_for_speech guarantee no immediate
         # repeat, a hard mechanical backstop on top of prompting.
         self._last_opener: Optional[str] = None
+        # Change 3 (filler ack): rotation state + a per-turn mutual-exclusion flag so
+        # the thinking-gap filler and the Exotel lookup filler never double up (at
+        # most one filler plays per turn -- no overlapping audio on the line).
+        self._last_filler: Optional[str] = None
+        self._filler_idx = -1
+        self._ack_filler_active = False
         # Per-turn latency breakdown (see _mark); reset at the top of each
         # cycle in run()'s main loop.
         self._turn_stats: dict = {}
@@ -714,6 +757,10 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         # phase equally protected even though this was only reported on the
         # English side so far.
         keepalive_task = asyncio.create_task(self._keepalive())
+        # Change 3: warm the filler PCM cache in the background (once per process,
+        # on a dedicated Bulbul stream) so the first conversational turn already has
+        # cached audio to play during its thinking gap.
+        asyncio.create_task(self._prewarm_fillers())
         try:
             # Resolve GPS upfront (needed to build the first turn's instruction);
             # the pump is already running so the browser's location_result can
@@ -924,7 +971,22 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         # in well under a turn anyway. Failures are non-fatal (speak()
         # retries with a fresh socket).
         asyncio.create_task(self._preconnect_tts())
+        # Change 3: cover the thinking gap with a cached filler, overlapping the
+        # Gemini round-trip. Skipped on the opening greeting (config-less first
+        # turn) and the closing briefing (config is self._briefing_config). The
+        # per-turn flag is set SYNCHRONOUSLY so the Exotel lookup filler defers to
+        # it -> at most one filler ever plays per turn (no overlapping audio).
+        self._ack_filler_active = False
+        filler_task = None
+        if _FILLER_ENABLED and not self._opening_line_pending and config is None:
+            self._ack_filler_active = True
+            filler_task = asyncio.create_task(self._play_filler())
         reply = await self._reason(gemini_client, user_text, config=config)
+        if filler_task is not None:
+            try:
+                await filler_task  # filler playback finished before the reply -> no overlap/clip
+            except Exception:
+                pass
         completed = True
         if self._opening_line_pending:
             # OPENING TURN: speak the fixed 1033 greeting AND the model's opening
@@ -963,8 +1025,14 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
                 spoken = f"{interim} {tail}".strip()
             completed = await self._speak_or_fallback(spoken)
         elif reply:
+            # Change 2: pipeline the fast-path reply's sentences to Bulbul for a
+            # faster first-audio. "single_round" in _turn_stats means THIS reply came
+            # from the single-round fast path (ack + code-appended canonical
+            # question) -- exactly the composed, already-guard-checked text the spec
+            # scopes streaming to. Every other reply keeps the single-synthesis path.
+            pipeline = "single_round" in self._turn_stats
             reply = self._render_for_speech(reply)
-            completed = await self._speak_or_fallback(reply)
+            completed = await self._speak_or_fallback(reply, pipeline=pipeline)
         await self._safe_send_json({"type": "turn_complete"})
         if not self.state.submitted:
             await self._enter_listening(drain=completed)
@@ -1002,6 +1070,62 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
             await self._tts.ensure_open()
         except Exception:
             logger.debug("Bulbul pre-connect failed (speak() will retry)", exc_info=True)
+
+    # ── Change 3: filler acknowledgment ──────────────────────────────────────
+    async def _prewarm_fillers(self) -> None:
+        """One-time (per process) filler pre-synthesis, kicked off at call start on
+        a DEDICATED Bulbul stream so it never serialises with the reply TTS
+        (self._tts). After the first call the module cache is warm and this no-ops."""
+        if not _FILLER_ENABLED or all(t in _filler_pcm_cache for t in _FILLER_TEXTS):
+            return
+        tts = BulbulStream(self._language)
+        try:
+            await _synthesize_fillers(tts)
+        finally:
+            await tts.close()
+
+    def _next_filler_text(self) -> Optional[str]:
+        """Next cached filler in rotation, avoiding an immediate repeat. None if none
+        are synthesized yet (the turn then simply proceeds with no filler)."""
+        available = [t for t in _FILLER_TEXTS if t in _filler_pcm_cache]
+        if not available:
+            return None
+        for _ in range(len(_FILLER_TEXTS)):
+            self._filler_idx = (self._filler_idx + 1) % len(_FILLER_TEXTS)
+            cand = _FILLER_TEXTS[self._filler_idx]
+            if cand in _filler_pcm_cache and cand != self._last_filler:
+                self._last_filler = cand
+                return cand
+        self._last_filler = available[0]  # only one available (or all == last)
+        return available[0]
+
+    async def _play_filler(self) -> None:
+        """Stream a cached filler's PCM to the caller to cover the 'thinking' gap.
+        Deliberately does NOT read self._stt (single-reader barge-in rule intact).
+        Holds until the filler's own playback roughly finishes so the reply's flush
+        doesn't clip it. Any send failure just ends the filler quietly."""
+        text = self._next_filler_text()
+        if text is None:
+            return
+        pcm = _filler_pcm_cache.get(text)
+        if not pcm:
+            return
+        chunk_bytes = 4096
+        first_at: Optional[float] = None
+        total_samples = 0
+        for i in range(0, len(pcm), chunk_bytes):
+            chunk = pcm[i:i + chunk_bytes]
+            if first_at is None:
+                first_at = time.monotonic()
+            total_samples += len(chunk) // 2
+            try:
+                await self.websocket.send_bytes(chunk)
+            except Exception:
+                return
+        if first_at is not None and total_samples:
+            remaining = (first_at + total_samples / TTS_SAMPLE_RATE) - time.monotonic()
+            if remaining > 0:
+                await asyncio.sleep(remaining)
 
     def _render_for_speech(self, text: str) -> str:
         """The speech-rendering layer between Gemini and Bulbul (see the
@@ -1162,7 +1286,7 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
 
     # ── Speaking (Bulbul) ────────────────────────────────────────────────────
 
-    async def _speak_or_fallback(self, text: str, allow_bargein: bool = True) -> bool:
+    async def _speak_or_fallback(self, text: str, allow_bargein: bool = True, pipeline: bool = False) -> bool:
         """Speak via Bulbul. Returns True if the reply completed normally
         (including the "TTS failed, shown as text" fallback -- that's still a
         completed turn), or False if the caller genuinely barged in and
@@ -1203,7 +1327,7 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         armed_at: Optional[float] = None
         tts_start = time.monotonic()
         try:
-            async for chunk in self._tts.speak(text):
+            async for chunk in self._tts.speak(text, force_split=pipeline):
                 now = time.monotonic()
                 if first_chunk_at is None:
                     first_chunk_at = now

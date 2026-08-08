@@ -135,18 +135,32 @@ class SarvamTTSError(RuntimeError):
     """Raised when Bulbul synthesis fails for one utterance."""
 
 
-def _split_for_synthesis(text: str) -> list:
-    """Split a long utterance into <= _MAX_SYNTH_CHARS sentence-level pieces so
-    no single Bulbul synthesis is long enough to drift off the configured
-    voice. Short text returns [text] (or [] if empty) -- ordinary conversational
-    replies are never chunked. Sentence boundaries are preferred; a single
-    sentence longer than the cap is hard-split so a piece is never oversized."""
+def _split_for_synthesis(text: str, force_sentences: bool = False) -> list:
+    """Split an utterance into <= _MAX_SYNTH_CHARS sentence-level pieces so no single
+    Bulbul synthesis is long enough to drift off the configured voice. Without
+    force_sentences, short text returns [text] (ordinary replies are never chunked)
+    and long text accumulates sentences into <=cap pieces (voice consistency).
+
+    With force_sentences (Change 2 pipelining): split into ONE piece per sentence
+    even for short text, so the first synthesis is small and reaches first-audio
+    sooner, and later sentences synthesize while earlier ones are still playing. A
+    lone sentence over the cap is hard-split either way so a piece is never oversized."""
     text = (text or "").strip()
     if not text:
         return []
-    if len(text) <= _MAX_SYNTH_CHARS:
+    if not force_sentences and len(text) <= _MAX_SYNTH_CHARS:
         return [text]
-    pieces: list = []
+    if force_sentences:
+        pieces: list = []
+        for sentence in _SENTENCE_SPLIT_RE.split(text):
+            s = sentence.strip()
+            while len(s) > _MAX_SYNTH_CHARS:  # a lone over-long sentence
+                pieces.append(s[:_MAX_SYNTH_CHARS].strip())
+                s = s[_MAX_SYNTH_CHARS:].strip()
+            if s:
+                pieces.append(s)
+        return pieces or [text]
+    pieces = []
     cur = ""
     for sentence in _SENTENCE_SPLIT_RE.split(text):
         s = sentence.strip()
@@ -399,7 +413,7 @@ class BulbulStream:
                 except Exception:
                     logger.debug("Bulbul ping failed (reconnect on next speak)")
 
-    async def speak(self, text: str) -> AsyncIterator[bytes]:
+    async def speak(self, text: str, force_split: bool = False) -> AsyncIterator[bytes]:
         """Synthesize one utterance, yielding PCM16/24kHz chunks as they arrive.
 
         A LONG utterance (the closing briefing) is split into sentence-level
@@ -409,14 +423,20 @@ class BulbulStream:
         identical `speaker`/pace/temperature config (a single long synthesis was
         drifting off it partway) while matching the many-short-syntheses shape
         that multi-turn conversations already use with a consistent voice. Short
-        utterances are one piece -- unchanged."""
+        utterances are one piece -- unchanged.
+
+        force_split (Change 2 pipelining): also split a SHORT reply on sentence
+        boundaries, so the first (smaller) synthesis reaches first-audio sooner and
+        later sentences synthesize while earlier ones play. Same back-to-back
+        streaming on the same connection -- callers see one continuous chunk
+        stream either way."""
         if self._closed:
             raise SarvamTTSError("BulbulStream is closed")
-        pieces = _split_for_synthesis(text)
+        pieces = _split_for_synthesis(text, force_sentences=force_split)
         if len(pieces) > 1:
             logger.info(
-                "Bulbul: splitting a %d-char utterance into %d syntheses (voice consistency)",
-                len(text), len(pieces),
+                "Bulbul: %d syntheses for a %d-char utterance (%s)",
+                len(pieces), len(text), "pipeline" if force_split else "voice consistency",
             )
         for piece in pieces:
             async for chunk in self._speak_one(piece):

@@ -347,7 +347,13 @@ class ExotelHindiSession(HindiDispatcherSession):
     async def _speak_filler_during(self, filler: str, coro):
         """Speak a short holding line WHILE `coro` (a slow lookup) runs, then wait
         for both — so the filler finishes playing before the model's result reply is
-        spoken (no overlap), and the caller hears speech instead of silence."""
+        spoken (no overlap), and the caller hears speech instead of silence.
+
+        Defers to the general thinking-gap filler (Change 3): if that already fired
+        this turn (`_ack_filler_active`), skip this one so at most one filler plays
+        per turn and there is never overlapping audio on the line."""
+        if getattr(self, "_ack_filler_active", False):
+            return await coro
         filler_task = asyncio.create_task(self._speak_or_fallback(filler, allow_bargein=False))
         try:
             return await coro
