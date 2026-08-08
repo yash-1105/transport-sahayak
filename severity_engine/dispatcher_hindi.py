@@ -47,7 +47,9 @@ import time
 from typing import Optional
 
 from fastapi import WebSocket
+from google import genai
 from google.genai import types
+from google.oauth2 import service_account
 
 from . import local_extract
 from .dispatch_briefing import build_briefing_instruction
@@ -58,8 +60,8 @@ from .dispatcher_live import (
     DEFAULT_REQUIRED_FIELDS,
     REQUIRED_FIELDS,
     DispatcherSession,
-    _get_client,
 )
+from .google_credentials import load_service_account_info
 from .helpline_tools import HELPLINE_TOOL_DECLARATIONS, HelplineToolsMixin
 from .knowledge_base import describe_topics
 from .sarvam_speech import (
@@ -78,6 +80,44 @@ logger = logging.getLogger("dispatcher_hindi")
 # newest flash generation actually available on this project/region — verified
 # live: gemini-2.0-flash now 404s on Vertex us-central1 here.
 _TEXT_MODEL = os.environ.get("GEMINI_TEXT_MODEL", "gemini-2.5-flash")
+# Change 1 — geographic colocation. Hindi's generate_content calls run against a
+# region CLOSE to the caller/Sarvam (asia-south1 / Mumbai) instead of us-central1,
+# removing a fixed transcontinental round-trip tax on every turn. This is a SEPARATE
+# Vertex client from dispatcher_live._get_client() (which stays us-central1 for
+# English's Gemini Live native-audio model — NOT available in asia-south1), so
+# English is completely untouched. gemini-2.5-flash generate_content is verified
+# available in asia-south1 (measured markedly faster + tighter than us-central1).
+_HINDI_TEXT_LOCATION = os.environ.get("HINDI_VERTEX_LOCATION", "asia-south1")
+_hindi_text_client: Optional[genai.Client] = None
+
+
+def _get_hindi_text_client() -> genai.Client:
+    """Cached Vertex client for the Hindi text-reasoning calls, pinned to
+    _HINDI_TEXT_LOCATION. Self-contained (its own credential load) so it never
+    perturbs the English Gemini Live client. Same service account, different
+    region — no new auth."""
+    global _hindi_text_client
+    if _hindi_text_client is not None:
+        return _hindi_text_client
+    info = load_service_account_info()
+    if not info:
+        raise RuntimeError(
+            "No Google Cloud credentials found for the Hindi text dispatcher. Set "
+            "GOOGLE_SERVICE_ACCOUNT_JSON_BASE64 or GOOGLE_SERVICE_ACCOUNT_JSON, or "
+            "place the local service account file (local dev)."
+        )
+    project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or info.get("project_id")
+    if not project_id:
+        raise RuntimeError("Service account JSON has no project_id field.")
+    credentials = service_account.Credentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    _hindi_text_client = genai.Client(
+        vertexai=True, project=project_id, location=_HINDI_TEXT_LOCATION, credentials=credentials
+    )
+    logger.info("Hindi Gemini text client initialised (project=%s, model=%s, location=%s)",
+                project_id, _TEXT_MODEL, _HINDI_TEXT_LOCATION)
+    return _hindi_text_client
 # Tighter than a typical chat timeout on purpose -- this is a live phone call,
 # not a background job; a slow attempt should fail fast into the retry/apology
 # path rather than leave the caller stuck on "Thinking..." for many seconds.
@@ -660,7 +700,7 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
 
     async def run(self) -> None:
         require_api_key()   # loud SarvamCredentialsError before anything starts
-        gemini_client = _get_client()  # existing Vertex AI auth, cached module-wide
+        gemini_client = _get_hindi_text_client()  # asia-south1 (Change 1); English's us-central1 client untouched
         await self._safe_send_json({"type": "ready"})
 
         pump_task = asyncio.create_task(self._pump_client())
