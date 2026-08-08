@@ -4,7 +4,6 @@ import { SHADOW, HEADER_GRADIENT, BRAND_GRADIENT } from "@/lib/design";
 import { ShieldCrossIcon } from "@/components/ui/icons";
 import { useBilingual } from "@/hooks/useI18n";
 import { useAuthStore } from "@/store/authStore";
-import { useIsPWA } from "@/hooks/useIsPWA";
 import AuthLanding from "@/components/auth/AuthLanding";
 import PWAHome from "@/components/auth/PWAHome";
 import OnboardingFlow from "@/components/auth/OnboardingFlow";
@@ -26,10 +25,9 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const beginOnboarding = useAuthStore((s) => s.beginOnboarding);
   const gateInitialTab = useAuthStore((s) => s.gateInitialTab);
   const pwaEntered = useAuthStore((s) => s.pwaEntered);
-  const isPWA = useIsPWA(); // null until resolved after mount
 
   // No Supabase → never gate (accounts unavailable — app renders as-is, and no
-  // PWA home either, preserving the unconfigured behaviour).
+  // launch home either, preserving the unconfigured behaviour).
   if (!configured) return <>{children}</>;
 
   // Hydrating a persisted session → branded splash, so a signed-in user never
@@ -37,14 +35,13 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // agree — avoids a hydration mismatch on the sessionStorage-backed guest flag.)
   if (!ready) return <Splash />;
 
-  // PWA standalone detection not resolved yet → keep the splash (never flash the
-  // browser landing before we know whether to show the PWA home instead).
-  if (isPWA === null) return <Splash />;
-
-  // Installed PWA launch → the simple home screen (Report / dashboard), NOT the
-  // full sign-in gate. pwaEntered flips once the user leaves it (in-memory, so a
-  // fresh cold launch returns here). A normal browser tab (isPWA false) skips this.
-  if (isPWA && !pwaEntered) return <PWAHome />;
+  // Universal entry: the SOS launch home is the landing on ALL form factors —
+  // desktop web, mobile web, AND installed PWA — not just standalone display mode.
+  // pwaEntered flips once the user leaves it (in-memory, so a fresh load returns
+  // here). From here they start an SOS call, open the report, view the dashboard
+  // (guest), or sign in (AuthLanding overlay, incl. operator access) — every
+  // gate/guest/operator flow preserved.
+  if (!pwaEntered) return <PWAHome />;
 
   // Signed in or guest → the app. Onboarding overlay only for real users.
   if (user || isGuest) {

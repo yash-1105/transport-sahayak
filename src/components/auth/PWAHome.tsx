@@ -6,11 +6,12 @@ import { useBilingual } from "@/hooks/useI18n";
 import { useAuthStore } from "@/store/authStore";
 import AuthLanding from "@/components/auth/AuthLanding";
 
-// The PWA-ONLY launch home screen. Shown by AuthGate when the app is opened as
-// an installed PWA (standalone) — a simple, emergency-first home instead of the
-// full sign-in gate. From here the user either taps the big Report Incident
-// button (→ voice dispatcher, never blocked by auth) or View dashboard. A
-// normal browser tab never sees this screen.
+// The SOS launch home — the app's UNIVERSAL entry screen on ALL form factors
+// (desktop web, mobile web, and installed PWA), rendered by AuthGate before the
+// user enters the app (it is no longer gated to standalone display mode).
+// Emergency-first: the big SOS button auto-starts a Hindi voice call (switchable
+// to English from the call UI); Report Incident opens the full report; View
+// dashboard / Sign in / guest / operator flows are all preserved.
 export default function PWAHome() {
   const { showHindi } = useBilingual();
   const user = useAuthStore((s) => s.user);
@@ -21,15 +22,16 @@ export default function PWAHome() {
   const gateInitialTab = useAuthStore((s) => s.gateInitialTab);
 
   const [showAuth, setShowAuth] = useState(false);
-  const [chooseLang, setChooseLang] = useState(false);
 
   const displayName =
     ((user?.user_metadata?.full_name as string | undefined)?.trim() || user?.email || "").trim();
   const initial = (displayName || "?").charAt(0).toUpperCase();
 
-  // SOS → first ask which language the voice dispatcher should speak.
+  // SOS → immediately start a HINDI voice call (auto-connect + begin); the caller
+  // can switch to English from the call UI. Emergencies are never blocked, so a
+  // signed-out user is dropped into guest mode first (inside startVoice).
   function handleSos() {
-    setChooseLang(true);
+    startVoice("hi-IN");
   }
   // Report Incident → open the full report sheet (manual/describe form) in the
   // app, mirroring the map's navy "Report Incident" FAB. Emergencies are never
@@ -61,9 +63,13 @@ export default function PWAHome() {
 
   return (
     <div
-      className="fixed inset-0 z-[2500] flex flex-col"
+      className="fixed inset-0 z-[2500]"
       style={{ background: C.page, color: C.ink }}
     >
+      {/* Centered max-width column: on a wide desktop screen this keeps a
+          proportionate app column instead of stretching the mobile layout; on a
+          phone the max-width never constrains, so mobile/PWA is unchanged. */}
+      <div className="mx-auto w-full h-full flex flex-col" style={{ maxWidth: 468 }}>
       {/* ── Top bar: brand + auth affordance (safe-area top) ── */}
       <div
         className="flex items-center"
@@ -100,87 +106,64 @@ export default function PWAHome() {
         )}
       </div>
 
-      {/* ── Center: Report button, or the language choice once tapped ── */}
+      {/* ── Center: SOS (auto-Hindi) + Report Incident + View dashboard ── */}
       <div className="flex flex-col items-center justify-center flex-1" style={{ gap: 20, padding: "12px 24px", overflowY: "auto" }}>
-        {chooseLang ? (
-          <>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: C.ink }}>
-                Choose a language{showHindi && <span style={{ fontWeight: 500, color: C.muted, fontSize: 15 }}> · भाषा चुनें</span>}
-              </div>
-              <p style={{ fontSize: 12.5, color: C.secondary, marginTop: 4 }}>Which language should the voice dispatcher speak?</p>
-            </div>
+        <div style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", color: C.muted, fontWeight: 600, textAlign: "center" }}>
+          Road accident first response
+        </div>
 
-            <div className="flex flex-col" style={{ gap: 12, width: "min(86vw, 320px)" }}>
-              <LangButton primary onClick={() => startVoice("en-IN")} title="English" sub="Talk to the dispatcher in English" />
-              <LangButton onClick={() => startVoice("hi-IN")} title="हिंदी" sub="वॉइस डिस्पैचर से हिंदी में बात करें" />
-            </div>
+        {/* SOS — emergency voice dispatch. The big red pulsing CTA (primary),
+            matching the map's SOS FAB. Auto-starts a Hindi call (switch to English
+            in the call UI). */}
+        <button
+          onClick={handleSos}
+          aria-label="SOS — start a voice call with the dispatcher"
+          className="flex flex-col items-center justify-center active:scale-95 transition-transform"
+          style={{
+            width: "min(64vw, 224px)", aspectRatio: "1", borderRadius: "50%",
+            border: "none", cursor: "pointer", color: "#fff", gap: 8,
+            background: CTA_GRADIENT, boxShadow: "0 18px 44px rgba(198,54,44,.34)",
+            animation: "tsPulse 2.6s infinite",
+          }}
+        >
+          <MicIcon size={40} />
+          <span style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.01em" }}>
+            SOS{showHindi && <span style={{ fontSize: 17, fontWeight: 600, opacity: 0.92 }}> · एसओएस</span>}
+          </span>
+        </button>
 
-            <button
-              onClick={() => setChooseLang(false)}
-              style={{ background: "transparent", border: "none", color: C.secondary, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: "6px 14px" }}
-            >
-              ‹ Back
-            </button>
-          </>
-        ) : (
-          <>
-            <div style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", color: C.muted, fontWeight: 600, textAlign: "center" }}>
-              Road accident first response
-            </div>
+        <p style={{ fontSize: 12.5, color: C.secondary, textAlign: "center", maxWidth: 300, lineHeight: 1.5 }}>
+          Tap to talk to the AI dispatcher — it takes your report in English or Hindi.
+        </p>
 
-            {/* SOS — emergency voice dispatch. The big red pulsing CTA (primary),
-                matching the map's SOS FAB. */}
-            <button
-              onClick={handleSos}
-              aria-label="SOS — talk to the voice dispatcher"
-              className="flex flex-col items-center justify-center active:scale-95 transition-transform"
-              style={{
-                width: "min(64vw, 224px)", aspectRatio: "1", borderRadius: "50%",
-                border: "none", cursor: "pointer", color: "#fff", gap: 8,
-                background: CTA_GRADIENT, boxShadow: "0 18px 44px rgba(198,54,44,.34)",
-                animation: "tsPulse 2.6s infinite",
-              }}
-            >
-              <MicIcon size={40} />
-              <span style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.01em" }}>
-                SOS{showHindi && <span style={{ fontSize: 17, fontWeight: 600, opacity: 0.92 }}> · एसओएस</span>}
-              </span>
-            </button>
+        {/* Report Incident — the full report sheet (secondary, navy), matching
+            the map's second FAB. */}
+        <button
+          onClick={startReport}
+          className="flex items-center justify-center active:scale-95 transition-transform"
+          style={{
+            gap: 9, width: "min(86vw, 320px)", padding: "13px 20px", borderRadius: 14,
+            background: C.navy800, color: "#fff", border: "none", cursor: "pointer",
+            fontSize: 15, fontWeight: 700, boxShadow: SHADOW.floatBtn,
+          }}
+        >
+          <span className="inline-flex items-center justify-center flex-none" style={{ width: 21, height: 21, borderRadius: "50%", background: "rgba(255,255,255,.18)", fontSize: 15, fontWeight: 600 }}>+</span>
+          Report Incident{showHindi && <span style={{ fontWeight: 500, opacity: 0.82 }}> · रिपोर्ट करें</span>}
+        </button>
 
-            <p style={{ fontSize: 12.5, color: C.secondary, textAlign: "center", maxWidth: 300, lineHeight: 1.5 }}>
-              Tap to talk to the AI dispatcher — it takes your report in English or Hindi.
-            </p>
-
-            {/* Report Incident — the full report sheet (secondary, navy), matching
-                the map's second FAB. */}
-            <button
-              onClick={startReport}
-              className="flex items-center justify-center active:scale-95 transition-transform"
-              style={{
-                gap: 9, width: "min(86vw, 320px)", padding: "13px 20px", borderRadius: 14,
-                background: C.navy800, color: "#fff", border: "none", cursor: "pointer",
-                fontSize: 15, fontWeight: 700, boxShadow: SHADOW.floatBtn,
-              }}
-            >
-              <span className="inline-flex items-center justify-center flex-none" style={{ width: 21, height: 21, borderRadius: "50%", background: "rgba(255,255,255,.18)", fontSize: 15, fontWeight: 600 }}>+</span>
-              Report Incident{showHindi && <span style={{ fontWeight: 500, opacity: 0.82 }}> · रिपोर्ट करें</span>}
-            </button>
-
-            <button
-              onClick={handleDashboard}
-              style={{ background: "transparent", border: "none", color: C.blue, fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "6px 14px" }}
-            >
-              View dashboard{showHindi && <span style={{ color: C.muted, fontWeight: 500 }}> · डैशबोर्ड देखें</span>} ›
-            </button>
-          </>
-        )}
+        <button
+          onClick={handleDashboard}
+          style={{ background: "transparent", border: "none", color: C.blue, fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "6px 14px" }}
+        >
+          View dashboard{showHindi && <span style={{ color: C.muted, fontWeight: 500 }}> · डैशबोर्ड देखें</span>} ›
+        </button>
       </div>
 
       {/* ── Footer (safe-area bottom) ── */}
       <div style={{ padding: "10px 20px calc(14px + env(safe-area-inset-bottom))", textAlign: "center", fontSize: 11, color: C.faint, letterSpacing: ".1em", textTransform: "uppercase", fontVariantNumeric: "tabular-nums" }}>
         Highway helpline 1033 · 210 km corridor
       </div>
+      </div>{/* ── end centered max-width column ── */}
 
       {/* ── Sign-in overlay — reuses the full auth screen (now portrait-safe) ── */}
       {showAuth && (
@@ -195,25 +178,5 @@ export default function PWAHome() {
         </div>
       )}
     </div>
-  );
-}
-
-// Language choice tile (English / हिंदी) for the voice dispatcher.
-function LangButton({ title, sub, onClick, primary }: { title: string; sub: string; onClick: () => void; primary?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex flex-col active:scale-95 transition-transform"
-      style={{
-        textAlign: "left", padding: "14px 18px", borderRadius: 14, cursor: "pointer", gap: 2,
-        color: primary ? "#fff" : C.ink,
-        border: primary ? "none" : `1px solid ${C.border}`,
-        background: primary ? CTA_GRADIENT : "#fff",
-        boxShadow: primary ? "0 8px 24px rgba(198,54,44,.32)" : SHADOW.floatBtn,
-      }}
-    >
-      <span style={{ fontSize: 17, fontWeight: 700 }}>{title}</span>
-      <span style={{ fontSize: 12, color: primary ? "rgba(255,255,255,.85)" : C.muted, fontWeight: 500 }}>{sub}</span>
-    </button>
   );
 }

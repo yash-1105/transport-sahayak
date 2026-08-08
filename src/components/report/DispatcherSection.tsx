@@ -155,7 +155,19 @@ export function DispatcherSection({
             return (
               <button
                 key={l}
-                onClick={() => { if (isActive) dispatcher.stop(); onLocaleChange(l); }}
+                // English (dispatcher_live.py / Gemini Live) and Hindi
+                // (dispatcher_hindi.py) are entirely separate backend pipelines, so
+                // a language switch cleanly TEARS DOWN the current session and starts
+                // the other — never a mid-session hot-swap or a half-open socket.
+                // stop() drains + closes the current WS (detaches handlers, ws.close);
+                // start(l) then opens a fresh WS on the other locale.
+                onClick={() => {
+                  if (l === locale) return;            // already on this language
+                  const wasActive = isActive;
+                  if (wasActive) dispatcher.stop();     // clean teardown of the current pipeline
+                  onLocaleChange(l);
+                  if (wasActive) dispatcher.start(l);   // reopen on the OTHER pipeline, auto-connect
+                }}
                 style={{
                   flex: 1,
                   padding: "8px 0",

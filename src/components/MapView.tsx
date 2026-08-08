@@ -700,7 +700,6 @@ export default function MapView() {
     () => useAuthStore.getState().launchVoiceLocale
   );
   const [reportSession, setReportSession] = useState(0);
-  const [sosLangChoice, setSosLangChoice] = useState(false);
   const [profileOpen, setProfileOpen] = useState(launchIntent === "profile");
   useEffect(() => {
     // Clear the one-shot intent once consumed (a store action, not a React
@@ -794,9 +793,10 @@ export default function MapView() {
     setReportOpen(false); setIsPickingPin(false);
     setReportInitialMode(undefined); setReportAutoStartVoice(false); setReportVoiceLocale(null);
   }
-  // Map SOS → open the Voice dispatcher in the chosen language and auto-start.
+  // Map SOS → open the Voice dispatcher in the given language and auto-start the
+  // call. The SOS FAB passes hi-IN (auto-Hindi); English is reached via the
+  // in-call language switch in DispatcherSection.
   function startSosVoice(locale: "en-IN" | "hi-IN") {
-    setSosLangChoice(false);
     setReportInitialMode("DISPATCHER"); setReportAutoStartVoice(true); setReportVoiceLocale(locale);
     setReportSession((s) => s + 1);
     setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true);
@@ -1367,8 +1367,8 @@ export default function MapView() {
           {/* SOS — emergency voice dispatch. The red pulsing CTA (priority),
               stays big; icon + "SOS" only (no Hindi text — it's a universal label). */}
           <button
-            onClick={() => setSosLangChoice(true)}
-            aria-label="SOS — talk to the voice dispatcher"
+            onClick={() => startSosVoice("hi-IN")}
+            aria-label="SOS — start a Hindi voice call (switch to English in the call)"
             className="flex items-center gap-2"
             style={{
               background: CTA_GRADIENT, color: "#fff", border: "none", borderRadius: 99,
@@ -1485,43 +1485,6 @@ export default function MapView() {
           the header dropdown; this one is driven by the launch intent. ── */}
       {profileOpen && <SafetyProfileSheet showHindi={showHindi} onClose={() => setProfileOpen(false)} />}
 
-      {/* ── SOS: quick language chooser → voice dispatcher (auto-start) ── */}
-      {sosLangChoice && (
-        <>
-          <div className="fixed inset-0 z-[2099]" style={{ background: "rgba(14,26,47,.45)" }} onClick={() => setSosLangChoice(false)} />
-          <div
-            className="fixed z-[2100] flex flex-col bg-white"
-            style={{ left: "50%", top: "50%", transform: "translate(-50%,-50%)", width: "min(360px, 92vw)", borderRadius: RADIUS.card, boxShadow: "0 20px 60px rgba(14,26,47,.4)", overflow: "hidden" }}
-          >
-            <div style={{ padding: "16px 18px 2px" }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>
-                Choose a language{showHindi && <span style={{ fontWeight: 500, color: C.muted, fontSize: 13 }}> · भाषा चुनें</span>}
-              </div>
-              <p style={{ fontSize: 12, color: C.secondary, marginTop: 2 }}>The voice dispatcher will speak this language, then take your report.</p>
-            </div>
-            <div className="flex flex-col" style={{ gap: 10, padding: "12px 18px 6px" }}>
-              <button
-                onClick={() => startSosVoice("en-IN")}
-                style={{ padding: "13px 16px", border: "none", borderRadius: 12, background: CTA_GRADIENT, color: "#fff", fontSize: 14.5, fontWeight: 700, cursor: "pointer", textAlign: "left", boxShadow: "0 6px 18px rgba(198,54,44,.3)" }}
-              >
-                English<span style={{ fontWeight: 500, opacity: 0.85 }}> · Talk to the dispatcher in English</span>
-              </button>
-              <button
-                onClick={() => startSosVoice("hi-IN")}
-                style={{ padding: "13px 16px", border: `1px solid ${C.border}`, borderRadius: 12, background: "#fff", color: C.ink, fontSize: 14.5, fontWeight: 700, cursor: "pointer", textAlign: "left" }}
-              >
-                हिंदी<span style={{ fontWeight: 500, color: C.muted }}> · वॉइस डिस्पैचर से हिंदी में बात करें</span>
-              </button>
-            </div>
-            <button
-              onClick={() => setSosLangChoice(false)}
-              style={{ padding: "11px", border: "none", borderTop: `1px solid ${C.hairline}`, background: "transparent", color: C.secondary, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
-            >
-              Cancel{showHindi && " · रद्द करें"}
-            </button>
-          </div>
-        </>
-      )}
     </div>
   );
 }
