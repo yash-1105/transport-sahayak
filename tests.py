@@ -1838,6 +1838,8 @@ def _fresh_opening_session():
     s._ended = asyncio.Event()
     s._last_opener = None
     s._turn_stats = {}
+    s._turn_backend = None             # reasoning backend: mirrors __init__ (helper skips it)
+    s._quota_hits = 0
     s._pending_interim_spoken = None   # #4: mirrors __init__ (helper skips it)
     return s
 
@@ -2731,5 +2733,186 @@ check("#HI Change 2: fast-path guards unchanged (non-fast tool / ack-with-'?' / 
 check("#HI Change 1: Hindi Gemini region is asia-south1 by default, separate from English's us-central1",
       _HI._HINDI_TEXT_LOCATION == "asia-south1"
       and __import__("severity_engine.dispatcher_live", fromlist=["_LOCATION"])._LOCATION == "us-central1")
+
+# ── Sarvam reasoning backend (primary) + Gemini fallback ──────────────────────
+import os as _os
+import json as _json2
+import severity_engine.sarvam_reasoning as _SR
+from google.genai import types as _T
+
+def _sarvam_tool_mapping():
+    decls = [{"name": "update_form_field", "description": "D", "parameters": {
+        "type": "OBJECT", "properties": {
+            "field": {"type": "STRING", "enum": ["a", "b"]},
+            "n": {"type": "INTEGER"},
+            "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+        }, "required": ["field"]}}]
+    t = _SR.gemini_tools_to_openai(decls)[0]
+    p = t["function"]["parameters"]
+    return (t["type"] == "function" and t["function"]["name"] == "update_form_field"
+            and p["type"] == "object"
+            and p["properties"]["field"]["type"] == "string" and p["properties"]["field"]["enum"] == ["a", "b"]
+            and p["properties"]["n"]["type"] == "integer"
+            and p["properties"]["tags"]["type"] == "array" and p["properties"]["tags"]["items"]["type"] == "string"
+            and p["required"] == ["field"])
+check("#HI Sarvam tool mapping: Gemini decl dicts -> OpenAI tools (types lowercased, nesting preserved)",
+      _sarvam_tool_mapping())
+
+def _sarvam_history_mapping():
+    hist = [
+        _T.Content(role="user", parts=[_T.Part(text="मेरी कार टकरा गई")]),
+        _T.Content(role="model", parts=[
+            _T.Part(text="ओह"),
+            _T.Part(function_call=_T.FunctionCall(id="c1", name="update_form_field", args={"field": "casualties", "value": "2"}))]),
+        _T.Content(role="user", parts=[
+            _T.Part(function_response=_T.FunctionResponse(id="c1", name="update_form_field", response={"ok": True, "next_question": "whether anyone is trapped"}))]),
+    ]
+    m = _SR.gemini_history_to_openai_messages(hist, "SYS")
+    return (m[0] == {"role": "system", "content": "SYS"}
+            and m[1] == {"role": "user", "content": "मेरी कार टकरा गई"}
+            and m[2]["role"] == "assistant" and m[2]["tool_calls"][0]["id"] == "c1"
+            and m[2]["tool_calls"][0]["function"]["name"] == "update_form_field"
+            and _json2.loads(m[2]["tool_calls"][0]["function"]["arguments"]) == {"field": "casualties", "value": "2"}
+            and m[3]["role"] == "tool" and m[3]["tool_call_id"] == "c1"
+            and _json2.loads(m[3]["content"])["next_question"] == "whether anyone is trapped")
+check("#HI Sarvam history mapping: types.Content -> OpenAI messages (assistant tool_calls + tool msgs, ids matched)",
+      _sarvam_history_mapping())
+
+async def _sarvam_stream_aggregation():
+    _os.environ.setdefault("SARVAM_API_KEY", "test-key")
+    lines = [
+        "data: " + _json2.dumps({"choices": [{"delta": {"content": "ओह"}}]}),
+        "data: " + _json2.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "update_form_field", "arguments": ""}}]}}]}),
+        "data: " + _json2.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"field": "casualties", '}}]}}]}),
+        "data: " + _json2.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"value": "2"}'}}]}}]}),
+        "data: [DONE]",
+    ]
+    class _Resp:
+        status_code = 200
+        async def aiter_lines(self):
+            for l in lines: yield l
+        async def aread(self): return b""
+    class _Ctx:
+        async def __aenter__(self): return _Resp()
+        async def __aexit__(self, *a): return False
+    class _Client:
+        def stream(self, *a, **k): return _Ctx()
+        async def aclose(self): pass
+    res = await _SR.sarvam_generate([{"role": "user", "content": "x"}], [], client=_Client())
+    tc = res.tool_calls[0]
+    return (res.text == "ओह" and tc.name == "update_form_field" and tc.id == "c1"
+            and tc.args == {"field": "casualties", "value": "2"} and res.ok)
+check("#HI Sarvam streaming aggregation: content + split-argument tool_calls -> normalized result",
+      asyncio.run(_sarvam_stream_aggregation()))
+
+async def _sarvam_stream_malformed_raises():
+    _os.environ.setdefault("SARVAM_API_KEY", "test-key")
+    lines = ["data: " + _json2.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "update_form_field", "arguments": "{not json"}}]}}]}), "data: [DONE]"]
+    class _Resp:
+        status_code = 200
+        async def aiter_lines(self):
+            for l in lines: yield l
+        async def aread(self): return b""
+    class _Ctx:
+        async def __aenter__(self): return _Resp()
+        async def __aexit__(self, *a): return False
+    class _Client:
+        def stream(self, *a, **k): return _Ctx()
+        async def aclose(self): pass
+    try:
+        await _SR.sarvam_generate([{"role": "user", "content": "x"}], [], client=_Client())
+        return False
+    except _SR.SarvamReasoningError:
+        return True
+check("#HI Sarvam malformed tool arguments -> SarvamReasoningError (so the dispatcher can fall back)",
+      asyncio.run(_sarvam_stream_malformed_raises()))
+
+async def _sarvam_stream_dup_empty_args():
+    _os.environ.setdefault("SARVAM_API_KEY", "test-key")
+    # sarvam-105b streams a NO-ARG tool's "{}" TWICE ("{}{}") -- must be tolerated.
+    lines = [
+        "data: " + _json2.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "submit_incident", "arguments": ""}}]}}]}),
+        "data: " + _json2.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}}]}),
+        "data: " + _json2.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}}]}),
+        "data: [DONE]",
+    ]
+    class _Resp:
+        status_code = 200
+        async def aiter_lines(self):
+            for l in lines: yield l
+        async def aread(self): return b""
+    class _Ctx:
+        async def __aenter__(self): return _Resp()
+        async def __aexit__(self, *a): return False
+    class _Client:
+        def stream(self, *a, **k): return _Ctx()
+        async def aclose(self): pass
+    res = await _SR.sarvam_generate([{"role": "user", "content": "x"}], [], client=_Client())
+    return len(res.tool_calls) == 1 and res.tool_calls[0].name == "submit_incident" and res.tool_calls[0].args == {}
+check("#HI Sarvam tolerates the duplicated-'{}' streaming quirk for no-arg tools (submit_incident)",
+      asyncio.run(_sarvam_stream_dup_empty_args()))
+
+def _mk_reason_session(use_sarvam):
+    from severity_engine import dispatcher_hindi as dh
+    s = dh.HindiDispatcherSession.__new__(dh.HindiDispatcherSession)
+    s._history = [_T.Content(role="user", parts=[_T.Part(text="hi")])]
+    s._turn_stats = {}; s._turn_backend = None; s._quota_hits = 0
+    s._use_sarvam = use_sarvam; s._openai_tools = []
+    class _Cfg: system_instruction = "SYS"
+    s._gen_config = _Cfg(); s._briefing_config = object()
+    return s, dh
+
+async def _sarvam_fail_falls_back_to_gemini():
+    s, dh = _mk_reason_session(use_sarvam=True)
+    orig = dh.sarvam_generate
+    async def _boom(*a, **k): raise dh.SarvamReasoningError("boom")
+    dh.sarvam_generate = _boom
+    async def _fake_gemini(gemini_client=None, config=None):
+        return _T.GenerateContentResponse(candidates=[_T.Candidate(content=_T.Content(role="model", parts=[_T.Part(text="जी")]))])
+    s._generate_with_retry = _fake_gemini
+    try:
+        text, fcs, parts = await s._reason_round(None, None)
+    finally:
+        dh.sarvam_generate = orig
+    return text == "जी" and s._turn_backend == "gemini" and not fcs and "sarvam_fail" in s._turn_stats
+check("#HI Sarvam failure -> Gemini fallback for the round (backend=gemini, sarvam_fail logged)",
+      asyncio.run(_sarvam_fail_falls_back_to_gemini()))
+
+async def _backend_env_gemini_skips_sarvam():
+    s, dh = _mk_reason_session(use_sarvam=False)   # HINDI_REASONING_BACKEND=gemini equivalent
+    orig = dh.sarvam_generate
+    called = {"sarvam": False}
+    async def _spy(*a, **k): called["sarvam"] = True; raise dh.SarvamReasoningError("should not be called")
+    dh.sarvam_generate = _spy
+    async def _fake_gemini(gemini_client=None, config=None):
+        return _T.GenerateContentResponse(candidates=[_T.Candidate(content=_T.Content(role="model", parts=[_T.Part(text="जी")]))])
+    s._generate_with_retry = _fake_gemini
+    try:
+        text, fcs, parts = await s._reason_round(None, None)
+    finally:
+        dh.sarvam_generate = orig
+    return text == "जी" and s._turn_backend == "gemini" and called["sarvam"] is False
+check("#HI backend env var: _use_sarvam False skips Sarvam entirely and uses Gemini (default constant is 'sarvam')",
+      asyncio.run(_backend_env_gemini_skips_sarvam())
+      and _SR and __import__("severity_engine.dispatcher_hindi", fromlist=["_HINDI_REASONING_BACKEND"])._HINDI_REASONING_BACKEND == "sarvam")
+
+def _fastpath_backend_agnostic():
+    from severity_engine import dispatcher_hindi as dh
+    def mk(use_sarvam):
+        s = dh.HindiDispatcherSession.__new__(dh.HindiDispatcherSession)
+        s.state = DispatcherState(language="hi-IN")
+        s.state.location = {"lat": 28.6, "lng": 77.2, "label": "x"}
+        s.state.description = "car crash"
+        s.state.sub_type = "Car vs. Car Collision"   # incident type filled -> next missing has a canonical Q
+        s._accident_mode = True
+        s._use_sarvam = use_sarvam
+        return s
+    a = mk(True)._compose_single_round_reply("ओह ठीक है", {"update_form_field"})
+    b = mk(False)._compose_single_round_reply("ओह ठीक है", {"update_form_field"})
+    # identical regardless of backend, and it actually composes (a canonical
+    # next-question exists once location + description are filled)
+    return a is not None and a == b and "?" in a
+check("#HI fast-path guards are backend-agnostic: _compose_single_round_reply is identical for Sarvam vs Gemini",
+      _fastpath_backend_agnostic())
 
 print("\nALL TESTS PASSED")

@@ -71,6 +71,12 @@ from .sarvam_speech import (
     TTS_SAMPLE_RATE,
     require_api_key,
 )
+from .sarvam_reasoning import (
+    SarvamReasoningError,
+    gemini_history_to_openai_messages,
+    gemini_tools_to_openai,
+    sarvam_generate,
+)
 
 logger = logging.getLogger("dispatcher_hindi")
 
@@ -89,6 +95,12 @@ _TEXT_MODEL = os.environ.get("GEMINI_TEXT_MODEL", "gemini-2.5-flash")
 # available in asia-south1 (measured markedly faster + tighter than us-central1).
 _HINDI_TEXT_LOCATION = os.environ.get("HINDI_VERTEX_LOCATION", "asia-south1")
 _hindi_text_client: Optional[genai.Client] = None
+
+# PRIMARY reasoning backend for the Hindi dispatcher. "sarvam" (default) uses
+# sarvam-105b-conversations (in-region India, no Vertex quota) as primary with
+# Gemini as an automatic per-turn fallback; "gemini" force-disables Sarvam (the
+# Gemini path is always the fallback and stays at asia-south1). English is unaffected.
+_HINDI_REASONING_BACKEND = os.environ.get("HINDI_REASONING_BACKEND", "sarvam").strip().lower()
 
 
 def _get_hindi_text_client() -> genai.Client:
@@ -545,6 +557,15 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
             max_output_tokens=_BRIEFING_MAX_OUTPUT_TOKENS,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
+        # Reasoning backend: Sarvam (sarvam-105b-conversations) PRIMARY + Gemini
+        # per-turn fallback. The SAME shared tool set the Gemini configs use, mapped
+        # once to OpenAI `tools` for Sarvam. Sarvam reads the (possibly Exotel-
+        # overridden) system instruction off the gen config at call time, so every
+        # deterministic layer and prompt tweak applies identically to both backends.
+        self._use_sarvam = _HINDI_REASONING_BACKEND == "sarvam"
+        self._openai_tools = gemini_tools_to_openai(_TOOL_DECLARATIONS + HELPLINE_TOOL_DECLARATIONS)
+        self._turn_backend: Optional[str] = None  # which backend served the last round
+        self._quota_hits = 0                        # Vertex 429 / RESOURCE_EXHAUSTED count for this call
 
     def _is_critical(self) -> bool:
         # Hindi-scoped: an explicit ambulance request from the caller counts as
@@ -735,9 +756,9 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
 
     def _log_turn_stats(self) -> None:
         if _LOG_LATENCY and self._turn_stats:
-            logger.info("[latency] %s", "  ".join(
-                f"{k}={v * 1000:.0f}ms" for k, v in self._turn_stats.items()
-            ))
+            stats = "  ".join(f"{k}={v * 1000:.0f}ms" for k, v in self._turn_stats.items())
+            logger.info("[latency] %s  backend=%s  q429=%d",
+                        stats, self._turn_backend or "-", self._quota_hits)
 
     # ── Session lifecycle ────────────────────────────────────────────────────
 
@@ -1153,37 +1174,23 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
 
     async def _reason(self, gemini_client, user_text: str, config=None) -> str:
         self._history.append(types.Content(role="user", parts=[types.Part(text=user_text)]))
+        self._turn_backend = None
         spoken_fallback = ""
-        for round_num in range(_MAX_TOOL_ROUNDS):
-            t0 = time.monotonic()
-            response = await self._generate_with_retry(gemini_client, config=config)
-            self._mark(f"gemini_r{round_num}", time.monotonic() - t0)
-            if response is None:
-                # Existing error handling pattern: apologize in Hindi and keep
-                # the call alive rather than dying silently.
-                return _RECONNECT_APOLOGY["hi-IN"]
-            candidate = (response.candidates or [None])[0]
-            if candidate is None or candidate.content is None:
+        for _round_num in range(_MAX_TOOL_ROUNDS):
+            got = await self._reason_round(gemini_client, config)
+            if got is None:
+                # BOTH backends failed with no usable output this round -- apologize
+                # in Hindi and keep the call alive rather than dying silently.
                 return spoken_fallback or _RECONNECT_APOLOGY["hi-IN"]
-            # Defensive: append with an explicit role rather than trusting
-            # candidate.content.role to always be "model" -- found empirically
-            # that a stricter model variant 400s the whole call ("Please use a
-            # valid role: user, model") if any earlier turn's role ever comes
-            # back unset. Costs nothing on a well-behaved model, prevents a
-            # hard failure on a less well-behaved one.
-            model_parts = candidate.content.parts or []
+            text, function_calls, model_parts = got
+            # Append the model turn to the CANONICAL Gemini-format history that
+            # drives both backends (with an explicit "model" role -- a stricter
+            # model 400s the whole call if any earlier turn's role comes back unset).
             self._history.append(types.Content(role="model", parts=model_parts))
 
-            text = " ".join(
-                p.text.strip() for p in model_parts if getattr(p, "text", None)
-            ).strip()
-            function_calls = [
-                p.function_call for p in model_parts if getattr(p, "function_call", None)
-            ]
             if not function_calls:
-                # Never return silence -- an empty candidate (blocked, or a
-                # response with no usable parts) still must produce a spoken
-                # reply rather than leave the caller hanging.
+                # Never return silence -- an empty/blocked response still produces a
+                # spoken reply rather than leaving the caller hanging.
                 return text or spoken_fallback or _RECONNECT_APOLOGY["hi-IN"]
             if text:
                 spoken_fallback = text  # speak-once: only the final round's text is voiced
@@ -1200,24 +1207,12 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
                 ))
             self._history.append(types.Content(role="user", parts=response_parts))
 
-            # Fast path (see _CANONICAL_QUESTIONS): if THIS round produced a
-            # question-free acknowledgment alongside safe tool calls, the reply
-            # is "ack + canonical question for the deterministic next_question"
-            # -- composed here in code, skipping the next ~1.1-1.4s Gemini round
-            # trip entirely. Falls through to another round whenever any guard
-            # fails.
-            #
-            # Issue 2: this now fires after ANY search/update round, not only
-            # round 0. On a dense multi-fact first utterance ("car vs car, 4
-            # injured, need ambulance urgently") the model sometimes splits its
-            # work -- classify in round 0, then update_form_field in round 1 --
-            # so round 0 has no ack to compose from. Composing after the update
-            # round too caps that case at 2 rounds instead of 3 (no separate
-            # spoken-reply round). The best case is still ONE round: the prompt
-            # asks the model to do all tool calls + the ack together in round 0,
-            # and the deterministic backstop (_apply_local_signals_from_transcript,
-            # run before this turn) has usually already recorded the facts, so
-            # the model's whole job collapses to "short ack".
+            # Fast path (see _CANONICAL_QUESTIONS) -- UNCHANGED and backend-agnostic:
+            # a question-free ack alongside only search/update tools becomes "ack +
+            # code-appended canonical next_question", skipping a whole reply round.
+            # _compose_single_round_reply's guards (fast-path tools only; non-empty
+            # ack with no '?'; a canonical question exists) still gate identically,
+            # and the canonical question is still appended in code.
             composed = self._compose_single_round_reply(
                 text, {fc.name for fc in function_calls}
             )
@@ -1231,8 +1226,57 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
                 )
                 self._turn_stats["single_round"] = 0.0  # visible in [latency] logs
                 return composed
-        logger.warning("Gemini used %d tool rounds without a final answer", _MAX_TOOL_ROUNDS)
+        logger.warning("Reasoning used %d tool rounds without a final answer", _MAX_TOOL_ROUNDS)
         return spoken_fallback or _RECONNECT_APOLOGY["hi-IN"]
+
+    async def _reason_round(self, gemini_client, config):
+        """One reasoning round, BACKEND-AGNOSTIC. Returns (text, function_calls,
+        model_parts) -- function_calls are types.FunctionCall objects and model_parts
+        are types.Content parts, IDENTICAL in shape per backend so the rest of
+        _reason (tool dispatch, fast-path guards, _history mirroring) is untouched --
+        or None on total failure.
+
+        Sarvam (sarvam-105b-conversations) is PRIMARY; ANY Sarvam failure this round
+        (exception / non-200 / empty / malformed tool call) falls back to the Gemini
+        path FOR THIS ROUND. HINDI_REASONING_BACKEND=gemini skips Sarvam entirely.
+        Both paths read the same canonical history + the same (possibly Exotel-
+        overridden) system instruction, so the deterministic flow is identical."""
+        briefing = config is self._briefing_config
+        if self._use_sarvam:
+            t0 = time.monotonic()
+            try:
+                system_prompt = (self._briefing_config if briefing else self._gen_config).system_instruction
+                messages = gemini_history_to_openai_messages(self._history, system_prompt)
+                max_tokens = _BRIEFING_MAX_OUTPUT_TOKENS if briefing else _MAX_OUTPUT_TOKENS
+                result = await sarvam_generate(messages, self._openai_tools, max_tokens=max_tokens)
+                self._mark("sarvam", time.monotonic() - t0)
+                self._turn_backend = "sarvam"
+                if result.reasoning_tokens:  # expected 0 with reasoning_effort:low -- warn loudly if not
+                    logger.warning("Sarvam returned %d reasoning tokens (reasoning_effort:low expected 0)",
+                                   result.reasoning_tokens)
+                fcs = [types.FunctionCall(id=tc.id, name=tc.name, args=tc.args) for tc in result.tool_calls]
+                model_parts = ([types.Part(text=result.text)] if result.text else []) + \
+                    [types.Part(function_call=fc) for fc in fcs]
+                return result.text, fcs, model_parts
+            except SarvamReasoningError as e:
+                self._mark("sarvam_fail", time.monotonic() - t0)
+                logger.warning("Sarvam reasoning failed -> Gemini fallback: %s", str(e)[:180])
+                # fall through to the Gemini fallback below
+
+        # Gemini fallback (also the primary path when HINDI_REASONING_BACKEND=gemini).
+        t0 = time.monotonic()
+        response = await self._generate_with_retry(gemini_client, config=config)
+        self._mark("gemini", time.monotonic() - t0)
+        self._turn_backend = "gemini"
+        if response is None:
+            return None
+        candidate = (response.candidates or [None])[0]
+        if candidate is None or candidate.content is None:
+            return None
+        model_parts = candidate.content.parts or []
+        text = " ".join(p.text.strip() for p in model_parts if getattr(p, "text", None)).strip()
+        function_calls = [p.function_call for p in model_parts if getattr(p, "function_call", None)]
+        return text, function_calls, model_parts
 
     def _compose_single_round_reply(self, ack: str, fc_names: set) -> Optional[str]:
         """Compose "model's acknowledgment + code-appended canonical question"
@@ -1279,7 +1323,9 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
                     ),
                     timeout=timeout,
                 )
-            except Exception:
+            except Exception as e:
+                if getattr(e, "code", None) == 429 or "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    self._quota_hits += 1  # counted into the [latency] q429 field
                 logger.exception("Gemini text call failed (attempt %d/2)", attempt + 1)
                 await asyncio.sleep(0.5)
         return None
