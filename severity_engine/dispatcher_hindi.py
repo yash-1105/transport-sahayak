@@ -358,6 +358,19 @@ _CANONICAL_QUESTIONS: dict[str, str] = {
         "कुल कितनी गाड़ियाँ थीं, और क्या किसी को चोट लगी है?",
 }
 
+# Deterministic short acknowledgments for the single-round fast path when the
+# reasoning model returns a tool call with EMPTY content (Sarvam does this on
+# every tool turn -- unlike Gemini, which writes an ack alongside the call). The
+# canonical next_question is the substantive content; a brief ack before it is
+# all the fast path ever needed, so composing one in code keeps the fast path
+# firing (one round, terse reply) instead of forcing a second reasoning round.
+# Masculine grammar to match SARVAM_TTS_SPEAKER=shubh (see the grammar-sync note
+# in CLAUDE.md); rotated by turn index so the caller doesn't hear the same word
+# every turn. Empathy for critical incidents is ALSO carried by the interim
+# dispatch reassurance (_maybe_interim_dispatch), spoken before this reply.
+_FAST_ACK_NEUTRAL = ("ठीक है।", "जी, समझ गया।", "अच्छा, ठीक है।", "जी।")
+_FAST_ACK_CRITICAL = ("ओह... समझ गया।", "ठीक है, मैं देख रहा हूँ।", "जी, आप घबराइए मत।")
+
 # The only tools whose results the fast path can safely skip showing the
 # model: their outcome is fully reflected in _compute_still_missing (which
 # the code reads directly). Anything else (submit_incident's next_step
@@ -1310,14 +1323,24 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
                     model_parts = ([types.Part(text=result.text)] if result.text else []) + \
                         [types.Part(function_call=fc) for fc in fcs]
                     return result.text, fcs, model_parts
-                except (SarvamReasoningError, asyncio.TimeoutError) as e:
-                    label = "timeout" if isinstance(e, asyncio.TimeoutError) else str(e)[:140]
+                except asyncio.TimeoutError:
+                    # A timeout means Sarvam is slow RIGHT NOW -- a second 5s wait
+                    # would just stack another 5s before the same fallback. Don't
+                    # retry; go straight to fail-fast Gemini (caps this at ~5s,
+                    # not 2x5s). This is what turned a real call's round into a
+                    # 10s stall before the Gemini fallback even started.
+                    self._mark("sarvam_fail", time.monotonic() - t0)
+                    logger.warning("Sarvam timed out (>%ss) -> FAIL-FAST Gemini fallback", _SARVAM_TIMEOUT_S)
+                    break
+                except SarvamReasoningError as e:
+                    # A hard error (transport/HTTP/malformed) CAN be transient --
+                    # retry once, then fail-fast to Gemini.
                     if attempt + 1 < _SARVAM_ATTEMPTS:
-                        logger.warning("Sarvam attempt %d failed (%s), retrying once", attempt + 1, label)
+                        logger.warning("Sarvam attempt %d failed (%s), retrying once", attempt + 1, str(e)[:140])
                         continue
                     self._mark("sarvam_fail", time.monotonic() - t0)
-                    logger.warning("Sarvam failed %dx (%s) -> FAIL-FAST Gemini fallback", _SARVAM_ATTEMPTS, label)
-            # every Sarvam attempt failed -> FAIL-FAST Gemini (hard-capped, no 15s stall)
+                    logger.warning("Sarvam failed %dx (%s) -> FAIL-FAST Gemini fallback", _SARVAM_ATTEMPTS, str(e)[:140])
+            # Sarvam failed/timed out -> FAIL-FAST Gemini (hard-capped, no 15s stall)
             return await self._gemini_round(gemini_client, config, fast=True)
 
         # Gemini primary (HINDI_REASONING_BACKEND=gemini): its own 2-attempt retry.
@@ -1350,8 +1373,10 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         what the second round was for:
           - only search_incident_type / update_form_field ran (anything else
             has a result the model genuinely needs to read before speaking);
-          - the model wrote a non-empty acknowledgment with NO question of its
-            own (a "?" anywhere means appending ours could double-question);
+          - the model's acknowledgment has NO question of its own (a "?" anywhere
+            means appending ours could double-question). An EMPTY ack is fine and
+            EXPECTED with Sarvam (it returns tool calls with no content) -- a
+            short deterministic ack is substituted so the fast path still fires;
           - the deterministic next_question exists AND has a canonical Hindi
             phrasing (next_question=None is the summarize-and-confirm stage,
             which genuinely needs the model)."""
@@ -1360,7 +1385,7 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         # Strip leaked meta BEFORE the guards so it neither reaches speech nor
         # falsely trips the "?" guard (a leaked "(next_question: ...?)").
         ack = _strip_meta_leak((ack or "").strip())
-        if not ack or "?" in ack or self.state.submitted:
+        if "?" in ack or self.state.submitted:  # NOTE: empty ack is allowed (see below)
             return None
         missing = self._compute_still_missing()
         if not missing:
@@ -1368,10 +1393,30 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         question = _CANONICAL_QUESTIONS.get(missing[0])
         if question is None:
             return None
+        if not ack:
+            # Empty ack: Sarvam returns tool calls with NO content on EVERY tool
+            # turn AND (per the prompt + observed behavior) makes ALL of a
+            # statement's tool calls in this one round, so composing now is
+            # correct -- rather than lose the fast path to a second reasoning
+            # round (double latency + a verbose free-form reply + the round-1
+            # timeout seen on a real call), substitute a short tone-aware ack.
+            # A GEMINI round with an empty ack is the rarer "split across rounds"
+            # case (round 1 still has tool calls to make), so keep bailing there
+            # -- this keeps English/Gemini semantics byte-identical.
+            if self._turn_backend != "sarvam":
+                return None
+            ack = self._default_fast_ack()
         if ack[-1] not in "।.!…":
             ack += "।"
         logger.info("Single-round fast path: appended canonical question for %r", missing[0])
         return f"{ack} {question}"
+
+    def _default_fast_ack(self) -> str:
+        """A short, tone-aware acknowledgment for the fast path when the model
+        gave none (Sarvam). Rotates by turn index to avoid a repetitive opener;
+        critical incidents get a warmer variant."""
+        pool = _FAST_ACK_CRITICAL if self._is_critical() else _FAST_ACK_NEUTRAL
+        return pool[self._turn_index % len(pool)]
 
     async def _generate_gemini(self, gemini_client, config, fast: bool):
         """One (fast=True) or up-to-two (fast=False) Gemini generate_content calls,

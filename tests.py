@@ -1309,6 +1309,8 @@ check("backstop: a genuine single-vehicle narrative ('one car broke down') still
 # to the second round (see _compose_single_round_reply).
 from severity_engine.dispatcher_hindi import (
     _CANONICAL_QUESTIONS,
+    _FAST_ACK_NEUTRAL,
+    _FAST_ACK_CRITICAL,
     HindiDispatcherSession,
 )
 from severity_engine.dispatcher_live import (
@@ -1595,6 +1597,31 @@ s_done.state.flags_discussed = {"Trapped", "Fire", "Hazardous material"}
 check("fast path refuses at the summarize-and-confirm stage (nothing missing)",
       s_done._compose_single_round_reply("ठीक है।", {"update_form_field"}) is None)
 
+# The single biggest Exotel latency finding (2026-08): Sarvam returns tool calls
+# with EMPTY content, so the fast path used to bail (not ack) and force a whole
+# second reasoning round -> double latency + a verbose free-form reply + the
+# round-1 timeout that fell back to Gemini. The fast path must now FIRE with an
+# empty ack by substituting a short deterministic ack.
+s_empty = _fresh_hindi_session()
+s_empty._turn_backend = "sarvam"     # empty-ack composing is SARVAM-only (Gemini bails -> split rounds)
+composed_empty = s_empty._compose_single_round_reply("", {"update_form_field"})
+check("fast path FIRES with an EMPTY ack on SARVAM (tool-call, no content): default ack + canonical question",
+      composed_empty is not None and "?" in composed_empty
+      and any(composed_empty.startswith(a) for a in _FAST_ACK_NEUTRAL))
+s_gem = _fresh_hindi_session()
+s_gem._turn_backend = "gemini"       # a Gemini empty-ack round is the "split" case -> must still bail
+check("empty ack on GEMINI still bails (split-across-rounds preserved, English/Gemini untouched)",
+      s_gem._compose_single_round_reply("", {"update_form_field"}) is None)
+s_crit = _fresh_hindi_session()
+s_crit._turn_backend = "sarvam"
+s_crit._ambulance_requested = True   # -> _is_critical() True -> warmer ack pool
+composed_crit = s_crit._compose_single_round_reply("", {"update_form_field"})
+check("fast path empty-ack uses the WARMER pool for a critical incident",
+      composed_crit is not None and any(composed_crit.startswith(a) for a in _FAST_ACK_CRITICAL))
+check("empty-ack fast path is DISABLED once submitted (guard unchanged)",
+      s_crit.state.__setattr__("submitted", True) or
+      s_crit._compose_single_round_reply("", {"update_form_field"}) is None)
+
 class _FakeGeminiClient:
     """Minimal stand-in for the google-genai client: returns canned responses
     and counts calls, so the fast path's one-round-vs-two behavior is
@@ -1668,25 +1695,36 @@ async def _reason_injury_continues_collecting():
         and s._is_critical()          # still flagged critical (drives auto-submit + interim dispatch)
     )
 
-async def _reason_falls_back_without_ack_text():
-    from google.genai import types as gtypes
-    s = _fresh_hindi_session()
-    fake = _FakeGeminiClient([
-        _model_response([  # round 0: tool call but NO ack text -> must do round 1
-            gtypes.Part(function_call=gtypes.FunctionCall(
-                name="update_form_field", args={"field": "casualties", "number_value": 2})),
-        ]),
-        _model_response([gtypes.Part(text="समझ गया... क्या कोई फँसा हुआ है?")]),
-    ])
-    reply = await s._reason(fake, "दो लोग घायल हैं")
-    return fake.calls == 2 and reply == "समझ गया... क्या कोई फँसा हुआ है?"
+async def _reason_composes_with_empty_ack():
+    # 2026-08 Exotel fix, END-TO-END on the real SARVAM path: Sarvam returns a
+    # tool call with EMPTY content every tool turn. That now composes in ONE
+    # round (default ack + canonical question) instead of forcing a second
+    # reasoning round -- the round that doubled latency, ran long, and timed out.
+    from severity_engine import dispatcher_hindi as dh
+    from severity_engine.sarvam_reasoning import NormalizedResult, NormalizedToolCall
+    s = _fresh_hindi_session()   # _use_sarvam True (default backend is 'sarvam')
+    calls = {"n": 0}
+    async def _fake_sarvam(messages, tools, **k):
+        calls["n"] += 1
+        return NormalizedResult("", [NormalizedToolCall(
+            "call_0", "update_form_field", {"field": "casualties", "number_value": 2})])
+    orig = dh.sarvam_generate
+    dh.sarvam_generate = _fake_sarvam
+    try:
+        reply = await s._reason(None, "दो लोग घायल हैं")
+    finally:
+        dh.sarvam_generate = orig
+    return (calls["n"] == 1 and s._turn_backend == "sarvam"
+            and s.state.casualties == 2
+            and any(reply.endswith(q) for q in _CANONICAL_QUESTIONS.values())
+            and any(reply.startswith(a) for a in _FAST_ACK_NEUTRAL + _FAST_ACK_CRITICAL))
 
 check("fast path answers in ONE Gemini round and mirrors the reply into history",
       asyncio.run(_reason_uses_single_round()))
 check("#4 Hindi injury report keeps collecting (fast path fires with the next question, not fast-track submit)",
       asyncio.run(_reason_injury_continues_collecting()))
-check("missing ack text still falls back to the normal second round",
-      asyncio.run(_reason_falls_back_without_ack_text()))
+check("empty round-0 ack on SARVAM now composes in ONE round (no second round), end-to-end",
+      asyncio.run(_reason_composes_with_empty_ack()))
 
 async def _reason_composes_after_split_update_round():
     # Issue 2: the model splits its work -- round 0 has a tool call but NO ack,
@@ -2726,8 +2764,12 @@ def _change2_guards_unchanged():
     s = _HI.HindiDispatcherSession(_FillerWS())
     non_fast_tool = s._compose_single_round_reply("ओह ठीक है", {"submit_incident"})  # tool guard -> None
     ack_has_question = s._compose_single_round_reply("क्या हुआ?", {"update_form_field"})  # '?' guard -> None
-    empty_ack = s._compose_single_round_reply("", {"update_form_field"})  # empty ack -> None
-    return non_fast_tool is None and ack_has_question is None and empty_ack is None
+    # NOTE: an empty ack ALONE no longer bails (2026-08 Sarvam fix -- see the
+    # empty-ack fast-path tests above). This session returns None only because a
+    # non-accident session has nothing missing; the tool + '?' guards are what
+    # this test pins.
+    nothing_missing = s._compose_single_round_reply("ओह ठीक है", {"update_form_field"})  # no accident mode -> None
+    return non_fast_tool is None and ack_has_question is None and nothing_missing is None
 check("#HI Change 2: fast-path guards unchanged (non-fast tool / ack-with-'?' / empty ack all still fall back)",
       _change2_guards_unchanged())
 
@@ -2888,6 +2930,29 @@ async def _sarvam_retry_then_fallback():
             and calls["sarvam"] == dh._SARVAM_ATTEMPTS and calls["fast"] is True)
 check("#HI Sarvam retried N× then FAIL-FAST Gemini fallback (fast=True) -> a 15s stall is impossible",
       asyncio.run(_sarvam_retry_then_fallback()))
+
+async def _sarvam_timeout_no_retry():
+    s, dh = _mk_reason_session(use_sarvam=True)
+    orig = dh.sarvam_generate
+    calls = {"sarvam": 0, "fast": None}
+    async def _hang(*a, **k):
+        calls["sarvam"] += 1
+        raise asyncio.TimeoutError()      # simulate wait_for's timeout firing
+    dh.sarvam_generate = _hang
+    async def _fake_gemini(gemini_client=None, config=None, fast=False):
+        calls["fast"] = fast
+        return _gemini_response("जी")
+    s._generate_gemini = _fake_gemini
+    try:
+        text, fcs, parts = await s._reason_round(None, None)
+    finally:
+        dh.sarvam_generate = orig
+    # A timeout must NOT be retried (that stacked a second 5s wait -> the 10s
+    # stall seen on a real call) -- Sarvam called exactly once, then fail-fast.
+    return (text == "जी" and s._turn_backend == "gemini"
+            and calls["sarvam"] == 1 and calls["fast"] is True)
+check("#HI Sarvam TIMEOUT is not retried (1 attempt) -> straight to fail-fast Gemini (no stacked 10s wait)",
+      asyncio.run(_sarvam_timeout_no_retry()))
 
 async def _backend_env_gemini_skips_sarvam():
     s, dh = _mk_reason_session(use_sarvam=False)   # HINDI_REASONING_BACKEND=gemini equivalent
