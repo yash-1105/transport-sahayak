@@ -153,7 +153,7 @@ _SARVAM_ATTEMPTS = int(os.environ.get("HINDI_SARVAM_ATTEMPTS", "2"))  # primary 
 # whole turn is bounded regardless of the keep-alive client's own httpx timeout:
 # worst case = _SARVAM_ATTEMPTS x _SARVAM_TIMEOUT_S + _GEMINI_FALLBACK_TIMEOUT_S
 # (2 x 5 + 3.5 = 13.5s < 15s). Sarvam p50 is ~1.8s, so this only bites the rare tail.
-_SARVAM_TIMEOUT_S = float(os.environ.get("SARVAM_REASONING_TIMEOUT_S", "6.5"))  # 5->6.5: on a longer multi-turn context Sarvam runs ~2.8-5s/round; a 5s cap tripped genuine-but-slow rounds into the (trial, slower) Gemini fallback
+_SARVAM_TIMEOUT_S = float(os.environ.get("SARVAM_REASONING_TIMEOUT_S", "8"))  # 6.5->8: Sarvam's OWN API runs 5-7s/round under India-peak load (benchmarked ~1.8s off-peak). A 7s round timing out at 6.5s -> trial-Gemini fallback costs 6.5+3.5=10s; letting Sarvam finish is ~7s AND avoids the (slow, trial) Gemini the user is trying to avoid. Worst-case turn: 8 + 3.5 (fail-fast Gemini, no retry) = 11.5s < 15s.
 # Each round is a full network round-trip to Vertex. The prompt now demands
 # ALL of a turn's tool calls happen together in one round (see FORM FILLING),
 # so 4 is generous headroom (typically 1 tool round + 1 final-text round).
