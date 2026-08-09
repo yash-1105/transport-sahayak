@@ -841,7 +841,11 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
         # never cancelled mid-handshake. Timeout above the wait_for cap so the
         # dispatcher-level _SARVAM_TIMEOUT_S stays the single binding bound.
         if self._use_sarvam:
-            self._sarvam_http = httpx.AsyncClient(timeout=_SARVAM_TIMEOUT_S + 1.0)
+            # Client (httpx) timeout must exceed the LONGEST per-call wait_for -- the
+            # briefing uses _BRIEFING_TIMEOUT_S, longer than a regular turn's
+            # _SARVAM_TIMEOUT_S -- else the client would abort the briefing generation
+            # before its wait_for cap and it would (wrongly) fall back to Gemini.
+            self._sarvam_http = httpx.AsyncClient(timeout=max(_SARVAM_TIMEOUT_S, _BRIEFING_TIMEOUT_S) + 1.0)
         try:
             # Resolve GPS upfront (needed to build the first turn's instruction);
             # the pump is already running so the browser's location_result can
@@ -1312,12 +1316,20 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
             system_prompt = (self._briefing_config if briefing else self._gen_config).system_instruction
             messages = gemini_history_to_openai_messages(self._history, system_prompt)
             max_tokens = _BRIEFING_MAX_OUTPUT_TOKENS if briefing else _MAX_OUTPUT_TOKENS
+            # The closing briefing is a ONE-TIME ~700-token generation (responder
+            # ETAs + SOPs + closing) -- it needs far more time than a short
+            # conversational turn. An 8s cap trips it into the fast Gemini fallback,
+            # which is ALSO too short for that length (esp. now that Vertex/us-central1
+            # is farther from the Singapore region), so BOTH backends fail and the
+            # caller hears "तकनीकी समस्या" with no ETAs/SOPs. Give the briefing the
+            # generous _BRIEFING_TIMEOUT_S on both backends.
+            sarvam_timeout = _BRIEFING_TIMEOUT_S if briefing else _SARVAM_TIMEOUT_S
             t0 = time.monotonic()
             for attempt in range(_SARVAM_ATTEMPTS):  # primary + one retry BEFORE falling back
                 try:
                     result = await asyncio.wait_for(
                         sarvam_generate(messages, self._openai_tools, max_tokens=max_tokens, client=self._sarvam_http),
-                        timeout=_SARVAM_TIMEOUT_S)
+                        timeout=sarvam_timeout)
                     self._mark("sarvam", time.monotonic() - t0)
                     self._turn_backend = "sarvam"
                     if result.reasoning_tokens:  # expected 0 with reasoning_effort:low -- warn loudly if not
@@ -1344,8 +1356,11 @@ class HindiDispatcherSession(HelplineToolsMixin, DispatcherSession):
                         continue
                     self._mark("sarvam_fail", time.monotonic() - t0)
                     logger.warning("Sarvam failed %dx (%s) -> FAIL-FAST Gemini fallback", _SARVAM_ATTEMPTS, str(e)[:140])
-            # Sarvam failed/timed out -> FAIL-FAST Gemini (hard-capped, no 15s stall)
-            return await self._gemini_round(gemini_client, config, fast=True)
+            # Sarvam failed/timed out -> Gemini. Regular turns fail-fast (3.5s cap,
+            # no 15s stall); the BRIEFING uses the generous path (fast=False ->
+            # _BRIEFING_TIMEOUT_S + 2 attempts) so a long briefing can actually
+            # finish instead of the caller getting an apology with no ETAs/SOPs.
+            return await self._gemini_round(gemini_client, config, fast=not briefing)
 
         # Gemini primary (HINDI_REASONING_BACKEND=gemini): its own 2-attempt retry.
         return await self._gemini_round(gemini_client, config, fast=False)

@@ -2988,6 +2988,29 @@ async def _sarvam_timeout_no_retry():
 check("#HI Sarvam TIMEOUT is not retried (1 attempt) -> straight to fail-fast Gemini (no stacked 10s wait)",
       asyncio.run(_sarvam_timeout_no_retry()))
 
+async def _briefing_fallback_is_generous():
+    # Regression: the closing briefing is a ~700-token generation. When Sarvam
+    # times out on it, the fallback MUST use the generous Gemini path (fast=False
+    # -> _BRIEFING_TIMEOUT_S, 2 attempts), NOT the 3.5s fail-fast -- else a long
+    # briefing can't finish and the caller gets "तकनीकी समस्या" with no ETAs/SOPs.
+    s, dh = _mk_reason_session(use_sarvam=True)
+    class _BCfg: system_instruction = "BRIEFING SYS"
+    s._briefing_config = _BCfg()
+    calls = {"fast": None}
+    async def _boom(messages, tools, **k): raise asyncio.TimeoutError()
+    orig = dh.sarvam_generate; dh.sarvam_generate = _boom
+    async def _fake_gemini(gemini_client=None, config=None, fast=False):
+        calls["fast"] = fast
+        return _gemini_response("आपातकालीन ब्रीफिंग")
+    s._generate_gemini = _fake_gemini
+    try:
+        text, fcs, parts = await s._reason_round(None, s._briefing_config)
+    finally:
+        dh.sarvam_generate = orig
+    return text == "आपातकालीन ब्रीफिंग" and calls["fast"] is False
+check("#HI briefing turn: Sarvam timeout -> GENEROUS Gemini fallback (fast=False), not the 3.5s fail-fast",
+      asyncio.run(_briefing_fallback_is_generous()))
+
 async def _backend_env_gemini_skips_sarvam():
     s, dh = _mk_reason_session(use_sarvam=False)   # HINDI_REASONING_BACKEND=gemini equivalent
     orig = dh.sarvam_generate
