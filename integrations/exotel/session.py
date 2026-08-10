@@ -25,6 +25,7 @@ from severity_engine.dispatcher_hindi import (
     _HINDI_OPENING_LINE,
     _OPENING_FALLBACK_QUESTION,
 )
+from severity_engine.dispatcher_live import DispatcherSession
 
 from . import config, protocol, services
 from .audio_adapter import AudioAdapter
@@ -54,6 +55,15 @@ _COMPLAINT_FILLER = "एक पल... मैं आपकी शिकायत 
 # and is a common divisor of a 20 ms frame at 8/16/24 kHz, so this holds at any rate.
 _OUT_FRAME_ALIGN = 320
 _OUT_FRAME_MAX = 32000  # 100 * 320; ~200 ms @ 8 kHz / ~100 ms @ 16 kHz, well under 100 KB
+
+# Echo-guard tuning (English/NO_INTERRUPTION only). Session "status" states in which
+# the agent is NOT listening -> caller media is dropped. _GATE_MARGIN_S mirrors the
+# browser mic-gate's 250 ms drain margin (keep dropping briefly after the agent's
+# audio finishes, since a phone's speaker tail can still echo). Session audio is
+# 24 kHz PCM16 (Gemini Live native-audio / TTS) -> _AUDIO_RATE_OUT bytes/sec.
+_GATE_MARGIN_S = 0.25
+_AGENT_SPEAKING_STATES = frozenset({"speaking", "thinking", "briefing", "reconnecting"})
+_SESSION_AUDIO_BYTES_PER_S = 24000 * 2  # 24 kHz * 2 bytes (PCM16), before resampling to Exotel
 
 # The shared Hindi system prompt tells the model to ask the caller to send their
 # location via the browser's MAP-PIN BUTTON — there is no such button on a phone,
@@ -94,7 +104,8 @@ def _phone_location_prompt(base: str) -> str:
 class ExotelWebSocketAdapter:
     """Quacks like a FastAPI WebSocket for the session; wraps the real Exotel WS."""
 
-    def __init__(self, exotel_ws, exotel_rate: int = 8000):
+    def __init__(self, exotel_ws, exotel_rate: int = 8000, gate_caller_audio: bool = False,
+                 locale: str = "hi-IN"):
         self._exotel = exotel_ws
         self._audio = AudioAdapter(exotel_rate)
         self._inbound: "asyncio.Queue[dict]" = asyncio.Queue()
@@ -106,13 +117,31 @@ class ExotelWebSocketAdapter:
         self._t: dict = {}
         self._t0 = time.monotonic()
         self._summary_logged = False
-        # exposed to ExotelHindiSession's location override + the endpoint
+        # Echo guard for the English (Gemini Live, NO_INTERRUPTION) pipeline only.
+        # The browser has a mic-gate (stops sending audio while the agent speaks) as
+        # the 2nd echo layer; a phone has no such gate, so we replace it HERE: while
+        # the agent is speaking, caller media is dropped instead of fed back into
+        # Gemini Live (which would otherwise process its own voice as a caller turn --
+        # the exact bug the browser mic-gate fixed). Hindi keeps barge-in: it is
+        # created with gate_caller_audio=False, so this whole path is a no-op for it.
+        self._gate_caller_audio = gate_caller_audio
+        self._agent_speaking = False        # driven by the session's "status" events
+        self._playback_until = 0.0          # monotonic; extended by every audio chunk sent out
+        # exposed to the Exotel session location override + the endpoint
         self.stream_sid: Optional[str] = None
         self.call_sid: Optional[str] = None
         self.from_number: Optional[str] = None
         self.last_caller_utterance: str = ""
         self.call_complete = False
-        self.query_params = {"locale": "hi-IN"}  # session doesn't read this; present for safety
+        self.query_params = {"locale": locale}  # session doesn't read this; present for safety
+
+    def _agent_is_speaking(self) -> bool:
+        """True while the agent's audio is going out OR still playing on the phone.
+        Combines the session's own status (`speaking`/`thinking`/…) with a
+        playback-time estimate from the bytes we've sent (the adapter dumps audio to
+        Exotel faster than real time, so `status: listening` can arrive while the
+        tail is still playing -- mirror the browser's playback-queue drain wait)."""
+        return self._agent_speaking or time.monotonic() < self._playback_until + _GATE_MARGIN_S
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -152,6 +181,11 @@ class ExotelWebSocketAdapter:
                                 self.call_sid, mask_phone(self.from_number), self._audio.exotel_rate)
                 elif ev.kind == "media" and ev.audio:
                     self._stamp("first_audio_in")
+                    if self._gate_caller_audio and self._agent_is_speaking():
+                        # English/NO_INTERRUPTION: don't feed the agent's own voice
+                        # (speaker echo on the line) back into Gemini Live while it
+                        # speaks. Hindi never enters here (gate off) -> barge-in kept.
+                        continue
                     pcm16k = self._audio.exotel_to_pipeline(ev.audio)
                     self._inbound.put_nowait({"type": "websocket.receive", "bytes": pcm16k})
                     config.dbg(logger, "← media %dB @%dHz -> %dB @16k",
@@ -174,6 +208,12 @@ class ExotelWebSocketAdapter:
         if self._closed or not data:
             return
         self._stamp("first_reply_audio")
+        # Extend the playback estimate by this chunk's real-time duration (we send
+        # to Exotel faster than it plays), so the echo gate keeps caller media out
+        # until the agent's audio has actually finished on the line.
+        if self._gate_caller_audio:
+            now = time.monotonic()
+            self._playback_until = max(now, self._playback_until) + len(data) / _SESSION_AUDIO_BYTES_PER_S
         self._out_buf += self._audio.pipeline_to_exotel(data)
         await self._flush_out(final=False)
 
@@ -202,7 +242,11 @@ class ExotelWebSocketAdapter:
         """Handle the session's outgoing control events. Browser-only events are
         ignored; the round-trips are answered server-side and injected back."""
         t = payload.get("type")
-        if t == "transcript" and payload.get("role") in ("user", "caller"):
+        if t == "status" and self._gate_caller_audio:
+            # English echo guard: track whether the agent is speaking so the read
+            # loop can drop caller media while it is (see _agent_is_speaking).
+            self._agent_speaking = payload.get("state") in _AGENT_SPEAKING_STATES
+        elif t == "transcript" and payload.get("role") in ("user", "caller"):
             self._stamp("first_stt")
             self.last_caller_utterance = payload.get("text") or self.last_caller_utterance
             config.dbg(logger, "STT transcript (%d chars)", len(payload.get("text") or ""))
@@ -306,25 +350,57 @@ class ExotelWebSocketAdapter:
         self._inject({"type": "dispatch_update", "services": svc})
 
 
-class ExotelHindiSession(HindiDispatcherSession):
-    """HindiDispatcherSession over an Exotel call. Overrides ONLY location
-    acquisition (a phone has no GPS), by COMPOSING a GeocodeLocationProvider that
-    turns the caller's spoken landmark into a location object. All reasoning /
-    dispatch / SOP / tool logic is inherited unchanged.
+class _SpokenLocationMixin:
+    """Location-from-speech for the phone path — shared by BOTH the Hindi and the
+    English Exotel sessions (one source, not two). The base pipelines' location
+    tool does a browser round-trip (request_location -> wait for device GPS) that
+    never completes on a phone; this resolves location by forward-geocoding the
+    caller's spoken landmark instead (GeocodeLocationProvider: geocode -> ask for a
+    clearer landmark -> terminate; NEVER a default or fake coordinate). Only the
+    location TOOL is overridden — all reasoning/dispatch/SOP logic stays in the
+    base pipeline. Uses `self.websocket` (the ExotelWebSocketAdapter), `self.state`,
+    `self._safe_send_json`, `self._state_block` — all present on both base sessions."""
 
-    Why a subclass (inheritance) at all, when the transport itself is composed:
-    the location tools live on the base session and gate on `self.state.location`,
-    so the only place to swap GPS for geocoding without editing the browser's
-    source-of-truth files is to override those three methods here. Each simply
-    delegates to the composed provider — the geocode/retry/terminate policy is not
-    duplicated in the session; it lives once in location.py."""
-
-    def __init__(self, adapter: ExotelWebSocketAdapter):
-        super().__init__(adapter)
+    def _init_spoken_location(self) -> None:
         # Composition: the provider reads the latest caller utterance the adapter
         # tracks. The dispatcher doesn't know or care that location came from speech.
         self._location = GeocodeLocationProvider(
             landmark_source=lambda: getattr(self.websocket, "last_caller_utterance", "") or "")
+
+    async def _ensure_location(self) -> Optional[LocationOutcome]:
+        """None if location is already known or was just acquired (state.location
+        set as a side effect); otherwise the outcome the caller should act on
+        (silent / ask-for-landmark / terminate)."""
+        if self.state.location:
+            return None
+        outcome = await self._location.acquire()
+        if outcome.ok:
+            self.state.location = outcome.location
+            await self._safe_send_json({"type": "form_update", "field": "location", "value": outcome.location})
+            return None
+        return outcome
+
+    async def _tool_get_current_location(self) -> dict:
+        if self.state.location:
+            return {"status": "already_have_location", **self.state.location, **self._state_block()}
+        outcome = await self._ensure_location()
+        if outcome is None:
+            return {"status": "ok", **self.state.location, **self._state_block()}
+        result = {"status": "unavailable", **self._state_block()}
+        if not outcome.silent:
+            result["next_step"] = outcome.next_step  # ask-for-landmark / terminate guidance
+        return result
+
+
+class ExotelHindiSession(_SpokenLocationMixin, HindiDispatcherSession):
+    """HindiDispatcherSession over an Exotel call. Overrides ONLY location
+    acquisition (a phone has no GPS) via _SpokenLocationMixin, plus a proactive
+    location backstop in _reason and the facility/complaint tools' location gate.
+    All reasoning / dispatch / SOP / latency logic is inherited unchanged."""
+
+    def __init__(self, adapter: ExotelWebSocketAdapter):
+        super().__init__(adapter)
+        self._init_spoken_location()  # compose the geocode-from-speech provider (mixin)
         # Phone-call location prompt: rewrite the two gen configs the parent built
         # so the model accepts an APPROXIMATE spoken location and never asks the
         # caller to use a (non-existent) map-pin button. Scoped to THIS session's
@@ -376,30 +452,6 @@ class ExotelHindiSession(HindiDispatcherSession):
             except Exception:
                 logger.debug("filler speak failed", exc_info=True)
 
-    async def _ensure_location(self) -> Optional[LocationOutcome]:
-        """None if location is already known or was just acquired (state.location
-        set as a side effect); otherwise the outcome the caller should act on
-        (silent / ask-for-landmark / terminate)."""
-        if self.state.location:
-            return None
-        outcome = await self._location.acquire()
-        if outcome.ok:
-            self.state.location = outcome.location
-            await self._safe_send_json({"type": "form_update", "field": "location", "value": outcome.location})
-            return None
-        return outcome
-
-    async def _tool_get_current_location(self) -> dict:
-        if self.state.location:
-            return {"status": "already_have_location", **self.state.location, **self._state_block()}
-        outcome = await self._ensure_location()
-        if outcome is None:
-            return {"status": "ok", **self.state.location, **self._state_block()}
-        result = {"status": "unavailable", **self._state_block()}
-        if not outcome.silent:
-            result["next_step"] = outcome.next_step  # ask-for-landmark / terminate guidance
-        return result
-
     async def _tool_find_nearest_facility(self, facility_type: str = "", capability: str = "") -> dict:
         if not self.state.location:
             outcome = await self._ensure_location()
@@ -418,3 +470,74 @@ class ExotelHindiSession(HindiDispatcherSession):
                         "message": outcome.next_step or "Ask the caller where the problem is (a nearby landmark), then try again."}
         return await self._speak_filler_during(
             _COMPLAINT_FILLER, super()._tool_lodge_complaint(description=description, complaint_type=complaint_type))
+
+
+# The English (Gemini Live) system prompt tells the caller to use the browser's
+# MAP-PIN BUTTON for location — there is no such button on a phone. For the Exotel
+# (phone) path only, rewrite that instruction: accept the caller's APPROXIMATE
+# spoken location and move on; never ask them to pin, tap, text, or open an app.
+# Mirrors _phone_location_prompt (Hindi) but for the English prompt wording.
+_EXOTEL_LOCATION_ADDENDUM_EN = (
+    "\n\nPHONE-CALL LOCATION RULE (this overrides any 'map-pin' / 'mark your location' "
+    "instruction above): this is a real phone call — there is no app, screen, button, map, "
+    "or text message. NEVER ask the caller to pin, tap, text, or open anything. Whatever "
+    "place the caller says — an area, locality, landmark, petrol pump, toll plaza, highway "
+    "number, or town/village name — accept that approximate location and continue; never "
+    "demand an exact address or GPS. If you do not have a location yet, ask ONCE, naturally, "
+    "for a nearby landmark (e.g. \"what area or landmark are you near?\")."
+)
+
+
+def _phone_location_prompt_en(base: str) -> str:
+    """Rewrite the English prompt's browser map-pin location instruction for a phone
+    call (approximate spoken location, never pin/text). Returns base + the override
+    addendum even if the exact wording drifts — the addendum still steers the model."""
+    if not isinstance(base, str):
+        return base
+    p = base.replace(
+        "If no location was detected, tell the caller to use the map-pin button to mark their "
+        "location instead -- do not try to guess a location from a spoken description.",
+        "If no location was detected, ask the caller once for a nearby landmark, area, town, or "
+        "highway number and use that approximate location.",
+    ).replace("map-pin button", "nearby landmark")  # safety net if the base wording drifts
+    return p + _EXOTEL_LOCATION_ADDENDUM_EN
+
+
+class ExotelEnglishSession(_SpokenLocationMixin, DispatcherSession):
+    """DispatcherSession (English, Gemini Live) over an Exotel call — the exact same
+    transport the Hindi Exotel path uses. Overrides ONLY location acquisition (a
+    phone has no GPS) via _SpokenLocationMixin, and rewrites the phone-call location
+    prompt in _build_config. All Gemini Live / tool / closing-briefing / lifecycle
+    logic (dispatcher_live.py) is inherited BYTE-FOR-BYTE — the echo/NO_INTERRUPTION
+    guard lives in the transport (ExotelWebSocketAdapter.gate_caller_audio), not here."""
+
+    def __init__(self, adapter: ExotelWebSocketAdapter, locale: str = "en-IN"):
+        super().__init__(adapter, locale)
+        self._init_spoken_location()  # geocode-from-speech provider (mixin)
+
+    def _build_config(self):
+        # Rewrite the Gemini Live system instruction for the phone path (spoken
+        # location, no map-pin), scoped to THIS session's config only — the browser
+        # path and dispatcher_live.py's own prompt are untouched.
+        from google.genai import types  # already a transitive dep (dispatcher_live)
+        cfg = super()._build_config()
+        si = getattr(cfg, "system_instruction", None)
+        parts = getattr(si, "parts", None) if si is not None else None
+        text = parts[0].text if parts else None
+        if not text:
+            return cfg
+        new_si = types.Content(parts=[types.Part(text=_phone_location_prompt_en(text))])
+        return cfg.model_copy(update={"system_instruction": new_si})
+
+
+def make_exotel_session(locale: str, adapter: ExotelWebSocketAdapter):
+    """SINGLE Exotel locale->pipeline router (mirrors app.py /ws/dispatcher's rule
+    with the Exotel subclasses): en-IN -> English/Gemini Live, hi-IN (and, per spec,
+    any missing/unrecognized value) -> Hindi/Sarvam. Unlike the browser default
+    (en-IN), the phone line DEFAULTS TO HINDI and logs a warning on an unexpected
+    locale — the IVR always sends one, but we stay robust."""
+    if locale == "en-IN":
+        return ExotelEnglishSession(adapter, "en-IN")
+    if locale != "hi-IN":
+        logger.warning("Exotel: missing/unrecognized locale %r -> defaulting to hi-IN", locale)
+    return ExotelHindiSession(adapter)

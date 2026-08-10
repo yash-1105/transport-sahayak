@@ -21,7 +21,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from . import config
 from .config import ExotelConfigError
 from .logging_utils import get_logger, set_call_id
-from .session import ExotelHindiSession, ExotelWebSocketAdapter
+from .session import ExotelWebSocketAdapter, make_exotel_session
 
 logger = get_logger("exotel.ws")
 
@@ -72,10 +72,18 @@ def register(app) -> None:
         call_id = uuid.uuid4().hex[:8]
         set_call_id(call_id)  # every log line for this call (and its child tasks) is tagged
         await websocket.accept()
-        logger.info("Exotel AgentStream connection accepted on %s", config.EXOTEL_WS_PATH)
-        adapter = ExotelWebSocketAdapter(websocket, exotel_rate=sample_rate)
+        # The IVR selects the language by DTMF BEFORE the stream connects and encodes
+        # it in the query string: /exotel/ws?locale=en-IN (press 1) or ?locale=hi-IN
+        # (press 2). Locale is FIXED for the call — there is no mid-call switch (stray
+        # dtmf frames are already ignored in the read loop). English needs the echo
+        # gate (NO_INTERRUPTION, no browser mic-gate on a phone); Hindi keeps barge-in.
+        locale = (websocket.query_params.get("locale") or "").strip()
+        logger.info("Exotel AgentStream connection accepted on %s (locale=%r)", config.EXOTEL_WS_PATH, locale)
+        adapter = ExotelWebSocketAdapter(
+            websocket, exotel_rate=sample_rate,
+            gate_caller_audio=(locale == "en-IN"), locale=locale or "hi-IN")
         adapter.start()  # begin reading the Exotel stream
-        session = ExotelHindiSession(adapter)
+        session = make_exotel_session(locale, adapter)  # single locale->pipeline router
         try:
             # The SAME pipeline the browser runs. All STT/Gemini/TTS failure
             # handling lives inside run(); anything that still escapes is caught

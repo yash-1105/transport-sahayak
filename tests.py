@@ -2302,7 +2302,9 @@ check("#P2 call_intent: general -> 'information' (once), accident -> 'accident',
 import base64 as _b64
 import json as _json
 import integrations.exotel.services as _EXSV
-from integrations.exotel.session import ExotelWebSocketAdapter, ExotelHindiSession
+from integrations.exotel.session import (
+    ExotelWebSocketAdapter, ExotelHindiSession, ExotelEnglishSession, make_exotel_session,
+)
 from integrations.exotel.location import GeocodeLocationProvider
 
 class _FakeExotelWS:
@@ -2333,6 +2335,54 @@ async def _exotel_adapter_translates():
             and ad.last_caller_utterance == "बागपत")
 check("#EX adapter translates media->16k / stop->disconnect / Bulbul->media / interrupted->clear / transcript",
       asyncio.run(_exotel_adapter_translates()))
+
+# ── IVR locale routing (Phase 2): ?locale= -> the right pipeline, single source ──
+def _mk_ad(locale="hi-IN", gate=False):
+    return ExotelWebSocketAdapter(_FakeExotelWS([]), 8000, gate_caller_audio=gate, locale=locale)
+_route_en = make_exotel_session("en-IN", _mk_ad("en-IN", True))
+_route_hi = make_exotel_session("hi-IN", _mk_ad())
+_route_missing = make_exotel_session("", _mk_ad())       # missing -> Hindi (default) + warn
+_route_unknown = make_exotel_session("fr-FR", _mk_ad())  # unrecognized -> Hindi (default) + warn
+check("#EX locale routing: en-IN->English, hi-IN/missing/unknown->Hindi (phone defaults to Hindi)",
+      isinstance(_route_en, ExotelEnglishSession) and isinstance(_route_hi, ExotelHindiSession)
+      and isinstance(_route_missing, ExotelHindiSession) and isinstance(_route_unknown, ExotelHindiSession))
+
+# ── Echo guard (Phase 3): English drops caller audio while the agent speaks ──
+# (replaces the browser mic-gate that a phone line doesn't have; Hindi keeps barge-in)
+async def _echo_gate_media(gate, speaking, locale="en-IN"):
+    pcm = b"\x11\x00" * 160
+    ex = _FakeExotelWS([
+        _ex_msg({"event": "start", "stream_sid": "SS", "start": {"call_sid": "C", "from": "+91", "media_format": {"sample_rate": 8000}}}),
+        _ex_msg({"event": "media", "media": {"payload": _b64.b64encode(pcm).decode()}}),
+        _ex_msg({"event": "stop"}),
+    ])
+    ad = ExotelWebSocketAdapter(ex, exotel_rate=8000, gate_caller_audio=gate, locale=locale)
+    ad._agent_speaking = speaking  # set before the read loop processes the media frame
+    ad.start()
+    return await ad.receive()  # first inbound: the caller bytes if forwarded, else the disconnect
+async def _echo_gate_tests():
+    dropped = await _echo_gate_media(gate=True, speaking=True)              # English + speaking -> drop
+    forwarded = await _echo_gate_media(gate=True, speaking=False)          # English + listening -> forward
+    hindi = await _echo_gate_media(gate=False, speaking=True, locale="hi-IN")  # Hindi -> never gates
+    # status + playback-tail tracking drive _agent_is_speaking:
+    ad = ExotelWebSocketAdapter(_FakeExotelWS([]), 8000, gate_caller_audio=True, locale="en-IN")
+    await ad.send_json({"type": "status", "state": "speaking"});  spk = ad._agent_is_speaking()
+    await ad.send_json({"type": "status", "state": "listening"}); lst = ad._agent_is_speaking()
+    await ad.send_bytes(b"\x00\x00" * 24000)                      # ~1s of 24k audio -> tail keeps gate on
+    tail = ad._agent_is_speaking()
+    return (dropped["type"] == "websocket.disconnect" and forwarded.get("bytes") is not None
+            and hindi.get("bytes") is not None and spk is True and lst is False and tail is True)
+check("#EX echo gate: English drops caller media while speaking (status+playback tail), forwards while listening; Hindi never gates",
+      asyncio.run(_echo_gate_tests()))
+
+def _english_phone_prompt_rewrite():
+    sess = ExotelEnglishSession(_mk_ad("en-IN", True), "en-IN")
+    text = sess._build_config().system_instruction.parts[0].text
+    return ("PHONE-CALL LOCATION RULE" in text
+            and "use the map-pin button to mark their location" not in text
+            and sess.state.language == "en-IN")
+check("#EX English _build_config rewrites the phone location prompt (map-pin instruction removed, phone rule added)",
+      _english_phone_prompt_rewrite())
 
 def _ex_session():
     return ExotelHindiSession(ExotelWebSocketAdapter(_FakeExotelWS([]), 16000))
