@@ -39,12 +39,17 @@ _SOPS = [
         "applies": lambda st: "Heavy bleeding" in st.flags,
         "en": "If someone is bleeding heavily, apply firm pressure using a clean cloth, and do not remove the cloth once pressure has been applied.",
         "hi": "यदि किसी व्यक्ति को बहुत अधिक खून बह रहा है, तो साफ कपड़े से लगातार दबाव बनाए रखें। कपड़ा बार-बार न हटाएँ।",
+        # ⚠ ASSAMESE (as-IN) — machine-authored, PENDING NATIVE REVIEW (see the
+        # as-IN authoring note near build_briefing_instruction). Additive: adding
+        # this key never changes the "en"/"hi" values or their code paths.
+        "as": "যদি কোনোবাৰ বেছি তেজ ওলাই আছে, তেন্তে এখন পৰিষ্কাৰ কাপোৰেৰে জোৰেৰে হেঁচি ধৰক, আৰু হেঁচা দিয়াৰ পিছত কাপোৰখন নাতৰাব।",
     },
     {
         "key": "fire",
         "applies": lambda st: "Fire" in st.flags,
         "en": "Move everyone away from the vehicle immediately, and do not attempt to extinguish a large fire yourselves.",
         "hi": "सभी लोगों को वाहन से तुरंत सुरक्षित दूरी पर ले जाएँ। यदि आग बड़ी है तो उसे खुद बुझाने का प्रयास न करें।",
+        "as": "সকলোকে তৎক্ষণাৎ গাড়ীৰ পৰা আঁতৰাই নিৰাপদ দূৰত্বলৈ লৈ যাওক, আৰু ডাঙৰ জুই নিজে নুমুৱাবলৈ চেষ্টা নকৰিব।",
     },
     {
         # Covers both "confirmed unconscious" and "not breathing normally" —
@@ -58,18 +63,21 @@ _SOPS = [
         ),
         "en": "Do not move the injured person unless there is immediate danger such as fire, and keep their head and neck as still as possible.",
         "hi": "यदि तत्काल खतरा न हो, तो घायल व्यक्ति को बिल्कुल न हिलाएँ, और उसके सिर और गर्दन को जितना हो सके स्थिर रखें।",
+        "as": "তৎক্ষণাৎ বিপদ (যেনে জুই) নাথাকিলে আহত ব্যক্তিজনক নলৰাব, আৰু তেওঁৰ মূৰ আৰু ডিঙি যিমান পাৰি স্থিৰ কৰি ৰাখক।",
     },
     {
         "key": "trapped",
         "applies": lambda st: "Trapped" in st.flags,
         "en": "Do not try to force open crushed doors or pull a trapped person out unless there is an immediate threat.",
         "hi": "यदि तत्काल खतरा न हो, तो फँसे हुए व्यक्ति को जबरन बाहर निकालने या दबे दरवाज़े ज़बरदस्ती खोलने का प्रयास न करें।",
+        "as": "তৎক্ষণাৎ বিপদ নাথাকিলে আটক হৈ থকা ব্যক্তিজনক বলেৰে বাহিৰলৈ উলিয়াবলৈ বা লেপেটা দুৱাৰ জোৰকৈ খুলিবলৈ চেষ্টা নকৰিব।",
     },
     {
         "key": "hazmat",
         "applies": lambda st: "Hazardous material" in st.flags,
         "en": "Keep everyone well away from any spilled fuel or chemicals, and do not touch or go near the material.",
         "hi": "गिरे हुए ईंधन या केमिकल से सभी लोगों को दूर रखें, और उसे छूने या उसके पास जाने की कोशिश न करें।",
+        "as": "পৰি যোৱা ইন্ধন বা ৰাসায়নিক পদাৰ্থৰ পৰা সকলোকে আঁতৰত ৰাখক, আৰু সেয়া চুবলৈ বা ওচৰলৈ যাবলৈ চেষ্টা নকৰিব।",
     },
 ]
 
@@ -77,6 +85,7 @@ _GENERAL_SOP = {
     "key": "general",
     "en": "Please stay calm, and keep everyone at a safe distance from moving traffic. Help is on the way.",
     "hi": "कृपया शांत रहें। सभी लोगों को यातायात से सुरक्षित दूरी पर रखें। सहायता रास्ते में है।",
+    "as": "অনুগ্ৰহ কৰি শান্ত থাকক। সকলোকে চলাচল কৰা যান-বাহনৰ পৰা নিৰাপদ দূৰত্বত ৰাখক। সহায় আহি আছে।",
 }
 
 
@@ -263,6 +272,57 @@ def _responder_facts_hi(services: Optional[dict]) -> list:
     return facts
 
 
+# ⚠⚠ ASSAMESE (as-IN) CONTENT — MACHINE-AUTHORED, PENDING NATIVE REVIEW ⚠⚠
+# Everything below tagged `as` / `_as` / `_AS` was authored without a native
+# Assamese (অসমীয়া) reviewer in the loop. It is grammatically plausible and
+# built to the same honesty rules as the hi/en paths, but MUST be proofread by a
+# native speaker before any real deployment. Unlike Hindi's pre-rendered number
+# words (which exist ONLY because Sarvam Bulbul misreads bare digits), Assamese
+# ETA minutes are left as digits in the instruction and the reasoning model is
+# told to speak them AS ASSAMESE WORDS (see the as-IN lang_note) — the same
+# approach English already uses, so no error-prone hand-written Assamese number
+# table is introduced here. ElevenLabs eleven_v3 (the as-IN TTS) receives only
+# the model's Assamese-word output, never a bare digit.
+def _responder_facts_as(services: Optional[dict]) -> list:
+    facts = []
+    amb = _service(services, "ambulance")
+    if amb:
+        eta = _eta_min(amb)
+        facts.append(
+            "এম্বুলেন্স সেৱাক জনোৱা হৈছে"
+            + (f" — আনুমানিক সময় প্ৰায় {eta} মিনিট।" if eta else "।")
+        )
+    fire = _service(services, "fire")
+    if fire:
+        eta = _eta_min(fire)
+        facts.append(
+            "দমকল বাহিনীক জনোৱা হৈছে"
+            + (f" — আনুমানিক সময় প্ৰায় {eta} মিনিট।" if eta else "।")
+        )
+    tow = _service(services, "towing")
+    if tow:
+        eta = _eta_min(tow)
+        facts.append(
+            "টো কৰা গাড়ী (উদ্ধাৰ সেৱা)ক জনোৱা হৈছে"
+            + (f" — আনুমানিক সময় প্ৰায় {eta} মিনিট।" if eta else "।")
+        )
+    hos = _service(services, "hospital")
+    if hos:
+        eta = _eta_min(hos)
+        facts.append(
+            f"আটাইতকৈ ওচৰৰ উপযুক্ত চিকিৎসালয় হৈছে {hos['name']}"
+            + (f" — পথেৰে আনুমানিক প্ৰায় {eta} মিনিটৰ দূৰত্বত।" if eta else "।")
+        )
+    pol = _service(services, "police")
+    if pol:
+        eta = _eta_min(pol)
+        facts.append(
+            f"আটাইতকৈ ওচৰৰ আৰক্ষী থানা ({pol['name']})কো জনোৱা হৈছে"
+            + (f" — আনুমানিক প্ৰায় {eta} মিনিটৰ দূৰত্বত।" if eta else "।")
+        )
+    return facts
+
+
 # ── Closing script (follow-up call information) ────────────────────────────────
 # _CLOSING_EN is used ONLY by english_briefing.py (confirmed: no Hindi code
 # path ever passes language_code != "hi-IN" to build_briefing_instruction),
@@ -295,6 +355,15 @@ _CLOSING_HI = [
     "अब आप यह कॉल सुरक्षित रूप से समाप्त कर सकते हैं। अपना ध्यान रखिए... हमें उम्मीद है कि सभी सुरक्षित रहेंगे।",
 ]
 
+# ⚠ ASSAMESE (as-IN) — machine-authored, PENDING NATIVE REVIEW. Mirrors the
+# fixed 3-line form of _CLOSING_HI / _CLOSING_EN (two-hour follow-up →
+# call-back-if-missed → polite close). Used ONLY by the as-IN briefing path.
+_CLOSING_AS = [
+    "অহা দুই ঘণ্টাৰ ভিতৰত আমাৰ দলটোৱে আপোনাৰ সৈতে পুনৰ যোগাযোগ কৰিব, যাতে সহায় আপোনাৰ ওচৰ পাইছে নে নাই আৰু পৰিস্থিতি কেনে সেয়া নিশ্চিত কৰিব পাৰি।",
+    "যদি কোনো কাৰণত আপুনি এই ফলো-আপ কলটো নাপায়, তেন্তে অনুগ্ৰহ কৰি সহায় পোৱাৰ পিছত, বা কেইঘণ্টামানৰ পিছত, এই হেল্পলাইনলৈ পুনৰ কল কৰিব, যাতে আমি ঘটনাটো বন্ধ কৰিব পাৰোঁ।",
+    "এতিয়া আপুনি এই কলটো নিৰাপদে সমাপ্ত কৰিব পাৰে। নিজৰ যত্ন লওক... আমি আশা কৰোঁ সকলো নিৰাপদে থাকিব।",
+]
+
 
 # ── English no longer uses this module for delivery (2026-07) ─────────────────
 # History: build_unified_briefing (and, before it, build_briefing_segments)
@@ -323,10 +392,18 @@ def build_briefing_instruction(state, services: Optional[dict], language_code: s
     payload — the exact values the dashboard is displaying — or None if it
     never arrived (the ETA section is then skipped honestly, never invented)."""
     hindi = language_code == "hi-IN"
-    facts = _responder_facts_hi(services) if hindi else _responder_facts_en(services)
+    assamese = language_code == "as-IN"
     sops = select_sops(state)
-    sop_lines = [s["hi"] if hindi else s["en"] for s in sops]
-    closing = _CLOSING_HI if hindi else _CLOSING_EN
+    if assamese:
+        # as-IN branch (additive) — never reached for hi-IN/en-IN, so those two
+        # paths run the exact original expressions in the else below, unchanged.
+        facts = _responder_facts_as(services)
+        sop_lines = [s.get("as", s["en"]) for s in sops]
+        closing = _CLOSING_AS
+    else:
+        facts = _responder_facts_hi(services) if hindi else _responder_facts_en(services)
+        sop_lines = [s["hi"] if hindi else s["en"] for s in sops]
+        closing = _CLOSING_HI if hindi else _CLOSING_EN
 
     if facts:
         facts_block = (
@@ -343,20 +420,35 @@ def build_briefing_instruction(state, services: Optional[dict], language_code: s
             "any arrival time, facility name, or number."
         )
 
-    lang_note = (
-        "Speak in simple, natural spoken Hindi as before (the material below is already in Hindi — "
-        "deliver it faithfully; any facility or hospital name written in English letters must be "
-        "spoken with natural Hindi pronunciation, and numbers are already written out as words). "
-        # Phone-call brevity: a live call's briefing ran ~56s of audio -- far too long
-        # for a caller in an emergency. Keep every part to ONE short clause; the caller
-        # needs the facts fast, not a padded speech. (Hindi-only path.)
-        "बहुत संक्षिप्त रहें — यह फ़ोन कॉल है और caller आपात स्थिति में है। हर सेवा, हर सुरक्षा-निर्देश और "
-        "समापन की हर बात को सिर्फ़ एक छोटे वाक्यांश में कहें — कोई दोहराव नहीं, कोई भूमिका नहीं, कोई "
-        "अतिरिक्त शब्द नहीं। जहाँ स्वाभाविक हो, दो सेवाओं को एक ही छोटे वाक्य में जोड़ दें। पूरी बात तेज़ी "
-        "से, गर्मजोशी से, पर बहुत कम शब्दों में पूरी करें। "
-        if hindi
-        else "Speak in natural, warm English as before. "
-    )
+    if assamese:
+        # as-IN lang_note (additive) — reasoning model delivers in spoken
+        # Assamese; numbers spelled as Assamese words so eleven_v3 never voices a
+        # bare digit. ⚠ machine-authored, pending native review.
+        lang_note = (
+            "Speak in simple, natural spoken Assamese (অসমীয়া) as before (the material below is "
+            "already in Assamese — deliver it faithfully; any facility or hospital name written in "
+            "English letters must be spoken with natural Assamese pronunciation). Write EVERY number "
+            "as an Assamese word, never as bare digits (e.g. 20 → \"বিশ\"). "
+            "অতি সংক্ষিপ্ত হওক — এইটো এটা ফোন কল আৰু কলাৰজন জৰুৰী অৱস্থাত আছে। প্ৰতিটো সেৱা, প্ৰতিটো "
+            "সুৰক্ষা-নিৰ্দেশ আৰু সামৰণিৰ প্ৰতিটো কথা কেৱল এটা চুটি খণ্ডবাক্যত কওক — কোনো পুনৰাবৃত্তি নাই, "
+            "কোনো ভূমিকা নাই, কোনো অতিৰিক্ত শব্দ নাই। য'ত স্বাভাৱিক, তাত দুটা সেৱা এটা চুটি বাক্যতে "
+            "সংযুক্ত কৰক। গোটেই কথাখিনি দ্ৰুতভাৱে, আন্তৰিকতাৰে, কিন্তু অতি কম শব্দত সম্পূৰ্ণ কৰক। "
+        )
+    else:
+        lang_note = (
+            "Speak in simple, natural spoken Hindi as before (the material below is already in Hindi — "
+            "deliver it faithfully; any facility or hospital name written in English letters must be "
+            "spoken with natural Hindi pronunciation, and numbers are already written out as words). "
+            # Phone-call brevity: a live call's briefing ran ~56s of audio -- far too long
+            # for a caller in an emergency. Keep every part to ONE short clause; the caller
+            # needs the facts fast, not a padded speech. (Hindi-only path.)
+            "बहुत संक्षिप्त रहें — यह फ़ोन कॉल है और caller आपात स्थिति में है। हर सेवा, हर सुरक्षा-निर्देश और "
+            "समापन की हर बात को सिर्फ़ एक छोटे वाक्यांश में कहें — कोई दोहराव नहीं, कोई भूमिका नहीं, कोई "
+            "अतिरिक्त शब्द नहीं। जहाँ स्वाभाविक हो, दो सेवाओं को एक ही छोटे वाक्य में जोड़ दें। पूरी बात तेज़ी "
+            "से, गर्मजोशी से, पर बहुत कम शब्दों में पूरी करें। "
+            if hindi
+            else "Speak in natural, warm English as before. "
+        )
 
     return (
         "(SYSTEM UPDATE — not the caller speaking. The incident report was submitted successfully "

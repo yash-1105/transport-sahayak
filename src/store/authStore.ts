@@ -45,7 +45,8 @@ interface AuthState {
   // the SOS voice dispatcher — mirrors the map's two report FABs.
   launchIntent: "voice" | "report" | "dashboard" | "profile" | null;
   // Voice-bot language chosen on the PWA home before entering (voice launch only).
-  launchVoiceLocale: "en-IN" | "hi-IN" | null;
+  // Includes "as-IN" (Assamese) — reachable via the in-call language selector.
+  launchVoiceLocale: "en-IN" | "hi-IN" | "as-IN" | null;
   pwaEntered: boolean;
   signUp: (email: string, password: string, meta?: SignUpMeta) => Promise<AuthResult>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
@@ -54,7 +55,7 @@ interface AuthState {
   exitGuest: (tab?: "signup" | "signin") => void;
   beginOnboarding: () => void;
   finishOnboarding: () => void;
-  setLaunchIntent: (intent: "voice" | "report" | "dashboard" | "profile", voiceLocale?: "en-IN" | "hi-IN") => void;
+  setLaunchIntent: (intent: "voice" | "report" | "dashboard" | "profile", voiceLocale?: "en-IN" | "hi-IN" | "as-IN") => void;
   clearLaunchIntent: () => void;
   enterPwa: () => void;
 }

@@ -406,7 +406,13 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
     const buffer = ctx.createBuffer(1, float32.length, PLAYBACK_SAMPLE_RATE);
     buffer.copyToChannel(float32, 0);
 
-    const playbackRate = localeRef.current === "hi-IN" ? PLAYBACK_RATE_HINDI : PLAYBACK_RATE;
+    // hi-IN (Bulbul) and as-IN (ElevenLabs eleven_v3) both stream native-rate
+    // 24 kHz PCM, so they play at 1.0; the 0.88 slowdown is a Gemini-Live-only
+    // (en-IN) compensation.
+    const playbackRate =
+      localeRef.current === "hi-IN" || localeRef.current === "as-IN"
+        ? PLAYBACK_RATE_HINDI
+        : PLAYBACK_RATE;
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = playbackRate;
@@ -826,14 +832,16 @@ export function useVoiceDispatcher(callbacks: UseVoiceDispatcherCallbacks): UseV
           // headphones the mic picks up its own voice, which the server was
           // misreading as the caller interrupting and repeating sentences
           // (see dispatcher_live.py's NO_INTERRUPTION config). Hindi (Sarvam)
-          // deliberately ALSO transmits while "speaking": the backend needs
-          // live mic audio during agent playback to detect a genuine caller
-          // barge-in and cut its own reply short (see dispatcher_hindi.py's
-          // _speak_or_fallback) -- this branch is unreachable for en-IN.
+          // and Assamese (Saaras STT) deliberately ALSO transmit while
+          // "speaking": the backend needs live mic audio during agent playback
+          // to detect a genuine caller barge-in and cut its own reply short (see
+          // dispatcher_hindi.py's _speak_or_fallback, inherited by
+          // dispatcher_assamese.py) -- this branch is unreachable for en-IN.
           const ws = wsRef.current;
           const micOpen =
             statusRef.current === "listening" ||
-            (localeRef.current === "hi-IN" && statusRef.current === "speaking");
+            ((localeRef.current === "hi-IN" || localeRef.current === "as-IN") &&
+              statusRef.current === "speaking");
           if (ws?.readyState === WebSocket.OPEN && micOpen) {
             ws.send(e.data);
           }

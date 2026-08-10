@@ -32,8 +32,14 @@ import re
 # Devanagari included: without it, Hindi negation words were invisible to the
 # window check below ("आग नहीं लगी" tokenized to nothing, so "नहीं" could never
 # suppress the "आग" match — found live while testing the Hindi dispatcher).
-# English tokenization is unchanged.
-_word_re = re.compile(r"[a-z0-9]+|[ऀ-ॿ]+")
+# English tokenization is unchanged. The Bengali-Assamese block (U+0980–U+09FF)
+# is added for as-IN so Assamese tokens aren't silently dropped by the tokenizer;
+# it is additive (matches nothing in Hindi/English text, so those token streams
+# are byte-identical). NOTE: the hazard-phrase lexicon and _NEGATION_MARKERS
+# below are still Hindi/English only — a full Assamese lexicon is future work, so
+# this range change alone does not yet make the local backstop fire on Assamese
+# (the model's own tool calls are the primary accident-detection path for as-IN).
+_word_re = re.compile(r"[a-z0-9]+|[ऀ-ॿ]+|[ঀ-৿]+")
 
 # ── Negation markers ──────────────────────────────────────────────────────────
 # If one of these appears within NEGATION_WINDOW tokens before a matched phrase,

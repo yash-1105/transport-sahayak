@@ -219,27 +219,87 @@ _RECONNECT_APOLOGY = {
 # Devanagari aliases are matched as EXACT whole tokens (never substrings) so
 # "सरकार" can never match "कार", and English aliases with word boundaries so
 # "cargo" can never match "car".
+# The `say` aliases in Bengali-Assamese script (কাৰ/ট্ৰাক/বাছ/…) are the as-IN
+# additions (⚠ machine-authored, pending native review). They are ADDITIVE: an
+# alias is matched only as an exact WHOLE TOKEN (never a substring), and Bengali
+# script is disjoint from both Devanagari and Latin, so a Bengali alias can never
+# appear in a Hindi or English caller's token set — Hindi/English vehicle
+# detection is provably unchanged (regression-tested in tests.py).
 _VEHICLE_TYPES: dict[str, dict] = {
-    "car": {"say": ["car", "कार", "गाड़ी"], "subtype": [r"\bcar\b"]},
-    "truck": {"say": ["truck", "lorry", "ट्रक", "लॉरी", "ट्राला"], "subtype": [r"\btruck\b"]},
-    "bus": {"say": ["bus", "बस"], "subtype": [r"\bbus\b"]},
+    "car": {"say": ["car", "कार", "गाड़ी", "কাৰ", "গাড়ী", "গাড়ি", "বাহন"], "subtype": [r"\bcar\b"]},
+    "truck": {"say": ["truck", "lorry", "ट्रक", "लॉरी", "ट्राला", "ট্ৰাক", "ট্রাক", "লৰী"], "subtype": [r"\btruck\b"]},
+    "bus": {"say": ["bus", "बस", "বাছ", "বাস"], "subtype": [r"\bbus\b"]},
     "two-wheeler": {
         "say": ["motorcycle", "motorbike", "bike", "scooter", "scooty",
-                "बाइक", "मोटरसाइकिल", "स्कूटर", "स्कूटी"],
+                "बाइक", "मोटरसाइकिल", "स्कूटर", "स्कूटी",
+                "বাইক", "মটৰচাইকেল", "মোটৰচাইকেল", "স্কুটাৰ", "স্কুটী"],
         "subtype": [r"\btwo-wheeler\b"],
     },
-    "auto-rickshaw": {"say": ["auto", "rickshaw", "ऑटो", "रिक्शा"], "subtype": [r"\bauto-rickshaw\b"]},
+    "auto-rickshaw": {"say": ["auto", "rickshaw", "ऑटो", "रिक्शा", "অটো", "ৰিক্সা", "অটোৰিক্সা"], "subtype": [r"\bauto-rickshaw\b"]},
 }
 
 _DEVANAGARI_TOKEN_RE = re.compile(r"[ऀ-ॿ]+")
 _LATIN_TOKEN_RE = re.compile(r"[a-z]+")
+# Bengali-Assamese block (U+0980–U+09FF) — for as-IN vehicle tokenization. On
+# Hindi/English text this matches nothing, so the token lists below are identical
+# to before for those languages (additive; see _VEHICLE_TYPES note above).
+_BENGALI_TOKEN_RE = re.compile(r"[ঀ-৿]+")
+
+# Assamese attaches case/number/classifier morphemes DIRECTLY onto the noun, and
+# STACKS them (গাড়ীখনৰ = car+classifier+genitive, বাছখনে = bus+classifier+agent),
+# unlike Hindi's separate postpositions ("ट्रक से") -- so a bare whole-token match
+# would miss most real Assamese vehicle mentions and the vehicle-pair override
+# would silently fail for as-IN. So a Bengali-script alias also matches a token
+# that is the alias followed by a run of these morphemes (greedily consumed, so
+# stacked suffixes work). ⚠ machine-authored, pending native review. Every
+# morpheme is Bengali-script, so a Devanagari/Latin token can never be an
+# alias+morpheme -- Hindi/English matching is provably unchanged (a Hindi token
+# like "बसों" still fails to match "बस", exactly as before). Greedy FULL-consume
+# (not mere startswith) keeps it strict: a remainder must decompose ENTIRELY into
+# known morphemes, so common non-vehicle words are not false-matched (কাৰণ
+# "reason" = কাৰ+ণ, কাৰতুছ "cartridge", বাছনি "selection", চৰকাৰ "government" are
+# all asserted safe in tests.py).
+_AS_NOUN_MORPHEMES = (
+    "কেইখন", "কেইটা", "খনী", "জনী", "টোৱে", "খনে", "বোৰ", "েৰে",
+    "লৈ", "খন", "টো", "জন", "ৰে", "ৱে", "ত", "ৰ", "ক", "ে", "ই", "ও",
+)
+# Longest-first so the greedy stripper consumes multi-char morphemes whole.
+_AS_NOUN_MORPHEMES_SORTED = tuple(sorted(_AS_NOUN_MORPHEMES, key=len, reverse=True))
+
+
+def _as_suffix_run_only(rest: str) -> bool:
+    """True if `rest` decomposes ENTIRELY into a run of Assamese noun morphemes
+    (empty rest is trivially True). Greedy longest-first."""
+    while rest:
+        for m in _AS_NOUN_MORPHEMES_SORTED:
+            if rest.startswith(m):
+                rest = rest[len(m):]
+                break
+        else:
+            return False   # a leftover char is not a morpheme -> not a suffixed form
+    return True
+
+
+def _token_names_vehicle(token: str, say_set: set) -> bool:
+    """True if `token` names one of the vehicle aliases in `say_set` -- either
+    exactly (all languages, unchanged) or, for a Bengali-script alias, the alias
+    followed by a run of Assamese noun morphemes (as-IN only)."""
+    if token in say_set:
+        return True
+    for alias in say_set:
+        if token != alias and token.startswith(alias) and _as_suffix_run_only(token[len(alias):]):
+            return True
+    return False
 
 
 def _mentioned_vehicle_types(text: str) -> set:
     """Canonical vehicle types explicitly named in the caller's words."""
     lower = (text or "").lower()
-    tokens = set(_DEVANAGARI_TOKEN_RE.findall(lower)) | set(_LATIN_TOKEN_RE.findall(lower))
-    return {canon for canon, spec in _VEHICLE_TYPES.items() if tokens & set(spec["say"])}
+    tokens = (set(_DEVANAGARI_TOKEN_RE.findall(lower))
+              | set(_LATIN_TOKEN_RE.findall(lower))
+              | set(_BENGALI_TOKEN_RE.findall(lower)))
+    return {canon for canon, spec in _VEHICLE_TYPES.items()
+            if any(_token_names_vehicle(t, set(spec["say"])) for t in tokens)}
 
 
 def _find_vehicle_pair_subtype(mentioned: set) -> Optional[str]:
@@ -277,6 +337,10 @@ def _find_vehicle_pair_subtype(mentioned: set) -> Optional[str]:
 _COLLISION_SIGNAL_RE = re.compile(
     r"\b(collision|collided|collide|crash(?:ed)?|struck|strike|rammed|smashed|slammed|hit)\b"
     r"|टक्कर|टकरा|भिड़ंत|भिड़|ठोकर|ठोक"
+    # Bengali-Assamese collision verbs (as-IN) — ⚠ machine-authored, pending
+    # native review. Additive: these never match Devanagari/Latin text, so
+    # _mentions_collision is byte-identical for Hindi/English.
+    r"|খুন্দা|খুন্দি|সংঘৰ্ষ|সংঘর্ষ|ভিৰি|গচক"
 )
 
 
@@ -290,11 +354,12 @@ def _vehicle_type_mention_counts(text: str) -> dict:
     named twice) be told apart from a single passing mention. Same exact
     whole-token matching as _mentioned_vehicle_types (never a substring)."""
     lower = (text or "").lower()
-    tokens = _DEVANAGARI_TOKEN_RE.findall(lower) + _LATIN_TOKEN_RE.findall(lower)
+    tokens = (_DEVANAGARI_TOKEN_RE.findall(lower) + _LATIN_TOKEN_RE.findall(lower)
+              + _BENGALI_TOKEN_RE.findall(lower))  # Bengali block additive; no-op for Hindi/English
     counts: dict = {}
     for canon, spec in _VEHICLE_TYPES.items():
         say_set = set(spec["say"])
-        n = sum(1 for t in tokens if t in say_set)
+        n = sum(1 for t in tokens if _token_names_vehicle(t, say_set))
         if n:
             counts[canon] = n
     return counts

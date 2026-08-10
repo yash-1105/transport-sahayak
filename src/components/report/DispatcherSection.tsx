@@ -150,7 +150,7 @@ export function DispatcherSection({
           Conversation language{showHindi && <span style={{ fontWeight: 400, color: C.muted }}> · भाषा</span>}
         </div>
         <div className="flex" style={{ gap: 6, background: C.page, borderRadius: RADIUS.input, padding: 4 }}>
-          {(["en-IN", "hi-IN"] as VoiceLocale[]).map((l) => {
+          {(["en-IN", "hi-IN", "as-IN"] as VoiceLocale[]).map((l) => {
             const on = locale === l;
             return (
               <button
@@ -181,7 +181,7 @@ export function DispatcherSection({
                   boxShadow: on ? "0 1px 2px rgba(0,0,0,.08)" : "none",
                 }}
               >
-                {l === "en-IN" ? "English" : "हिंदी"}
+                {l === "en-IN" ? "English" : l === "hi-IN" ? "हिंदी" : "অসমীয়া"}
               </button>
             );
           })}

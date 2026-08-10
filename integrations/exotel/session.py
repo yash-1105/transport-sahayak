@@ -25,6 +25,7 @@ from severity_engine.dispatcher_hindi import (
     _HINDI_OPENING_LINE,
     _OPENING_FALLBACK_QUESTION,
 )
+from severity_engine.dispatcher_assamese import AssameseDispatcherSession
 from severity_engine.dispatcher_live import DispatcherSession
 
 from . import config, protocol, services
@@ -48,6 +49,20 @@ _FACILITY_FILLERS = {
 }
 _FACILITY_FILLER_DEFAULT = "एक पल... मैं आपके लिए यह जानकारी निकाल रहा हूँ।"
 _COMPLAINT_FILLER = "एक पल... मैं आपकी शिकायत दर्ज कर रहा हूँ।"
+
+# Assamese (as-IN) phone-lookup fillers — ⚠ machine-authored, pending native
+# review. Spoken by ElevenLabs while a slow geocode/facility lookup runs so the
+# caller hears speech, not silence (used by ExotelAssameseSession below).
+_FACILITY_FILLERS_AS = {
+    "hospital": "এখন্তেক... মই আপোনাৰ আটাইতকৈ ওচৰৰ চিকিৎসালয়ৰ তথ্য উলিয়াই আছোঁ।",
+    "mechanic": "এখন্তেক... মই আপোনাৰ ওচৰৰ মেকানিক বিচাৰি আছোঁ।",
+    "fuel": "এখন্তেক... মই আপোনাৰ ওচৰৰ পেট্ৰল পাম্প চাই আছোঁ।",
+    "police": "এখন্তেক... মই আপোনাৰ ওচৰৰ আৰক্ষী থানা চাই আছোঁ।",
+    "tow": "এখন্তেক... মই আপোনাৰ ওচৰৰ টো আৰু ৰিকভাৰী সেৱা চাই আছোঁ।",
+    "ambulance": "এখন্তেক... মই আপোনাৰ ওচৰৰ এম্বুলেন্স সেৱা চাই আছোঁ।",
+}
+_FACILITY_FILLER_DEFAULT_AS = "এখন্তেক... মই আপোনাৰ বাবে এই তথ্য উলিয়াই আছোঁ।"
+_COMPLAINT_FILLER_AS = "এখন্তেক... মই আপোনাৰ অভিযোগ দাখিল কৰি আছোঁ।"
 
 # Exotel requires outbound media payloads to be MULTIPLES OF 320 BYTES, <= 100 KB
 # per frame (per the AgentStream spec). Bulbul chunks are arbitrary sizes, so we
@@ -99,6 +114,33 @@ def _phone_location_prompt(base: str) -> str:
     # Safety net for any remaining mention if the base wording drifts.
     p = p.replace("मैप-पिन बटन", "पास का लैंडमार्क")
     return p + _EXOTEL_LOCATION_ADDENDUM
+
+
+# Assamese (as-IN) phone-call location rule — ⚠ machine-authored, pending native
+# review. Mirrors _phone_location_prompt (Hindi) / _phone_location_prompt_en for
+# the Assamese prompt wording: accept the caller's APPROXIMATE spoken location,
+# never ask them to pin/tap/text/open anything.
+_EXOTEL_LOCATION_ADDENDUM_AS = (
+    "\n\n—— ফোন কল — লোকেশ্যন নিয়ম (ই ওপৰৰ যিকোনো 'মেপ-পিন'/'লোকেশ্যন পঠোৱা' কথাতকৈ ভাৰী) ——\n"
+    "এইটো এটা প্ৰকৃত ফোন কল — ইয়াত কোনো এপ, স্ক্ৰীন, বুটাম, বা মেছেজ নাই। "
+    "কলাৰক কেতিয়াও লোকেশ্যন 'পিন' কৰিবলৈ, মেছেজ পঠাবলৈ, বা এপ/স্ক্ৰীন খুলিবলৈ নক'ব। "
+    "কলাৰে যিয়েই ঠাই কয় — এলেকা, মহল্লা, লেণ্ডমাৰ্ক, পেট্ৰল পাম্প, টোল প্লাজা, হাইৱে নম্বৰ, বা চহৰ/গাঁৱৰ নাম — "
+    "সেই আনুমানিক লোকেশ্যন গ্ৰহণ কৰি আগবাঢ়ক। সঠিক ঠিকনা বা GPS কেতিয়াও নিবিচাৰিব। "
+    "কলাৰে এতিয়ালৈকে ঠাই কোৱা নাই যদি, তেন্তে কেৱল এবাৰ স্বাভাৱিকভাৱে ওচৰৰ কোনো লেণ্ডমাৰ্ক সোধক "
+    "(যেনে \"আপুনি কোন এলেকা বা কোন লেণ্ডমাৰ্কৰ ওচৰত আছে?\")।"
+)
+
+
+def _phone_location_prompt_as(base: str) -> str:
+    """Rewrite the Assamese prompt's map-pin location instruction for a phone
+    call. Returns base + the override addendum even if the exact wording drifts."""
+    if not isinstance(base, str):
+        return base
+    p = base.replace(
+        "নহ'লে কলাৰক মেপ-পিন বুটামেৰে লোকেশ্যন পঠাবলৈ কওক।",
+        "নহ'লে কলাৰক ওচৰৰ কোনো এলেকা বা লেণ্ডমাৰ্ক সোধি সেই আনুমানিক ঠাই ব্যৱহাৰ কৰক।",
+    ).replace("মেপ-পিন বুটাম", "ওচৰৰ লেণ্ডমাৰ্ক")  # safety net if base wording drifts
+    return p + _EXOTEL_LOCATION_ADDENDUM_AS
 
 
 class ExotelWebSocketAdapter:
@@ -498,6 +540,73 @@ class ExotelHindiSession(_SpokenLocationMixin, HindiDispatcherSession):
             _COMPLAINT_FILLER, super()._tool_lodge_complaint(description=description, complaint_type=complaint_type))
 
 
+class ExotelAssameseSession(_SpokenLocationMixin, AssameseDispatcherSession):
+    """AssameseDispatcherSession over an Exotel call — the exact phone adaptations
+    ExotelHindiSession uses (spoken location, phone-call location prompt,
+    opening-turn Gemini skip, location backstop, and facility/complaint lookup
+    fillers), duplicated here with Assamese content so ExotelHindiSession stays
+    untouched. All reasoning / dispatch / SOP / TTS (ElevenLabs) logic is inherited
+    from AssameseDispatcherSession."""
+
+    def __init__(self, adapter: ExotelWebSocketAdapter):
+        super().__init__(adapter)
+        self._init_spoken_location()  # geocode-from-speech provider (mixin)
+        # Rewrite the two Assamese gen configs for the phone path (accept an
+        # approximate spoken location, never a map-pin). Scoped to THIS session.
+        phone_prompt = _phone_location_prompt_as(self._gen_config.system_instruction)
+        self._gen_config = self._gen_config.model_copy(update={"system_instruction": phone_prompt})
+        self._briefing_config = self._briefing_config.model_copy(update={"system_instruction": phone_prompt})
+
+    async def _reason(self, gemini_client, user_text, config=None):
+        """Same as ExotelHindiSession._reason: skip the model on the OPENING turn
+        (instant fixed greeting + fallback question, no Vertex round-trip), and
+        resolve location opportunistically from the caller's own words before
+        reasoning while it is still unknown."""
+        if self._opening_line_pending:
+            return None
+        if not self.state.location:
+            loc = await self._location.try_opportunistic()
+            if loc:
+                self.state.location = loc
+                await self._safe_send_json({"type": "form_update", "field": "location", "value": loc})
+                logger.info("Location backstop resolved (as-IN): %s", loc.get("label", "")[:80])
+        return await super()._reason(gemini_client, user_text, config=config)
+
+    async def _speak_filler_during(self, filler: str, coro):
+        """Speak a short holding line WHILE `coro` (a slow lookup) runs, then wait
+        for both. as-IN disables the thinking-gap filler, so this lookup filler
+        always plays (through ElevenLabs via the inherited _speak_or_fallback)."""
+        if getattr(self, "_ack_filler_active", False):
+            return await coro
+        filler_task = asyncio.create_task(self._speak_or_fallback(filler, allow_bargein=False))
+        try:
+            return await coro
+        finally:
+            try:
+                await filler_task
+            except Exception:
+                logger.debug("filler speak failed", exc_info=True)
+
+    async def _tool_find_nearest_facility(self, facility_type: str = "", capability: str = "") -> dict:
+        if not self.state.location:
+            outcome = await self._ensure_location()
+            if outcome is not None:
+                return {"ok": False, "needs_location": True,
+                        "message": outcome.next_step or "Ask the caller for a specific nearby landmark, then try again."}
+        filler = _FACILITY_FILLERS_AS.get((facility_type or "").lower(), _FACILITY_FILLER_DEFAULT_AS)
+        return await self._speak_filler_during(
+            filler, super()._tool_find_nearest_facility(facility_type=facility_type, capability=capability))
+
+    async def _tool_lodge_complaint(self, description: str = "", complaint_type: str = "road_defect") -> dict:
+        if not self.state.location:
+            outcome = await self._ensure_location()
+            if outcome is not None:
+                return {"ok": False, "needs_location": True,
+                        "message": outcome.next_step or "Ask the caller where the problem is (a nearby landmark), then try again."}
+        return await self._speak_filler_during(
+            _COMPLAINT_FILLER_AS, super()._tool_lodge_complaint(description=description, complaint_type=complaint_type))
+
+
 # The English (Gemini Live) system prompt tells the caller to use the browser's
 # MAP-PIN BUTTON for location — there is no such button on a phone. For the Exotel
 # (phone) path only, rewrite that instruction: accept the caller's APPROXIMATE
@@ -558,12 +667,15 @@ class ExotelEnglishSession(_SpokenLocationMixin, DispatcherSession):
 
 def make_exotel_session(locale: str, adapter: ExotelWebSocketAdapter):
     """SINGLE Exotel locale->pipeline router (mirrors app.py /ws/dispatcher's rule
-    with the Exotel subclasses): en-IN -> English/Gemini Live, hi-IN (and, per spec,
-    any missing/unrecognized value) -> Hindi/Sarvam. Unlike the browser default
-    (en-IN), the phone line DEFAULTS TO HINDI and logs a warning on an unexpected
-    locale — the IVR always sends one, but we stay robust."""
+    with the Exotel subclasses): en-IN -> English/Gemini Live, as-IN ->
+    Assamese/Saaras+ElevenLabs, hi-IN (and, per spec, any missing/unrecognized
+    value) -> Hindi/Sarvam. Unlike the browser default (en-IN), the phone line
+    DEFAULTS TO HINDI and logs a warning on an unexpected locale — the IVR (press
+    3 -> as-IN) always sends one, but we stay robust."""
     if locale == "en-IN":
         return ExotelEnglishSession(adapter, "en-IN")
+    if locale == "as-IN":
+        return ExotelAssameseSession(adapter)
     if locale != "hi-IN":
         logger.warning("Exotel: missing/unrecognized locale %r -> defaulting to hi-IN", locale)
     return ExotelHindiSession(adapter)

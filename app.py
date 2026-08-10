@@ -70,8 +70,15 @@ from severity_engine.dispatcher_live import (
     DispatcherCredentialsError,
     DispatcherSession,
 )
-from severity_engine.dispatcher_live import SUPPORTED_LANGUAGES as DISPATCHER_LANGUAGES
+from severity_engine.dispatcher_live import SUPPORTED_LANGUAGES as _DISPATCHER_BASE_LANGUAGES
 from severity_engine.dispatcher_hindi import HindiDispatcherSession
+from severity_engine.dispatcher_assamese import AssameseDispatcherSession
+
+# Assamese (as-IN) is a THIRD dispatcher language (Saaras STT + ElevenLabs v3 TTS
+# + shared Sarvam reasoning — see dispatcher_assamese.py). It is added to the
+# accepted-locale gate HERE rather than in dispatcher_live.SUPPORTED_LANGUAGES so
+# that file's constant (and its English/Gemini-Live behavior) stays untouched.
+DISPATCHER_LANGUAGES = (*_DISPATCHER_BASE_LANGUAGES, "as-IN")
 from severity_engine.sarvam_speech import SarvamCredentialsError
 from severity_engine.voice_stream import (
     SUPPORTED_LANGUAGES,
@@ -318,11 +325,12 @@ async def dispatcher_ws(websocket: WebSocket) -> None:
         language_code = "en-IN"
     logger.info("Client connected to /ws/dispatcher (language=%s)", language_code)
 
-    session = (
-        HindiDispatcherSession(websocket)
-        if language_code == "hi-IN"
-        else DispatcherSession(websocket, language_code)
-    )
+    if language_code == "hi-IN":
+        session = HindiDispatcherSession(websocket)
+    elif language_code == "as-IN":
+        session = AssameseDispatcherSession(websocket)
+    else:
+        session = DispatcherSession(websocket, language_code)
     try:
         await session.run()
     except SarvamCredentialsError as e:

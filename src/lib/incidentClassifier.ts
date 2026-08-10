@@ -50,9 +50,13 @@ function normalizeHindi(text: string): string {
 }
 
 function tokens(text: string): string[] {
+  // Bengali-Assamese block (U+0980–U+09FF) added for as-IN — additive: Hindi/
+  // English text contains no Bengali chars, so its token stream is unchanged
+  // (mirrors severity_engine/classifier.py, which also translates Assamese via
+  // the shared glossary before tokenizing).
   return (text ?? "")
     .toLowerCase()
-    .match(/[ऀ-ॿ]+|[a-z0-9]+/g)
+    .match(/[ऀ-ॿ]+|[ঀ-৿]+|[a-z0-9]+/g)
     ?.filter((t) => t.length > 1 && !STOP.has(t) && !HINDI_STOP.has(t)) ?? [];
 }
 

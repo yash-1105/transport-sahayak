@@ -2,7 +2,8 @@
   "_meta": {
     "note": "Hindi -> English normalization pairs applied (literal substring replace, longest-first) before tokenizing free text for incident-type classification. Shared by src/lib/incidentClassifier.ts (TS, the /api/guess picker UI) and severity_engine/classifier.py (Python, the actual /api/assess dispatch decision) so both understand Hindi consistently -- previously only the TS side had any Hindi support at all, and Python's classifier fell back to an arbitrary placeholder record for every Hindi report.",
     "targetSelection": "English targets are chosen to survive the English stopword filter (generic terms like 'collision'/'vehicle'/'accident'/'road' are deliberately stopworded since they're too common to discriminate between incident types) AND to have real signal in the accident_index.json corpus -- e.g. 'struck' appears 22x in cause/subType text vs 'collided' only 1x, so Hindi collision verbs map to 'struck', not 'collided'. Common noun inflections (oblique plural etc.) are listed as explicit separate entries rather than handled by a stemmer, to avoid over-stripping risk.",
-    "order": "Longest Hindi phrase first within each group so multi-word phrases match before a shorter phrase they contain could partially match instead."
+    "order": "Longest Hindi phrase first within each group so multi-word phrases match before a shorter phrase they contain could partially match instead.",
+    "assamese": "The Bengali-Assamese-script (U+0980–U+09FF) rows at the END of `pairs` are the as-IN additions — MACHINE-AUTHORED, PENDING NATIVE REVIEW. They map onto the SAME English targets as the Hindi rows so the corpus tuning is reused. Because Bengali script is disjoint from Devanagari, an Assamese row can never substring-match inside Hindi text and vice-versa, so Hindi/English classification stays byte-identical (regression-tested in tests.py). Longest-first within the block; government words (চৰকাৰ/সৰকাৰ/অধিকাৰ) are consumed before কাৰ so 'car' is not spuriously injected — the as-IN analogue of the standing सरकार/कार guard."
   },
   "pairs": [
     ["ईंधन रिसाव", "fuel leak"],
@@ -81,6 +82,54 @@
 
     ["यात्रियों", "passenger"], ["यात्री", "passenger"], ["ड्राइवर", "driver"], ["चालक", "driver"],
     ["सुरंग", "tunnel"], ["फ्लाईओवर", "bridge"], ["पुल", "bridge"], ["टोल प्लाजा", "toll"],
-    ["सड़क", "road"], ["राजमार्ग", "highway"], ["दुर्घटना", "accident"], ["हादसा", "accident"]
+    ["सड़क", "road"], ["राजमार्ग", "highway"], ["दुर्घटना", "accident"], ["हादसा", "accident"],
+
+    ["চৰকাৰী", "government"], ["চৰকাৰ", "government"], ["সৰকাৰ", "government"], ["অধিকাৰ", "rights"],
+
+    ["ইন্ধন লিকেজ", "fuel leak"], ["ইন্ধন ওলাই", "fuel leak"], ["গেছ লিকেজ", "gas leak"],
+    ["টায়াৰ ফাটিল", "tyre burst"], ["গছ পৰিল", "fallen tree"], ["শিল পৰিল", "rockfall"],
+    ["জুই লাগিল", "fire"], ["জুই লাগি", "fire"],
+    ["উশাহ ল'ব পৰা নাই", "not breathing"], ["হৃদযন্ত্ৰ", "heart attack"],
+    ["ব্ৰেক ফেইল", "brake failure"], ["ইঞ্জিন বন্ধ", "engine failure"],
+    ["পথচাৰী", "pedestrian"], ["চাইকেল আৰোহী", "cyclist"],
+    ["অটোৰিক্সা", "auto rickshaw"], ["অটো ৰিক্সা", "auto rickshaw"], ["অটো", "auto"],
+
+    ["খুন্দা মাৰিলে", "hit collided"], ["খুন্দা মাৰি", "hit collided"], ["খুন্দা", "hit collided"],
+    ["খুন্দি", "hit collided"], ["সংঘৰ্ষ", "hit collided"], ["সংঘর্ষ", "hit collided"],
+    ["ভিৰি", "hit collided"], ["ঠেকা", "hit collided"],
+    ["চেপি ধৰিলে", "crushed"], ["গচকি", "ran over"],
+
+    ["গাড়ীবোৰ", "vehicles"], ["গাড়ীকেইখন", "vehicles"], ["বাহনবোৰ", "vehicles"],
+    ["গাড়ী", "car"], ["গাড়ি", "car"], ["কাৰ", "car"], ["বাহন", "car"],
+    ["ট্ৰাক", "truck"], ["ট্রাক", "truck"], ["লৰী", "truck"],
+    ["বাছ", "bus"], ["বাস", "bus"],
+    ["মটৰচাইকেল", "motorcycle"], ["মোটৰচাইকেল", "motorcycle"], ["বাইক", "motorcycle"],
+    ["স্কুটাৰ", "scooter"], ["স্কুটী", "scooter"], ["টেম্পো", "tempo"],
+    ["চাইকেল", "bicycle"], ["ট্ৰেইলাৰ", "trailer"], ["টেংকাৰ", "tanker"],
+
+    ["বাগৰি পৰিল", "rollover"], ["বাগৰি", "rollover"], ["লুটিয়াই", "rollover"], ["পল্টি", "rollover"],
+    ["খাৱৈত পৰিল", "fell into ditch"], ["পৰি গ'ল", "fell"], ["পৰিল", "fell"],
+
+    ["জুই", "fire"], ["জ্বলি আছে", "fire"], ["জ্বলিছে", "fire"],
+    ["বিস্ফোৰণ", "explosion"], ["ফাটিল", "burst"], ["ধোঁৱা", "smoke"],
+    ["ৰাসায়নিক", "chemical"], ["ৰসায়ন", "chemical"], ["বিষাক্ত", "toxic"], ["ইন্ধন", "fuel"],
+
+    ["বেয়াকৈ আঘাত", "injured"], ["আহত", "injured"], ["আঘাত", "injured"], ["জখম", "injured"],
+    ["সংজ্ঞাহীন", "unconscious"], ["অচেতন", "unconscious"], ["অজ্ঞান", "unconscious"],
+    ["তেজ বৈ আছে", "bleeding"], ["তেজ ওলাই", "bleeding"], ["তেজ", "bleeding"],
+    ["মৃত্যু", "casualty"], ["নিহত", "casualty"], ["মৰিল", "casualty"],
+    ["আটক", "trapped"], ["ফান্দত", "trapped"], ["ফাঁহি", "trapped"], ["চেপা খাই", "pinned"],
+    ["গৰ্ভৱতী", "pregnant"], ["শিশু", "child"], ["ল'ৰা-ছোৱালী", "child"], ["বৃদ্ধ", "elderly"],
+
+    ["বিকল হ'ল", "breakdown"], ["বিকল", "breakdown"], ["পাংচাৰ", "puncture"],
+    ["ব্ৰেক", "brake"], ["ইঞ্জিন", "engine"], ["টায়াৰ", "tyre"], ["বন্ধ হ'ল", "stalled"],
+
+    ["বান পানী", "flood"], ["কুঁৱলী", "fog"], ["ধুমুহা", "storm"], ["বৰষুণ", "rain"],
+    ["গাঁত", "pothole"], ["ধ্বংসাৱশেষ", "debris"],
+
+    ["হাতী", "elephant"], ["গৰু", "cow"], ["মহিষ", "buffalo"], ["কুকুৰ", "dog"], ["জন্তু", "animal"],
+    ["যাত্ৰী", "passenger"], ["ড্ৰাইভাৰ", "driver"], ["চালক", "driver"],
+    ["দলং", "bridge"], ["সুৰংগ", "tunnel"],
+    ["ৰাস্তা", "road"], ["ঘাইপথ", "highway"], ["দুৰ্ঘটনা", "accident"]
   ]
 }

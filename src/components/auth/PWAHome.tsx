@@ -44,7 +44,7 @@ export default function PWAHome() {
   }
   // Language chosen → into the voice dispatcher in that language. Emergencies
   // must never be blocked, so a signed-out user is dropped into guest mode first.
-  function startVoice(locale: "en-IN" | "hi-IN") {
+  function startVoice(locale: "en-IN" | "hi-IN" | "as-IN") {
     if (!user) continueAsGuest();
     setLaunchIntent("voice", locale);
     enterPwa();

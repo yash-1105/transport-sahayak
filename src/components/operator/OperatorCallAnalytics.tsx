@@ -82,7 +82,7 @@ function outcomePill(outcome: string | null): React.CSSProperties {
 }
 
 function localeLabel(loc: string | null): string {
-  return loc === "hi-IN" ? "हिंदी" : loc === "en-IN" ? "English" : "—";
+  return loc === "hi-IN" ? "हिंदी" : loc === "en-IN" ? "English" : loc === "as-IN" ? "অসমীয়া" : "—";
 }
 
 // ── stat tile (matches the Network dashboard tiles) ───────────────────────────

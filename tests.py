@@ -3119,4 +3119,188 @@ def _fastpath_backend_agnostic():
 check("#HI fast-path guards are backend-agnostic: _compose_single_round_reply is identical for Sarvam vs Gemini",
       _fastpath_backend_agnostic())
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ASSAMESE (as-IN) voice dispatcher — Saaras STT + ElevenLabs eleven_v3 TTS +
+# shared Sarvam reasoning, built by SUBCLASSING HindiDispatcherSession with ZERO
+# edits to dispatcher_hindi.py. Shared-classifier touches are additive: the
+# Hindi/English vehicle + glossary tests ABOVE still pass, proving those paths
+# are byte-identical. ⚠ Assamese CONTENT is machine-authored, pending native review.
+# ─────────────────────────────────────────────────────────────────────────────
+from severity_engine import dispatcher_assamese as _asm
+from severity_engine import elevenlabs_speech as _el
+from severity_engine.dispatcher_hindi import _CANONICAL_QUESTIONS as _HI_CANON
+from severity_engine.dispatch_briefing import build_briefing_instruction as _bbi
+
+def _has_bengali(s):
+    return any('ঀ' <= ch <= '৿' for ch in s)
+
+# --- Canonical-question coverage (mirrors the Hindi coverage test above) ---
+_as_uncovered = sorted(h for h in _needed_hints if h not in _asm._AS_CANONICAL_QUESTIONS)
+check(f"#AS every REQUIRED_FIELDS hint has a canonical Assamese question (uncovered: {_as_uncovered})",
+      not _as_uncovered)
+check("#AS canonical-question KEY SET is identical to Hindi's (kept in lockstep)",
+      set(_asm._AS_CANONICAL_QUESTIONS) == set(_HI_CANON))
+check("#AS every canonical Assamese question is non-empty Bengali-Assamese script",
+      all(v.strip() and _has_bengali(v) for v in _asm._AS_CANONICAL_QUESTIONS.values()))
+
+# --- Shared glossary: Assamese translated, government word guarded ---
+check("#AS glossary maps গাড়ী->car; চৰকাৰী->government (no spurious 'car')",
+      "car" in classifier._translate_hindi("মোৰ গাড়ী") and
+      "car" not in classifier._translate_hindi("চৰকাৰী চাকৰি"))
+
+# --- Vehicle backstop: Assamese suffix-aware, false-positive-safe, EN/HI intact ---
+check("#AS suffixed vehicles: কাৰ + ট্ৰাকৰ -> {car, truck}",
+      _mentioned_vehicle_types("মোৰ কাৰ এখন ট্ৰাকৰ সৈতে খুন্দা মাৰিলে") == {"car", "truck"})
+check("#AS stacked suffix: গাড়ীখন + বাছখনৰ -> {car, bus}",
+      _mentioned_vehicle_types("গাড়ীখন বাছখনৰ লগত খুন্দা") == {"car", "bus"})
+check("#AS same-type count: কাৰ ... কাৰখন -> car:2 (drives the Car vs Car override)",
+      _vehicle_type_mention_counts("এখন কাৰত আন এখন কাৰখন খুন্দা").get("car") == 2)
+check("#AS false-positive safety: কাৰণ/চৰকাৰ/কাৰতুছ/বাছনি name NO vehicle",
+      all(_mentioned_vehicle_types(w) == set()
+          for w in ("কি কাৰণত", "চৰকাৰী চাকৰি", "কাৰতুছ পোৱা গল", "প্ৰাৰ্থী বাছনি")))
+check("#AS Assamese collision verb (খুন্দা) detected", _mentions_collision("দুখন গাড়ীৰ খুন্দা"))
+check("#AS additions leave Hindi/English vehicle detection unchanged",
+      _mentioned_vehicle_types("car collided with a truck") == {"car", "truck"} and
+      _mentioned_vehicle_types("मेरी कार की ट्रक से टक्कर") == {"car", "truck"} and
+      _mentioned_vehicle_types("सरकार की मदद चाहिए") == set() and
+      _mentioned_vehicle_types("cargo truck accident") == {"truck"})
+
+# --- Routing: Exotel as-IN -> ExotelAssameseSession; others unchanged ---
+from integrations.exotel.session import make_exotel_session, ExotelWebSocketAdapter
+class _FakeExotelWS: pass
+def _mk_exotel(loc):
+    return make_exotel_session(loc, ExotelWebSocketAdapter(_FakeExotelWS(), locale=loc))
+check("#AS Exotel router: as-IN -> ExotelAssameseSession; hi/en/unknown unchanged",
+      type(_mk_exotel("as-IN")).__name__ == "ExotelAssameseSession" and
+      type(_mk_exotel("hi-IN")).__name__ == "ExotelHindiSession" and
+      type(_mk_exotel("en-IN")).__name__ == "ExotelEnglishSession" and
+      type(_mk_exotel("zz")).__name__ == "ExotelHindiSession")
+
+# --- Session: STT/TTS/config wiring, and overrides live on the SUBCLASS only ---
+_as_sess = _asm.AssameseDispatcherSession(_FakeWS())
+check("#AS session wiring: as-IN language, Saaras STT, ElevenLabs TTS, Assamese prompts",
+      _as_sess.state.language == "as-IN" and _as_sess._language == "as-IN" and
+      _as_sess._stt.__class__.__name__ == "SaarasStream" and _as_sess._stt._language == "as-IN" and
+      _as_sess._tts.__class__.__name__ == "ElevenLabsV3Stream" and
+      "অসমীয়া" in _as_sess._gen_config.system_instruction and
+      "অসমীয়া" in _as_sess._briefing_config.system_instruction)
+check("#AS overrides live on the subclass, not mutating HindiDispatcherSession (zero-Hindi-diff invariant)",
+      issubclass(_asm.AssameseDispatcherSession, HindiDispatcherSession) and
+      "_speak_or_fallback" in _asm.AssameseDispatcherSession.__dict__ and
+      _asm.AssameseDispatcherSession._render_for_speech is not HindiDispatcherSession._render_for_speech)
+
+# render_for_speech: repeated opener stripped (no two identical openers in a row)
+_as_sess._last_opener = "ওহ..."
+check("#AS render_for_speech strips a repeated opener",
+      not _as_sess._render_for_speech("ওহ... আকৌ এটা কথা।").startswith("ওহ..."))
+
+# _prewarm_fillers is a no-op (no Bulbul path for Assamese)
+check("#AS _prewarm_fillers is a no-op", asyncio.run(_as_sess._prewarm_fillers()) is None)
+
+# _speak_or_fallback swaps inherited Hindi error/notice lines for Assamese
+import severity_engine.dispatcher_hindi as _dh
+_orig_spk = _dh.HindiDispatcherSession._speak_or_fallback
+_cap = {}
+async def _fake_spk(self, text, allow_bargein=True, pipeline=False):
+    _cap["t"] = text
+    return True
+_dh.HindiDispatcherSession._speak_or_fallback = _fake_spk
+try:
+    asyncio.run(_as_sess._speak_or_fallback(_dh._REPROMPT_LINES[0])); _sub1 = _cap["t"]
+    asyncio.run(_as_sess._speak_or_fallback("ঠিক আছে।")); _sub2 = _cap["t"]
+finally:
+    _dh.HindiDispatcherSession._speak_or_fallback = _orig_spk
+check("#AS _speak_or_fallback substitutes inherited Hindi error lines, passes others through",
+      _sub1 == _asm._AS_LINE_SUBS[_dh._REPROMPT_LINES[0]] and _has_bengali(_sub1) and _sub2 == "ঠিক আছে।")
+
+# Fast path composes an Assamese ack + canonical next-question
+_as_sess.state.category = "Vehicle Collisions"
+_as_sess.state.sub_type = "Car vs. Car Collision"
+_as_sess.state.location = {"lat": 1, "lng": 1, "label": "x"}
+_as_sess.state.description = "car crash"
+_as_sess._accident_mode = True
+_as_sess._use_sarvam = True
+_as_composed = _as_sess._compose_single_round_reply("", {"update_form_field"})
+check("#AS single-round fast path composes an Assamese ack + canonical question",
+      _as_composed is not None and "?" in _as_composed and _has_bengali(_as_composed))
+
+# Assamese ambulance latch fires on এম্বুলেন্স (Hindi latch can't match it)
+_as2 = _asm.AssameseDispatcherSession(_FakeWS())
+_as2._accident_mode = True
+_as2.state.caller_transcript = "মোৰ এম্বুলেন্স লাগে"
+asyncio.run(_as2._apply_local_signals_from_transcript())
+check("#AS ambulance latch fires on Assamese এম্বুলেন্স", _as2._ambulance_requested is True)
+
+# --- Closing briefing: as-IN branch is Assamese and distinct from hi-IN ---
+class _StF:
+    def __init__(self):
+        self.flags = {"Fire"}; self.flags_discussed = set()
+_svc = {"ambulance": {"name": "A", "etaMinutes": 12}}
+_bf_as = _bbi(_StF(), _svc, "as-IN"); _bf_hi = _bbi(_StF(), _svc, "hi-IN")
+check("#AS closing briefing: as-IN branch is Assamese, distinct from hi-IN, names Assamese as delivery language",
+      "এম্বুলেন্স" in _bf_as and "অসমীয়া" in _bf_as and _bf_as != _bf_hi)
+
+# --- ElevenLabs TTS client: interface, graceful failure, no-API empty speak ---
+check("#AS ElevenLabs client mirrors BulbulStream's public surface",
+      all(hasattr(_el.ElevenLabsV3Stream, m) for m in ("ensure_open", "speak", "cancel_current", "close")))
+import os as _os
+_saved_key = _os.environ.pop("ELEVENLABS_API_KEY", None)
+try:
+    _raised = False
+    try:
+        _el._api_key()
+    except _el.ElevenLabsTTSError:
+        _raised = True
+    check("#AS ElevenLabs missing key -> ElevenLabsTTSError (drives the tts_text fallback)", _raised)
+finally:
+    if _saved_key is not None:
+        _os.environ["ELEVENLABS_API_KEY"] = _saved_key
+async def _as_empty_speak():
+    st = _el.ElevenLabsV3Stream("as-IN")
+    out = [c async for c in st.speak("   ")]
+    await st.close()
+    return out
+check("#AS ElevenLabs speak(blank) yields no audio and makes no API call", asyncio.run(_as_empty_speak()) == [])
+
+# Sample-alignment (the "loud static" fix): ElevenLabs' HTTP stream yields
+# arbitrary TCP-sized chunks, ~15% ODD-length, which split a PCM16 sample across
+# frames. The browser converts EACH frame independently via `new Int16Array`
+# (needs even byteLength + sample-aligned start), so a raw odd chunk drops that
+# frame AND byte-shifts every following sample -> static. speak() must re-chunk
+# to EVEN (whole-sample) frames, carrying the odd byte forward, losing no bytes.
+class _FakeElevenResp:
+    status_code = 200
+    def __init__(self, chunks): self._chunks = chunks
+    async def aiter_bytes(self):
+        for c in self._chunks:
+            yield c
+    async def aread(self): return b""
+class _FakeElevenStreamCtx:
+    def __init__(self, chunks): self._chunks = chunks
+    async def __aenter__(self): return _FakeElevenResp(self._chunks)
+    async def __aexit__(self, *a): return False
+class _FakeElevenClient:
+    def __init__(self, chunks): self._chunks = chunks
+    def stream(self, *a, **k): return _FakeElevenStreamCtx(self._chunks)
+    async def aclose(self): pass
+async def _as_align(raw_chunks):
+    _saved = _os.environ.get("ELEVENLABS_API_KEY")
+    _os.environ["ELEVENLABS_API_KEY"] = "dummy-for-header"
+    try:
+        st = _el.ElevenLabsV3Stream("as-IN")
+        st._client = _FakeElevenClient(raw_chunks)  # bypass ensure_open()'s real httpx client
+        return [c async for c in st.speak("hi")]
+    finally:
+        if _saved is None:
+            _os.environ.pop("ELEVENLABS_API_KEY", None)
+        else:
+            _os.environ["ELEVENLABS_API_KEY"] = _saved
+# Deliberately odd-length chunks (3,2,1,3,3) summing to an EVEN total (12 bytes).
+_raw = [b"\x01\x02\x03", b"\x04\x05", b"\x06", b"\x07\x08\x09", b"\x0a\x0b\x0c"]
+_yielded = asyncio.run(_as_align(_raw))
+check("#AS ElevenLabs speak re-chunks the stream to EVEN (sample-aligned) frames only",
+      all(len(c) % 2 == 0 for c in _yielded))
+check("#AS ElevenLabs sample-alignment loses no audio bytes (even total preserved exactly)",
+      b"".join(_yielded) == b"".join(_raw))
+
 print("\nALL TESTS PASSED")

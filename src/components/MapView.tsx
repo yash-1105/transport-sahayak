@@ -697,7 +697,7 @@ export default function MapView() {
     launchIntent === "voice" ? "DISPATCHER" : undefined
   );
   const [reportAutoStartVoice, setReportAutoStartVoice] = useState(launchIntent === "voice");
-  const [reportVoiceLocale, setReportVoiceLocale] = useState<"en-IN" | "hi-IN" | null>(
+  const [reportVoiceLocale, setReportVoiceLocale] = useState<"en-IN" | "hi-IN" | "as-IN" | null>(
     () => useAuthStore.getState().launchVoiceLocale
   );
   const [reportSession, setReportSession] = useState(0);
@@ -795,9 +795,9 @@ export default function MapView() {
     setReportInitialMode(undefined); setReportAutoStartVoice(false); setReportVoiceLocale(null);
   }
   // Map SOS → open the Voice dispatcher in the given language and auto-start the
-  // call. The SOS FAB passes hi-IN (auto-Hindi); English is reached via the
-  // in-call language switch in DispatcherSection.
-  function startSosVoice(locale: "en-IN" | "hi-IN") {
+  // call. The SOS FAB passes hi-IN (auto-Hindi); English and Assamese are
+  // reached via the in-call language switch in DispatcherSection.
+  function startSosVoice(locale: "en-IN" | "hi-IN" | "as-IN") {
     setReportInitialMode("DISPATCHER"); setReportAutoStartVoice(true); setReportVoiceLocale(locale);
     setReportSession((s) => s + 1);
     setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true);

@@ -12,7 +12,12 @@ import { useCallback, useRef, useState } from "react";
 // The backend sends back JSON text frames: {"type":"interim"|"final","text":
 // string} or {"type":"error","message":string}.
 
-export type VoiceLocale = "en-IN" | "hi-IN";
+// "as-IN" (Assamese) is a valid locale for the conversational DISPATCHER
+// (useVoiceDispatcher → /ws/dispatcher, Saaras STT + ElevenLabs TTS). The plain
+// text-mode STT (useVoiceInput → /ws/voice, voice_stream.py) supports only
+// en-IN/hi-IN and its UI selector stays EN/HI; if as-IN ever reached it the
+// backend safely falls back to en-IN, so widening the shared type is harmless.
+export type VoiceLocale = "en-IN" | "hi-IN" | "as-IN";
 
 export interface UseVoiceInput {
   supported: boolean;
