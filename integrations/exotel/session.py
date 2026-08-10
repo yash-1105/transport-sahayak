@@ -134,6 +134,26 @@ class ExotelWebSocketAdapter:
         self.last_caller_utterance: str = ""
         self.call_complete = False
         self.query_params = {"locale": locale}  # session doesn't read this; present for safety
+        # The Exotel `start` event carries the applet's custom_parameters (the IVR's
+        # DTMF-selected locale lives here when it's not in the URL query string).
+        self.custom_parameters: dict = {}
+        self._start_seen: "asyncio.Event" = asyncio.Event()
+
+    async def wait_for_start(self, timeout: float) -> None:
+        """Block until the Exotel `start` event has been parsed (custom_parameters
+        populated) or `timeout` elapses. Lets the router read the IVR-passed locale
+        from the flow's custom parameters when it isn't in the URL query string."""
+        try:
+            await asyncio.wait_for(self._start_seen.wait(), timeout)
+        except asyncio.TimeoutError:
+            pass
+
+    def configure_for_locale(self, locale: str) -> None:
+        """Apply the locale-derived transport settings once the locale is known
+        (resolved from the query string OR start custom_parameters). English
+        (Gemini Live, NO_INTERRUPTION) needs the echo gate; Hindi keeps barge-in."""
+        self._gate_caller_audio = (locale == "en-IN")
+        self.query_params = {"locale": locale or "hi-IN"}
 
     def _agent_is_speaking(self) -> bool:
         """True while the agent's audio is going out OR still playing on the phone.
@@ -174,11 +194,17 @@ class ExotelWebSocketAdapter:
                     self.stream_sid = ev.stream_sid or self.stream_sid
                     self.call_sid = ev.call_sid
                     self.from_number = ev.from_number
+                    # Flow variables passed by the Exotel applet (e.g. the IVR's
+                    # DTMF-selected locale) arrive here, NOT in the query string --
+                    # the router reads locale from these when it's not in the URL.
+                    self.custom_parameters = ev.custom_parameters or {}
+                    self._start_seen.set()
                     if ev.sample_rate and ev.sample_rate != self._audio.exotel_rate:
                         self._audio = AudioAdapter(ev.sample_rate)  # trust the applet's actual rate
                     self._stamp("connected")
-                    logger.info("Exotel call started (call_sid=%s from=%s rate=%dHz)",
-                                self.call_sid, mask_phone(self.from_number), self._audio.exotel_rate)
+                    logger.info("Exotel call started (call_sid=%s from=%s rate=%dHz params=%s)",
+                                self.call_sid, mask_phone(self.from_number), self._audio.exotel_rate,
+                                sorted(self.custom_parameters))
                 elif ev.kind == "media" and ev.audio:
                     self._stamp("first_audio_in")
                     if self._gate_caller_audio and self._agent_is_speaking():

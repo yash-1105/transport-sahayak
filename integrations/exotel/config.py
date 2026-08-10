@@ -41,6 +41,10 @@ EXOTEL_HEALTH_PATH = (os.environ.get("EXOTEL_HEALTH_PATH", "/exotel/health").str
 # 16000/24000). The actual rate is read from the `start` frame's media_format and
 # the resampler auto-reconfigures — this is only the pre-start default.
 _RAW_SAMPLE_RATE = os.environ.get("EXOTEL_SAMPLE_RATE", "8000")
+# How long to wait for the `start` event (to read the IVR locale from the applet's
+# custom_parameters) when it isn't in the URL query string. start arrives ~instantly,
+# so this only bounds the fallback; on timeout the router defaults to hi-IN.
+LOCALE_START_WAIT_S = float(os.environ.get("EXOTEL_LOCALE_START_WAIT_S", "3"))
 
 # ── services reuse (the app's own endpoints) ──────────────────────────────────
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:3000").rstrip("/")

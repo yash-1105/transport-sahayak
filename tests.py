@@ -2347,6 +2347,26 @@ check("#EX locale routing: en-IN->English, hi-IN/missing/unknown->Hindi (phone d
       isinstance(_route_en, ExotelEnglishSession) and isinstance(_route_hi, ExotelHindiSession)
       and isinstance(_route_missing, ExotelHindiSession) and isinstance(_route_unknown, ExotelHindiSession))
 
+async def _exotel_locale_from_custom_params():
+    # Exotel carries the IVR's DTMF locale in the `start` event's custom_parameters
+    # when it's NOT in the URL query string -> the router reads it there and
+    # configures the en-IN echo gate.
+    ex = _FakeExotelWS([
+        _ex_msg({"event": "start", "stream_sid": "SS", "start": {"call_sid": "C", "from": "+91",
+                 "media_format": {"sample_rate": 8000}, "custom_parameters": {"locale": "en-IN"}}}),
+        _ex_msg({"event": "stop"}),
+    ])
+    ad = ExotelWebSocketAdapter(ex, exotel_rate=8000)
+    ad.start()
+    await ad.wait_for_start(2.0)
+    locale = str(ad.custom_parameters.get("locale") or "").strip()
+    ad.configure_for_locale(locale)
+    sess = make_exotel_session(locale, ad)
+    return (locale == "en-IN" and ad._gate_caller_audio is True
+            and ad.query_params["locale"] == "en-IN" and isinstance(sess, ExotelEnglishSession))
+check("#EX locale from start custom_parameters (fallback when not in the URL) -> en-IN gate + English session",
+      asyncio.run(_exotel_locale_from_custom_params()))
+
 # ── Echo guard (Phase 3): English drops caller audio while the agent speaks ──
 # (replaces the browser mic-gate that a phone line doesn't have; Hindi keeps barge-in)
 async def _echo_gate_media(gate, speaking, locale="en-IN"):
