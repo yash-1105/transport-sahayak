@@ -1,7 +1,7 @@
 // i18n string map for Transport Sahayak
-// Languages: EN (English), HI (Hindi / Devanagari)
+// Languages: EN (English), HI (Hindi / Devanagari), AS (Assamese)
 
-export type Locale = "EN" | "HI";
+export type Locale = "EN" | "HI" | "AS";
 
 export const strings = {
   // ── App shell ────────────────────────────────────────────────────────────────

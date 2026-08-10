@@ -10,15 +10,17 @@ export function useT() {
   };
 }
 
-// Bilingual helper for the UI redesign. The language toggle still switches the
-// whole UI (and the voice-recognition locale) — that behaviour is unchanged.
-// On top of that, the design shows a lighter Hindi sub-label beside the English
-// label. We surface that sub-label only when English is the active primary
-// (showHindi), so Hindi text is never duplicated once the toggle is on Hindi.
+// Bilingual helper — RETIRED to single-language rendering (2026-08). The UI used to
+// show a lighter Hindi sub-label beside the English label in EN mode. Now that there
+// is an explicit EN / हिंदी / অসমীয়া switcher (LanguageSwitcher), that dual-label is
+// redundant and, with three languages, risks a mismatched second language (e.g. a
+// Hindi sub-label while Assamese is selected). So `showHindi` is now always false:
+// every `showHindi && <Hindi>` secondary collapses to nothing, and each surface
+// renders in exactly the selected language (useT) or its own single base label. The
+// hook is kept (not deleted) so the many call sites need no churn.
 export function useBilingual() {
-  const locale = useLocaleStore((s) => s.locale);
   return {
-    showHindi: locale === "EN",
+    showHindi: false,
     hi(key: StringKey): string {
       const entry = strings[key] as Record<string, string>;
       return entry["HI"] ?? "";

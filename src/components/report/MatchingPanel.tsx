@@ -1085,7 +1085,7 @@ export default function MatchingPanel({
       {ranked.length > 0 && (
         <div>
           <div className="flex items-baseline" style={{ gap: 8, padding: "0 2px 8px" }}>
-            <span style={{ ...CAPS, flex: 1 }}>Matched hospitals · अस्पताल</span>
+            <span style={{ ...CAPS, flex: 1 }}>Matched hospitals</span>
             <span style={{ fontSize: 11, color: C.faint }}>
               {routeSource === "traffic" ? "traffic time · trauma · specialty" : "proximity · trauma · specialty"}
             </span>

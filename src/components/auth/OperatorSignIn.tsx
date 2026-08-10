@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import { C } from "@/lib/design";
 import { Sheet, Field, TextInput, PrimaryButton, ErrorBanner } from "@/components/auth/ui";
 import { useAuthStore, isOperatorEmail } from "@/store/authStore";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 // Compact, deliberately spare operator ("admin") sign-in — reached only via the
 // quiet corner entry on the gate. Visually distinct from the citizen form (navy
@@ -64,6 +65,9 @@ export default function OperatorSignIn({ onClose }: { onClose: () => void }) {
         <div style={{ fontSize: 12, lineHeight: 1.35 }}>
           <div style={{ fontWeight: 600 }}>Restricted — operator access</div>
           <div style={{ color: "#93A3BE", fontSize: 11 }}>Network dispatch dashboard. Staff only.</div>
+        </div>
+        <div style={{ marginLeft: "auto", flex: "none" }}>
+          <LanguageSwitcher tone="light" />
         </div>
       </div>
 

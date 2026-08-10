@@ -162,7 +162,7 @@ export default function SafetyProfileSheet({ showHindi, onClose }: { showHindi: 
           {error && <ErrorBanner>{error}</ErrorBanner>}
           {saved && <InfoBanner tone="green">Saved. Your safety profile is up to date.</InfoBanner>}
 
-          <PrimaryButton onClick={save} busy={saving}>Save profile · सहेजें</PrimaryButton>
+          <PrimaryButton onClick={save} busy={saving}>Save profile</PrimaryButton>
         </div>
       )}
     </Sheet>

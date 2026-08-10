@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { C, RADIUS, CTA_GRADIENT, BRAND_GRADIENT, SHADOW } from "@/lib/design";
 import { ShieldCrossIcon, UserIcon, MicIcon } from "@/components/ui/icons";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { useBilingual } from "@/hooks/useI18n";
 import { useAuthStore } from "@/store/authStore";
 import AuthLanding from "@/components/auth/AuthLanding";
@@ -85,6 +86,8 @@ export default function PWAHome() {
           </div>
         </div>
 
+        <div className="flex items-center flex-none" style={{ gap: 8 }}>
+        <LanguageSwitcher tone="dark" />
         {user ? (
           <button
             onClick={handleProfile}
@@ -104,6 +107,7 @@ export default function PWAHome() {
             <span>Sign in{showHindi && <span style={{ color: C.muted, fontWeight: 500 }}> · साइन इन</span>}</span>
           </button>
         )}
+        </div>
       </div>
 
       {/* ── Center: SOS (auto-Hindi) + Report Incident + View dashboard ── */}

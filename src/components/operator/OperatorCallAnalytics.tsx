@@ -172,7 +172,7 @@ export default function OperatorCallAnalytics() {
                   <tr style={{ textAlign: "left", color: C.muted }}>
                     <th style={thStyle}>Metric</th>
                     <th style={thStyle}>English</th>
-                    <th style={thStyle}>हिंदी</th>
+                    <th style={thStyle}>Hindi</th>
                   </tr>
                 </thead>
                 <tbody>

@@ -366,7 +366,7 @@ export default function SurakshaMitraSheet({ showHindi, onClose }: { showHindi: 
           {error && <ErrorBanner>{error}</ErrorBanner>}
           {saved && <InfoBanner tone="green">Registered. Thank you for volunteering as a Suraksha Mitra.</InfoBanner>}
 
-          <PrimaryButton onClick={save} busy={saving} disabled={!canSave}>Register · पंजीकरण करें</PrimaryButton>
+          <PrimaryButton onClick={save} busy={saving} disabled={!canSave}>Register</PrimaryButton>
           {!loc && (
             <p style={{ fontSize: 11, color: C.muted, textAlign: "center", marginTop: -4 }}>
               Set your location to register.

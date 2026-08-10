@@ -47,9 +47,9 @@ export default function OnboardingFlow() {
             )}
           </InfoBanner>
           <PrimaryButton onClick={() => setStep("profile")}>
-            Set up safety profile · जारी रखें
+            Set up safety profile
           </PrimaryButton>
-          <SkipButton onClick={finishOnboarding}>Skip for now · अभी नहीं</SkipButton>
+          <SkipButton onClick={finishOnboarding}>Skip for now</SkipButton>
         </div>
       </Sheet>
     );
@@ -76,9 +76,9 @@ export default function OnboardingFlow() {
             )}
           </InfoBanner>
           <PrimaryButton onClick={() => setStep("mitra")}>
-            Register as Suraksha Mitra · पंजीकरण करें
+            Register as Suraksha Mitra
           </PrimaryButton>
-          <SkipButton onClick={finishOnboarding}>Maybe later · बाद में</SkipButton>
+          <SkipButton onClick={finishOnboarding}>Maybe later</SkipButton>
         </div>
       </Sheet>
     );

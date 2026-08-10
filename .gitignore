@@ -51,3 +51,4 @@ __pycache__/
 # Supabase CLI local link state (per-machine cache)
 supabase/.temp/
 supabase/.branches/
+.env*

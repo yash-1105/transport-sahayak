@@ -680,10 +680,7 @@ function AssessmentCard({
       {/* Severity assessment card */}
       <section style={{ border: `1px solid ${accent.border}`, borderRadius: RADIUS.card, overflow: "hidden" }}>
         <div className="flex items-center gap-2.5" style={{ background: accent.bg, padding: "10px 16px" }}>
-          <span style={{ ...CAPS, color: accent.text, flex: 1 }}>Severity assessment{" "}
-            {/* Hindi handled inline for the post-report card */}
-            <span style={{ fontWeight: 500 }}>· गंभीरता आकलन</span>
-          </span>
+          <span style={{ ...CAPS, color: accent.text, flex: 1 }}>Severity assessment</span>
           <span style={{ fontSize: 11, fontWeight: 600, background: "#fff", border: `1px solid ${accent.border}`, color: accent.text, borderRadius: RADIUS.pill, padding: "3px 10px" }}>
             {classLabel}
           </span>
@@ -830,7 +827,7 @@ function SOSView({
           onClick={onSend}
           style={{ width: "100%", padding: 17, border: "none", borderRadius: 13, background: CTA_GRADIENT, color: "#fff", fontSize: 16, fontWeight: 700, letterSpacing: ".08em", cursor: "pointer", boxShadow: "0 6px 20px rgba(198,54,44,.35)" }}
         >
-          SEND SOS · एसओएस भेजें
+          SEND SOS
         </button>
       )}
 
@@ -916,7 +913,7 @@ function VoiceSection({
   return (
     <div className="flex flex-col gap-3">
       <div>
-        <FieldLabel suffix="· भाषा">Voice language</FieldLabel>
+        <FieldLabel>Voice language</FieldLabel>
         <Segmented
           options={[{ key: "en-IN", label: "English" }, { key: "hi-IN", label: "हिंदी" }]}
           value={locale}
@@ -1112,7 +1109,7 @@ function FormView({
 
       {/* Observed conditions — toggle chips */}
       <div>
-        <FieldLabel suffix="· देखी गई स्थितियाँ">Observed conditions</FieldLabel>
+        <FieldLabel>Observed conditions</FieldLabel>
         <div className="flex flex-wrap" style={{ gap: 8 }}>
           {QUICK_FLAGS.map((flag) => {
             const active = selectedFlags.has(flag);
@@ -1139,7 +1136,7 @@ function FormView({
       </div>
 
       {/* Submit */}
-      <SubmitButton canSubmit={canSubmit} onClick={onSubmit} label="Submit report · रिपोर्ट भेजें" />
+      <SubmitButton canSubmit={canSubmit} onClick={onSubmit} label="Submit report" />
     </div>
   );
 }
@@ -1195,7 +1192,7 @@ function PotholeFormView({
 
       {/* Severity */}
       <div>
-        <FieldLabel suffix="· गंभीरता">Severity</FieldLabel>
+        <FieldLabel>Severity</FieldLabel>
         <div className="flex" style={{ gap: 8 }}>
           {SEV_ITEMS.map(({ key, color }) => {
             const on = severity === key;
@@ -1224,7 +1221,7 @@ function PotholeFormView({
       </div>
 
       {/* Submit */}
-      <SubmitButton canSubmit={canSubmit} onClick={onSubmit} label="Submit report · रिपोर्ट भेजें" />
+      <SubmitButton canSubmit={canSubmit} onClick={onSubmit} label="Submit report" />
     </div>
   );
 }

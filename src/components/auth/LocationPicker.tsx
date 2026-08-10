@@ -136,7 +136,7 @@ export default function LocationPicker({
             disabled={busy}
             style={{ flex: 2, padding: 12, border: "none", borderRadius: 11, background: busy ? "#9CB3A6" : C.green, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: busy ? "default" : "pointer" }}
           >
-            {busy ? "Saving…" : "Use this location · यह स्थान चुनें"}
+            {busy ? "Saving…" : "Use this location"}
           </button>
         </div>
       </div>

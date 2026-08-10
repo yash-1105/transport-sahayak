@@ -4,6 +4,7 @@ import { ShieldCrossIcon } from "@/components/ui/icons";
 import { ErrorBanner, InfoBanner } from "@/components/auth/ui";
 import { useAuthForm } from "@/components/auth/useAuthForm";
 import OperatorSignIn from "@/components/auth/OperatorSignIn";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import AdminSignIn from "@/components/auth/AdminSignIn";
 
 // Redesigned full-screen auth screen (design handoff: design_handoff_login).
@@ -68,6 +69,11 @@ export default function AuthLanding({
   return (
     <>
     <div className="lg-auth">
+      {/* UI-language switcher — pinned top-right so guests can choose EN/HI/AS
+          before signing in (stays visible when the mobile landing scrolls). */}
+      <div style={{ position: "fixed", top: 14, right: 14, zIndex: 50 }}>
+        <LanguageSwitcher tone="light" />
+      </div>
       {/* ══ Navy brand panel ══ */}
       <aside className="lg-brand">
         {/* blueprint grid */}
@@ -90,8 +96,7 @@ export default function AuthLanding({
             </div>
             <div>
               <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-.01em" }}>Transport Sahayak</div>
-              <div style={{ fontSize: 14, color: "#93A3BE" }}>परिवहन सहायक</div>
-            </div>
+              </div>
           </div>
           <div
             className="lg-rule"
@@ -148,7 +153,7 @@ export default function AuthLanding({
           <div style={{ position: "absolute", right: 0, bottom: 0, display: "flex", flexDirection: "column", gap: 10, animation: "lgUp .7s 1.2s ease both" }}>
             <Chip dot="#4CAF7D" delay="0s">Highway helpline <b style={{ fontVariantNumeric: "tabular-nums" }}>1033</b></Chip>
             <Chip dot="#E8862B" delay="1.4s">Severity assessed in seconds</Chip>
-            <Chip dot="#6E9BE0" delay="2.8s">EN · हिंदी voice reporting</Chip>
+            <Chip dot="#6E9BE0" delay="2.8s">English & Hindi voice reporting</Chip>
           </div>
         </div>
 
@@ -174,10 +179,10 @@ export default function AuthLanding({
           {/* segmented toggle */}
           <div style={{ display: "flex", gap: 4, background: "#EAE7DF", borderRadius: 11, padding: 4, marginBottom: 20, animation: "lgUp .6s .25s ease both" }}>
             <button className="lg-seg" onClick={() => f.switchTab("signup")} style={seg(f.isSignup)}>
-              Sign up <span style={{ fontSize: 11, fontWeight: 500, opacity: 0.65 }}>· साइन अप</span>
+              Sign up
             </button>
             <button className="lg-seg" onClick={() => f.switchTab("signin")} style={seg(!f.isSignup)}>
-              Sign in <span style={{ fontSize: 11, fontWeight: 500, opacity: 0.65 }}>· साइन इन</span>
+              Sign in
             </button>
           </div>
 
@@ -252,7 +257,7 @@ export default function AuthLanding({
                 boxShadow: "0 6px 20px rgba(198,54,44,.3)", opacity: f.busy ? 0.85 : 1,
               }}
             >
-              {f.busy ? "Working…" : (<>{ctaEn} <span style={{ fontWeight: 500, opacity: 0.85 }}>· {ctaHi}</span></>)}
+              {f.busy ? "Working…" : ctaEn}
             </button>
 
             <p style={{ fontSize: 13, color: "#8A8578", textAlign: "center", margin: "14px 0 0" }}>

@@ -13,6 +13,7 @@ import { useRoutingStore, type SimulatedVehicleKind } from "@/store/routingStore
 import { useEventLog } from "@/store/eventLog";
 import TimelinePanel from "@/components/TimelinePanel";
 import AuthControl from "@/components/auth/AuthControl";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 import SafetyProfileSheet from "@/components/auth/SafetyProfileSheet";
 import { useIsOperator, useAuthStore } from "@/store/authStore";
 import InstallPWA from "@/components/InstallPWA";
@@ -958,7 +959,7 @@ export default function MapView() {
               {count} reported accident{count === 1 ? "" : "s"} in this area — drive with caution.
             </p>
             <p className="text-gray-400" style={{ fontSize: 11, marginTop: 4 }}>
-              दुर्घटना-संभावित क्षेत्र · reported density, not an official blackspot
+              Reported density — not an official blackspot
             </p>
           </div>
         ),
@@ -1043,10 +1044,11 @@ export default function MapView() {
           })}
         </nav>
 
-        {/* Account + PWA install. The EN/हिं toggle was removed — the whole UI is
-            already bilingual, so it was redundant and cost header width. Voice
-            language is still chosen in the voice flow. */}
+        {/* Language switcher (EN / हिंदी / অসমীয়া) + account + PWA install. The
+            switcher is a UI-locale control shown for every role/auth state; the
+            voice-call language is still chosen (English/Hindi only) in the voice flow. */}
         <div className="flex items-center gap-1.5 sm:gap-2 flex-none" style={{ marginLeft: "auto" }}>
+          <LanguageSwitcher tone="light" />
           <InstallPWA />
           <AuthControl />
         </div>

@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import { C } from "@/lib/design";
 import { Sheet, Field, TextInput, PrimaryButton, ErrorBanner } from "@/components/auth/ui";
 import { useAuthStore, isAdminEmail } from "@/store/authStore";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 // Administrator sign-in — the super-role above operator. Reached only via the
 // quietest corner entry on the gate. Same model as OperatorSignIn: SAME store
@@ -60,6 +61,9 @@ export default function AdminSignIn({ onClose }: { onClose: () => void }) {
         <div style={{ fontSize: 12, lineHeight: 1.35 }}>
           <div style={{ fontWeight: 600 }}>Restricted — administrator access</div>
           <div style={{ color: "#FBE7D2", fontSize: 11 }}>Network-wide oversight. Administrators only.</div>
+        </div>
+        <div style={{ marginLeft: "auto", flex: "none" }}>
+          <LanguageSwitcher tone="light" />
         </div>
       </div>
 
