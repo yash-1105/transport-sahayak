@@ -79,7 +79,7 @@ export function generateHospitalAlert(
     "by this notification.",
     "",
     "Delivery channel: SMS / Push Notification",
-    "Transport Sahayak  |  Delhi–Dehradun Corridor",
+    "Transport Sahayak  |  Guwahati, Assam",
   ].join("\n");
 }
 
@@ -126,6 +126,6 @@ export function generatePoliceAlert(
     "by this notification.",
     "",
     "Delivery channel: SMS / Push Notification",
-    "Transport Sahayak  |  Delhi–Dehradun Corridor",
+    "Transport Sahayak  |  Guwahati, Assam",
   ].join("\n");
 }

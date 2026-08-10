@@ -161,7 +161,7 @@ export default function PWAHome() {
 
       {/* ── Footer (safe-area bottom) ── */}
       <div style={{ padding: "10px 20px calc(14px + env(safe-area-inset-bottom))", textAlign: "center", fontSize: 11, color: C.faint, letterSpacing: ".1em", textTransform: "uppercase", fontVariantNumeric: "tabular-nums" }}>
-        Highway helpline 1033 · 210 km corridor
+        Highway helpline 1033 · Guwahati, Assam
       </div>
       </div>{/* ── end centered max-width column ── */}
 

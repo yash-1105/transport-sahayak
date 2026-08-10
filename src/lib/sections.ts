@@ -1,5 +1,5 @@
 // Corridor sections — seed config for the Administrator oversight view. The
-// monitored Delhi–Dehradun corridor is split into sections, each with an
+// monitored Guwahati NH-27 corridor is split into sections, each with an
 // assigned monitor (an operator/person). Incidents are bucketed into a section
 // by their position ALONG the corridor (km marker), and operators are scoped to
 // the section they monitor; the administrator sees every section.
@@ -69,10 +69,10 @@ export function corridorKmOf(p: { lat: number; lng: number }): number {
 // ── Sections (4 equal stretches of the corridor, named + assigned) ────────────
 const L = CORRIDOR_LENGTH_KM;
 export const CORRIDOR_SECTIONS: CorridorSection[] = [
-  { id: "S1", name: "Delhi approach",     hi: "दिल्ली छोर",      fromKm: 0,        toKm: L * 0.25, monitorName: "R. Verma",              monitorEmail: null },
-  { id: "S2", name: "Baghpat – Shamli",   hi: "बागपत – शामली",  fromKm: L * 0.25, toKm: L * 0.5,  monitorName: "Operator (Y. Singh)",  monitorEmail: "yashsingh1105@gmail.com" },
-  { id: "S3", name: "Saharanpur belt",    hi: "सहारनपुर पट्टी", fromKm: L * 0.5,  toKm: L * 0.75, monitorName: "S. Kaur",              monitorEmail: null },
-  { id: "S4", name: "Dehradun approach",  hi: "देहरादून छोर",   fromKm: L * 0.75, toKm: L,        monitorName: "A. Rawat",             monitorEmail: null },
+  { id: "S1", name: "Jorabat approach",        hi: "जोराबाट छोर",           fromKm: 0,        toKm: L * 0.25, monitorName: "R. Bora",              monitorEmail: null },
+  { id: "S2", name: "Khanapara – Ganeshguri",  hi: "खानापाड़ा – गणेशगुड़ी",  fromKm: L * 0.25, toKm: L * 0.5,  monitorName: "Operator (Y. Singh)",  monitorEmail: "yashsingh1105@gmail.com" },
+  { id: "S3", name: "Ulubari – Paltan Bazaar", hi: "उलुबाड़ी – पल्टन बाज़ार", fromKm: L * 0.5,  toKm: L * 0.75, monitorName: "P. Das",               monitorEmail: null },
+  { id: "S4", name: "Maligaon – Jalukbari",    hi: "मालीगाँव – जलुकबाड़ी",   fromKm: L * 0.75, toKm: L,        monitorName: "J. Kalita",            monitorEmail: null },
 ];
 
 // Which section a corridor km falls in (last section is inclusive of the end).

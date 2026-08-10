@@ -122,7 +122,7 @@ def hindi_minutes(minutes: int) -> str:
 
 def _facility_location(name: str) -> str:
     """Station names in the seed data follow "<Facility label> — <Location>"
-    (e.g. "108 Post — Baraut") — same convention MatchingPanel's own ETA cards
+    (e.g. "108 Post — Khanapara") — same convention MatchingPanel's own ETA cards
     use: what matters to the caller is the location, not the internal label."""
     idx = (name or "").find("—")
     return name[idx + 1:].strip() if idx >= 0 else (name or "").strip()

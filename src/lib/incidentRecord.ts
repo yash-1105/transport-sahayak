@@ -103,7 +103,7 @@ export function recordToText(data: IncidentRecordData): string {
 
   push(
     "TRANSPORT SAHAYAK — INCIDENT RECORD",
-    "Delhi–Dehradun Expressway Corridor — Road Safety Operations",
+    "Guwahati Metropolitan Area, Assam — Road Safety Operations",
     HR,
     `Ref: ${data.id}`,
     `Generated: ${toIST(data.generatedAt)} IST`,

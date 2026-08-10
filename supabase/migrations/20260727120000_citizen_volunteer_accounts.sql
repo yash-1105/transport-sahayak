@@ -47,7 +47,7 @@ create table public.suraksha_mitra (
   occupation text,            -- local resident / dhaba or restaurant / petrol pump / doctor-nurse-paramedic / driver / student / other
   first_aid_trained boolean default false,
   first_aid_level text,       -- none / basic / cpr / professional
-  highway text,               -- e.g. NH-27, Delhi–Dehradun Expressway
+  highway text,               -- e.g. NH-27, AT Road, Guwahati (Assam)
   patrol_stretch text,        -- coverage area / stretch
   district text,
   city text,

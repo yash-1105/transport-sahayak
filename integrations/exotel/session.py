@@ -450,7 +450,7 @@ class ExotelHindiSession(_SpokenLocationMixin, HindiDispatcherSession):
         # a place-looking utterance and only accepts a verified hit, so an accident
         # description is a no-op (no bogus location, no wasted lookup). Fixes the live
         # bug where the bot stayed stuck asking for location for 5 turns after the
-        # caller had already said "Malviya Nagar near KFC".
+        # caller had already said "Ganeshguri near Big Bazaar".
         if not self.state.location:
             loc = await self._location.try_opportunistic()
             if loc:

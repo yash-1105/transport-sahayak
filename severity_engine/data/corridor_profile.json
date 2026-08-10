@@ -1,23 +1,19 @@
 {
-  "corridorId": "DEL-DDN-NH709B",
-  "name": "Delhi-Dehradun Expressway",
-  "totalKm": 210,
+  "corridorId": "GHY-NH27",
+  "name": "Guwahati NH-27 / AT Road corridor",
+  "totalKm": 35,
   "segments": [
-    { "name": "Delhi (Akshardham-EPE)",        "kmFrom": 0,   "kmTo": 32,  "state": "DELHI" },
-    { "name": "UP (Baghpat-Saharanpur)",        "kmFrom": 32,  "kmTo": 168, "state": "UP" },
-    { "name": "Uttarakhand (Rajaji-Dehradun)",  "kmFrom": 168, "kmTo": 210, "state": "UTTARAKHAND" }
+    { "name": "Jorabat – Khanapara",          "kmFrom": 0,  "kmTo": 12, "state": "ASSAM" },
+    { "name": "Ganeshguri – Ulubari",         "kmFrom": 12, "kmTo": 22, "state": "ASSAM" },
+    { "name": "Paltan Bazaar – Bharalumukh",  "kmFrom": 22, "kmTo": 28, "state": "ASSAM" },
+    { "name": "Maligaon – Jalukbari",         "kmFrom": 28, "kmTo": 35, "state": "ASSAM" }
   ],
   "zones": {
-    "wildlifeCorridor": { "kmFrom": 190, "kmTo": 202, "note": "Rajaji NP elevated section - elephant/leopard risk" },
-    "tunnels": [
-      { "name": "Twin-tube tunnel", "kmApprox": 203 },
-      { "name": "Datkali tunnel",   "kmApprox": 207 }
-    ],
-    "tollPlazas": 5
+    "wildlifeCorridor": { "kmFrom": 2, "kmTo": 10, "note": "Amchang / Khanapara elephant corridor - elephant crossing risk near Jorabat and the Narengi hills" },
+    "tunnels": [],
+    "tollPlazas": 1
   },
   "jurisdictionByState": {
-    "DELHI":       { "POLICE": "Delhi Traffic Police",         "SDRF": "NDRF (Delhi)",     "FOREST_DEPT": "Delhi Forest Dept" },
-    "UP":          { "POLICE": "UP Police (Highway)",          "SDRF": "UP SDRF",          "FOREST_DEPT": "UP Forest Dept" },
-    "UTTARAKHAND": { "POLICE": "Uttarakhand Police (Highway)", "SDRF": "Uttarakhand SDRF", "FOREST_DEPT": "Rajaji / Uttarakhand Forest (Shivalik Div.)" }
+    "ASSAM": { "POLICE": "Assam Police (Traffic / Highway Patrol)", "SDRF": "Assam SDRF", "FOREST_DEPT": "Assam Forest Dept (Kamrup)" }
   }
 }

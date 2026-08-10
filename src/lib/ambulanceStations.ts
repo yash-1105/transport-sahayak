@@ -15,16 +15,16 @@ export type AmbulancePoint = {
   sample: boolean; // true = synthetic, render amber "sample" banner
 };
 
-// Synthetic 108-network posts along the Delhi–Dehradun Expressway (sample data — not official).
+// Synthetic 108-network posts across the Guwahati metro (sample data — not official).
 const SYNTHETIC: AmbulancePoint[] = [
-  { name: "Sample 108 Post — Delhi EPE Junction", lat: 28.630, lng: 77.330, sample: true },
-  { name: "Sample 108 Post — Baghpat",            lat: 28.944, lng: 77.218, sample: true },
-  { name: "Sample 108 Post — Baraut",             lat: 29.099, lng: 77.254, sample: true },
-  { name: "Sample 108 Post — Shamli",             lat: 29.450, lng: 77.310, sample: true },
-  { name: "Sample 108 Post — Saharanpur",         lat: 29.967, lng: 77.546, sample: true },
-  { name: "Sample 108 Post — Ganeshpur",          lat: 30.150, lng: 77.870, sample: true },
-  { name: "Sample 108 Post — Haridwar",           lat: 29.945, lng: 78.164, sample: true },
-  { name: "Sample 108 Post — Dehradun",           lat: 30.316, lng: 78.032, sample: true },
+  { name: "Sample 108 Post — Jorabat",       lat: 26.099, lng: 91.862, sample: true },
+  { name: "Sample 108 Post — Khanapara",     lat: 26.121, lng: 91.821, sample: true },
+  { name: "Sample 108 Post — Ganeshguri",    lat: 26.154, lng: 91.782, sample: true },
+  { name: "Sample 108 Post — Ulubari",       lat: 26.168, lng: 91.754, sample: true },
+  { name: "Sample 108 Post — Paltan Bazaar", lat: 26.181, lng: 91.751, sample: true },
+  { name: "Sample 108 Post — Maligaon",      lat: 26.150, lng: 91.696, sample: true },
+  { name: "Sample 108 Post — Jalukbari",     lat: 26.143, lng: 91.644, sample: true },
+  { name: "Sample 108 Post — Gorchuk",       lat: 26.105, lng: 91.713, sample: true },
 ];
 
 export async function getAmbulanceStations(

@@ -38,10 +38,10 @@ from .logging_utils import get_logger
 
 logger = get_logger("exotel.services")
 
-# Delhi–Dehradun corridor bounding box. Nominatim viewbox is lon1,lat1,lon2,lat2.
-# Bounds the forward-geocode so a bare landmark resolves inside the corridor,
-# not to a same-named place elsewhere in India.
-_CORRIDOR_VIEWBOX = "76.9,28.5,78.3,30.5"
+# Guwahati metro bounding box. Nominatim viewbox is lon1,lat1,lon2,lat2.
+# Bounds the forward-geocode so a bare landmark resolves inside the Guwahati
+# area, not to a same-named place elsewhere in India.
+_CORRIDOR_VIEWBOX = "91.4,25.9,92.1,26.35"
 
 
 async def _send(method: str, url: str, *, params: Optional[dict] = None,
@@ -143,8 +143,8 @@ async def _eta_for(facility_type: str, facility_point: tuple[float, float],
     return _haversine_eta_minutes(distance_km, facility_type)
 
 
-# A caller says a WHOLE sentence ("I am injured near Malviya Nagar" / "मैं मालवीय
-# नगर के पास घायल हूँ"). Nominatim can't pull the place out of a sentence — only a
+# A caller says a WHOLE sentence ("I am injured near Ganeshguri" / "मैं गणेशगुड़ी
+# के पास घायल हूँ"). Nominatim can't pull the place out of a sentence — only a
 # bare place name resolves — so we strip these self-reference / injury / preposition
 # filler words first and geocode what's left. English + Hindi (Devanagari).
 _LANDMARK_STOPWORDS = {
@@ -171,11 +171,11 @@ def _clean_landmark(text: str) -> str:
 
 
 # Google Places Text Search (New) — the SAME server key the app uses. Far better
-# than Nominatim at Indian business / colloquial landmark queries ("Malviya Nagar
-# KFC", "मालवीय नगर मेन मार्केट"). Biased (softly) to the Delhi–Dehradun corridor.
+# than Nominatim at Indian business / colloquial landmark queries ("Ganeshguri
+# flyover", "फेंसी बाज़ार", "GS Road Ulubari"). Biased (softly) to the Guwahati metro.
 _PLACES_TEXT_URL = "https://places.googleapis.com/v1/places:searchText"
-_PLACES_BIAS = {"rectangle": {"low": {"latitude": 28.3, "longitude": 76.7},
-                              "high": {"latitude": 30.5, "longitude": 78.5}}}
+_PLACES_BIAS = {"rectangle": {"low": {"latitude": 25.9, "longitude": 91.4},
+                              "high": {"latitude": 26.35, "longitude": 92.1}}}
 
 
 async def _google_geocode(q: str) -> Optional[dict]:

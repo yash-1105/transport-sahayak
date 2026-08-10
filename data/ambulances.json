@@ -1,7 +1,7 @@
 {
   "_meta": {
     "label": "Sample data — replace with official dataset.",
-    "source": "Illustrative only. Static roster only — no live GPS tracking infrastructure exists.",
+    "source": "Illustrative only, for the Guwahati metropolitan area, Assam. Static roster only — no live GPS tracking infrastructure exists.",
     "lastUpdated": "2024-01"
   },
   "ambulances": [
@@ -10,8 +10,8 @@
       "callSign": "AS-AMB-001",
       "type": "ALS",
       "baseHospitalId": "hosp-001",
-      "baseLat": 26.1797,
-      "baseLng": 91.7386,
+      "baseLat": 26.159,
+      "baseLng": 91.769,
       "district": "Kamrup Metropolitan",
       "contactNumber": "108"
     },
@@ -20,8 +20,8 @@
       "callSign": "AS-AMB-002",
       "type": "BLS",
       "baseHospitalId": "hosp-001",
-      "baseLat": 26.1797,
-      "baseLng": 91.7386,
+      "baseLat": 26.159,
+      "baseLng": 91.769,
       "district": "Kamrup Metropolitan",
       "contactNumber": "108"
     },
@@ -30,8 +30,8 @@
       "callSign": "AS-AMB-003",
       "type": "BLS",
       "baseHospitalId": "hosp-003",
-      "baseLat": 26.1843,
-      "baseLng": 91.7523,
+      "baseLat": 26.168,
+      "baseLng": 91.754,
       "district": "Kamrup Metropolitan",
       "contactNumber": "108"
     },
@@ -40,9 +40,9 @@
       "callSign": "AS-AMB-004",
       "type": "ALS",
       "baseHospitalId": "hosp-004",
-      "baseLat": 26.7509,
-      "baseLng": 94.2037,
-      "district": "Jorhat",
+      "baseLat": 26.150,
+      "baseLng": 91.696,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108"
     },
     {
@@ -50,9 +50,9 @@
       "callSign": "AS-AMB-005",
       "type": "BLS",
       "baseHospitalId": "hosp-005",
-      "baseLat": 27.4728,
-      "baseLng": 94.9120,
-      "district": "Dibrugarh",
+      "baseLat": 26.131,
+      "baseLng": 91.804,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108"
     }
   ]

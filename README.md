@@ -1,7 +1,7 @@
 # Transport Sahayak
 
-A **road-accident first-response** proof-of-concept for the Delhi–Dehradun Expressway corridor
-(originally scoped for the Assam Transport Department). It is a live map + incident console that a
+A **road-accident first-response** proof-of-concept for the Guwahati metropolitan area, Assam
+(the NH-27 / AT Road urban corridor), built for the Assam Transport Department. It is a live map + incident console that a
 control-room operator, a citizen, or a community volunteer can use to **report a crash, assess its
 severity, find the nearest hospital/police with real traffic-aware drive times, and log a dispatch
 notification** — plus a conversational AI call-taker that can take the whole report by voice in

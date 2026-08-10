@@ -143,7 +143,7 @@ export default function IncidentRecord({
         {/* ── Print-only header ── */}
         <div className="print-only hidden px-6 pt-6 pb-2">
           <p className="text-xl font-black text-gray-900">Transport Sahayak — Incident Record</p>
-          <p className="text-xs text-gray-500">Delhi–Dehradun Expressway Corridor · Road Safety Operations</p>
+          <p className="text-xs text-gray-500">Guwahati Metropolitan Area, Assam · Road Safety Operations</p>
           <p className="text-xs text-gray-500 mt-0.5">Ref: {incidentId} · Generated: {toIST(data.generatedAt)} IST</p>
           <hr className="mt-3 border-gray-300" />
         </div>

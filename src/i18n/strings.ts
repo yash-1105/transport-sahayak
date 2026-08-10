@@ -6,9 +6,9 @@ export type Locale = "EN" | "HI";
 export const strings = {
   // ── App shell ────────────────────────────────────────────────────────────────
   appName:    { EN: "Transport Sahayak",     HI: "ट्रांसपोर्ट सहायक",        AS: "ট্ৰান্সপ'ৰ্ট সহায়ক" },
-  appTagline: { EN: "Delhi–Dehradun Expressway — Road Accident First Response",
-                HI: "दिल्ली–देहरादून एक्सप्रेसवे — सड़क दुर्घटना प्रथम प्रतिक्रिया",
-                AS: "দিল্লী–দেহৰাদূন এক্সপ্ৰেছৱে — পথ দুৰ্ঘটনা প্ৰথম সাড়া" },
+  appTagline: { EN: "Guwahati Metropolitan Area, Assam — Road Accident First Response",
+                HI: "गुवाहाटी महानगर, असम — सड़क दुर्घटना प्रथम प्रतिक्रिया",
+                AS: "গুৱাহাটী মহানগৰ, অসম — পথ দুৰ্ঘটনা প্ৰথম সাড়া" },
   mapSources: { EN: "Map: Google Maps · POI: Google Places · Routing: Google Routes API",
                 HI: "मानचित्र: Google Maps · POI: Google Places · मार्ग: Google Routes API",
                 AS: "মানচিত্ৰ: Google Maps · POI: Google Places · পথ: Google Routes API" },

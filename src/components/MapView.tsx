@@ -1010,7 +1010,7 @@ export default function MapView() {
               {showHindi && <span style={{ fontWeight: 500, color: "#93A3BE", fontSize: 13 }}> · परिवहन सहायक</span>}
             </div>
             <div className="truncate" style={{ fontSize: 11, color: C.onNavySub }}>
-              Delhi–Dehradun Expressway — Road Accident First Response
+              Guwahati Metropolitan Area, Assam — Road Accident First Response
             </div>
           </div>
         </div>
@@ -1058,7 +1058,7 @@ export default function MapView() {
         <Map
           mapId="DEMO_MAP_ID"
           defaultCenter={CORRIDOR_CENTER}
-          defaultZoom={8}
+          defaultZoom={11}
           gestureHandling="greedy"
           disableDefaultUI
           className="absolute inset-0 w-full h-full"

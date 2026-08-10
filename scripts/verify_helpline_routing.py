@@ -37,11 +37,11 @@ def new_session():
     s = HindiDispatcherSession.__new__(HindiDispatcherSession)
     HindiDispatcherSession.__init__(s, FakeWS())
     # Canned location so get_current_location resolves without a browser.
-    s.state.location = {"lat": 28.94, "lng": 77.22, "label": "NH-334 near Baghpat"}
+    s.state.location = {"lat": 26.15, "lng": 91.78, "label": "NH-27 near Ganeshguri"}
 
     async def fake_facility(facility_type="", capability=""):
         return {"ok": True, "needs_location": False, "facility": {
-            "name": "District Hospital Baghpat" if facility_type == "hospital" else f"nearest {facility_type}",
+            "name": "Gauhati Medical College Hospital" if facility_type == "hospital" else f"nearest {facility_type}",
             "contactNumber": "0121-2655100", "distanceKm": 6.4, "etaMinutes": 14,
             "note": "trauma-capable" if capability else None,
         }}

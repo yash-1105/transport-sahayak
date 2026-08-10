@@ -102,8 +102,8 @@ export default function AuthLanding({
             }}
           />
           <p className="lg-tagline" style={{ fontSize: 14, maxWidth: "36ch", color: "#B9C4D8", lineHeight: 1.7, margin: 0 }}>
-            Every minute of the golden hour, accounted for — from the first report on the Delhi–Dehradun
-            Expressway to the nearest ready hospital.
+            Every minute of the golden hour, accounted for — from the first report on the Guwahati
+            corridor to the nearest ready hospital.
           </p>
         </div>
 
@@ -120,31 +120,31 @@ export default function AuthLanding({
             <g fontFamily="'IBM Plex Sans', sans-serif" fontSize={12} fontWeight={600} fill="#B9C4D8">
               <g style={{ animation: "lgCity .6s 1s ease both" }}>
                 <circle cx={40} cy={320} r={4} fill="#14243E" stroke="#E8862B" strokeWidth={1.6} />
-                <text x={56} y={325}>Delhi</text>
+                <text x={56} y={325}>Jorabat</text>
               </g>
               <g style={{ animation: "lgCity .6s 1.6s ease both" }}>
                 <circle cx={108} cy={243} r={3} fill="#14243E" stroke="rgba(255,255,255,.5)" strokeWidth={1.2} />
-                <text x={122} y={248} fill="rgba(185,196,216,.75)" fontWeight={500}>Baraut</text>
+                <text x={122} y={248} fill="rgba(185,196,216,.75)" fontWeight={500}>Dispur</text>
               </g>
               <g style={{ animation: "lgCity .6s 2.2s ease both" }}>
                 <circle cx={195} cy={130} r={3} fill="#14243E" stroke="rgba(255,255,255,.5)" strokeWidth={1.2} />
-                <text x={209} y={135} fill="rgba(185,196,216,.75)" fontWeight={500}>Saharanpur</text>
+                <text x={209} y={135} fill="rgba(185,196,216,.75)" fontWeight={500}>Maligaon</text>
               </g>
               <g style={{ animation: "lgCity .6s 2.8s ease both" }}>
                 <circle cx={240} cy={44} r={4} fill="#14243E" stroke="#E8862B" strokeWidth={1.6} />
-                <text x={254} y={49}>Dehradun</text>
+                <text x={254} y={49}>Jalukbari</text>
               </g>
             </g>
-            {/* red beacon at Baraut */}
+            {/* red beacon at Dispur */}
             <circle className="lg-loop" cx={108} cy={243} r={5} fill="none" stroke="#C6362C" strokeWidth={1.4} style={{ animation: "lgBeacon 2.2s 3.4s ease-out infinite" }} />
             {/* traveling dot */}
             <circle className="lg-loop" r={3.4} fill="#E8862B" style={{ offsetPath: `path('${ROUTE_PATH}')`, animation: "lgTravel 7s 3.2s linear infinite" } as React.CSSProperties} />
           </svg>
 
           {/* floating stat chips — anchored to the empty BOTTOM-right of the
-              graphic (the road runs Delhi ↘ bottom-left → Dehradun ↗ top-right,
-              so the bottom-right is clear) to avoid overlapping the Dehradun /
-              Saharanpur city labels near the top. */}
+              graphic (the road runs Jorabat ↘ bottom-left → Jalukbari ↗ top-right,
+              so the bottom-right is clear) to avoid overlapping the Jalukbari /
+              Maligaon city labels near the top. */}
           <div style={{ position: "absolute", right: 0, bottom: 0, display: "flex", flexDirection: "column", gap: 10, animation: "lgUp .7s 1.2s ease both" }}>
             <Chip dot="#4CAF7D" delay="0s">Highway helpline <b style={{ fontVariantNumeric: "tabular-nums" }}>1033</b></Chip>
             <Chip dot="#E8862B" delay="1.4s">Severity assessed in seconds</Chip>
@@ -154,7 +154,7 @@ export default function AuthLanding({
 
         {/* footer caption */}
         <div className="lg-brand-footer" style={{ position: "relative", fontSize: 11, letterSpacing: ".14em", textTransform: "uppercase", color: "#5F7093", animation: "lgUp .7s 1.5s ease both", fontVariantNumeric: "tabular-nums" }}>
-          Road accident first response · 210 km corridor
+          Road accident first response · Guwahati, Assam
         </div>
       </aside>
 

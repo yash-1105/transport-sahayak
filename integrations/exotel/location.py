@@ -29,7 +29,7 @@ MAX_ATTEMPTS = 3
 # Devanagari place cues. Their presence marks a caller utterance as a LOCATION
 # statement, so the opportunistic backstop never geocodes a bare accident
 # description ("दो कारें टकराईं") -- which Google Places would happily resolve to
-# some unrelated business (verified live: it returns a Noida shop for that text).
+# some unrelated business (verified live: it returns a random unrelated shop for that text).
 _HI_LOCATION_CUES = (
     "नगर", "सेक्टर", "रोड", "मार्ग", "चौक", "बाज़ार", "बाजार", "मार्केट", "हाईवे",
     "पुल", "गली", "कॉलोनी", "कालोनी", "मोहल्ला", "गाँव", "गांव", "टोल", "पंप",
@@ -41,7 +41,7 @@ _HI_LOCATION_CUES = (
 def looks_like_location(text: str) -> bool:
     """Cheap pre-filter: is this utterance plausibly a PLACE statement (worth a
     geocode)? True if it has any Latin token >=3 chars (a romanized place/brand:
-    'Malviya Nagar', 'KFC', 'sector 62') OR a Devanagari location cue. A pure-
+    'Ganeshguri', 'KFC', 'GS Road') OR a Devanagari location cue. A pure-
     Devanagari accident description ('दो कारें टकराईं') has neither, so it is
     skipped -- never geocoded into a bogus business match."""
     t = text or ""

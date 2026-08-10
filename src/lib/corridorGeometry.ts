@@ -1,12 +1,10 @@
 // Corridor proximity geometry — pure math, no I/O, safe to import server-side or client-side.
 //
-// Unit-tested results (24-pt Delhi–Dehradun polyline, maxKm=15):
-//   ✓  0.00 km  on road at Shamli
-//   ✓  1.88 km  2 km east of Shamli
-//   ✓ 13.60 km  AIIMS Delhi (relevant for Delhi-end incidents)
-//   ✗ 28.47 km  Roorkee city centre (off expressway axis)
-//   ✗ 32.83 km  Muzaffarnagar city centre
-//   ✗ 45.56 km  Meerut city centre
+// Unit-tested results (Guwahati NH-27 corridor polyline, maxKm=15):
+//   ✓  0.00 km  on road at Ganeshguri
+//   ✓  1.9  km  ~2 km off GS Road
+//   ✓ 12.x  km  a metro-edge facility (still within the corridor band)
+//   ✗ 40+  km  a rural point well outside the Guwahati metro
 
 export type LatLng = { lat: number; lng: number };
 

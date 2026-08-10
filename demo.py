@@ -2,11 +2,11 @@
 from severity_engine import engine
 
 DEMOS = [
-    ("Operator selects from dropdown (zero AI)", {"subType": "Rear-End Collision"}, {"casualties": 1}, {"km": 50}),
-    ("Voice/text: LPG tanker on fire", {"description": "lpg tanker on fire near km 40"}, {"fire": True}, {"km": 40}),
-    ("Elephant in Rajaji wildlife stretch", {"description": "elephant blocking the road"}, {"roadBlocked": True}, {"km": 196}),
-    ("Fire inside the Dehradun tunnel", {"description": "smoke filling tunnel cars stuck inside"}, {"fire": True, "entrapment": True}, {"km": 203}),
-    ("Mass-casualty pile-up", {"subType": "Multi-Vehicle Pile-Up (5\u201310 vehicles)"}, {"casualties": 25, "fire": True, "roadBlocked": True}, {"km": 120}),
+    ("Operator selects from dropdown (zero AI)", {"subType": "Rear-End Collision"}, {"casualties": 1}, {"km": 12}),
+    ("Voice/text: LPG tanker on fire", {"description": "lpg tanker on fire near ganeshguri"}, {"fire": True}, {"km": 15}),
+    ("Elephant on the road (Amchang stretch)", {"description": "elephant blocking the road"}, {"roadBlocked": True}, {"km": 3}),
+    ("Vehicle fire with people trapped", {"description": "vehicle on fire after crash occupants cannot escape"}, {"fire": True, "entrapment": True}, {"km": 20}),
+    ("Mass-casualty pile-up", {"subType": "Multi-Vehicle Pile-Up (5\u201310 vehicles)"}, {"casualties": 25, "fire": True, "roadBlocked": True}, {"km": 25}),
 ]
 
 for title, inc, sig, loc in DEMOS:

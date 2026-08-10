@@ -1,5 +1,5 @@
 # Transport Sahayak — Step-by-Step Prompt: Rule-First Severity & Dispatch Engine
-### Corridor: Delhi–Dehradun Expressway (NH-709B / NH-344G, Delhi · Uttar Pradesh · Uttarakhand)
+### Corridor: Guwahati NH-27 / AT Road corridor, Assam
 
 > **How to use this file.** Paste the sections below into your coding agent (Claude Code / Cursor) **in order**, one STEP at a time. Each STEP ends with a verification CHECK (work the agent does) and a **👤 YOU DO** line (the manual action *you* take). Don't skip either. The `accident_index.json` file ships alongside this document — drop it into your repo before STEP 1.
 
@@ -11,9 +11,9 @@
 |---|---|
 | Before STEP 1 | Copy `accident_index.json` into the repo at `data/accident_index.json`. |
 | STEP 0 | **Decide A / B / C** (Python service vs TypeScript module vs Vercel Python fn) and tell the agent. |
-| STEP 1B | Confirm the **corridor profile** values (km range, tunnel zones, wildlife zone, toll plazas) — edit the stub if needed. |
+| STEP 1B | Confirm the **corridor profile** values (km range, wildlife zone, toll plaza) — edit the stub if needed. |
 | STEP 3 | **Skim the `baseSeverity` values** in the JSON against your judgment; hand-edit any you disagree with (it's just data). |
-| STEP 4 | Confirm the **state-by-location agency mapping** (Delhi/UP/Uttarakhand police, Rajaji forest, Uttarakhand SDRF). |
+| STEP 4 | Confirm the **state-by-location agency mapping** (Assam Police, Assam Forest Dept (Kamrup), Assam SDRF). |
 | STEP 6 | Set `ANTHROPIC_API_KEY` in your env / Vercel project settings (server-side only). |
 | STEP 7 | Decide whether you want the frontend changes now or later (engine works without them). |
 | After STEP 8 | Run the test suite, then deploy. If Option C, confirm Vercel Python runtime is enabled. |
@@ -23,23 +23,23 @@
 ## Context to give the agent first (paste once, before STEP 1)
 
 ```
-PROJECT: Transport Sahayak — road-accident first-response tool for the DELHI–DEHRADUN
-EXPRESSWAY (NH-709B / NH-344G / NH-307), a ~210 km NHAI access-controlled corridor that
-crosses THREE states — Delhi, Uttar Pradesh (Baghpat, Baraut, Shamli, Saharanpur) and
-Uttarakhand (Rajaji National Park stretch into Dehradun).
+PROJECT: Transport Sahayak — road-accident first-response tool for the GUWAHATI
+NH-27 / AT ROAD CORRIDOR, a ~35 km urban arterial corridor through the Guwahati
+metropolitan area, entirely within ONE state — Assam (Jorabat, Khanapara, Ganeshguri,
+Ulubari, Paltan Bazaar, Bharalumukh, Maligaon, Jalukbari).
 
 Stack: Next.js 16 App Router + TypeScript, Zustand, Google Places/Routes, Anthropic API.
 
 CORRIDOR-SPECIFIC FACTS THAT MATTER FOR DISPATCH:
-- Multi-state jurisdiction: the responding Police / SDRF / Forest unit depends on WHERE on
-  the corridor the incident is. Delhi Police, UP Police, or Uttarakhand Police; Uttarakhand
-  has its own SDRF for the hill/forest stretch.
-- A 12 km elevated WILDLIFE CORRIDOR through Rajaji National Park / Tiger Reserve near
-  Dehradun — elephant & leopard strikes are a live risk; FOREST_DEPT here = Rajaji /
-  Uttarakhand Forest (Shivalik Forest Division).
-- TUNNELS near Dehradun: a 2.32 km twin-tube tunnel and a 340 m Datkali tunnel — the
-  "Tunnel Incidents" category (fire/CO/collapse/blockage) is real for this corridor.
-- 5 toll plazas; ~20,000–30,000 vehicles/day; speed up to 100 km/h.
+- Single-state jurisdiction: the whole corridor is in Assam, so the responding
+  Police / SDRF / Forest unit is always Assam Police, Assam SDRF, or the Assam Forest
+  Dept (Kamrup) — but WHICH neighbourhood/segment still matters for naming the nearest unit.
+- A WILDLIFE CORRIDOR near Jorabat — the Amchang / Khanapara elephant corridor and the
+  Narengi hills — elephant crossings are a live risk; FOREST_DEPT here = Assam Forest
+  Dept (Kamrup).
+- NO highway tunnels on this corridor — the "Tunnel Incidents" category does not apply to
+  Guwahati.
+- 1 toll plaza; dense urban traffic; congested arterial speeds.
 
 WHAT WE ARE CHANGING AND WHY:
 Today the incident flow is LLM-FIRST: every incident is POSTed to /api/assess -> Claude
@@ -50,7 +50,7 @@ for incidents that a lookup table answers deterministically.
 We are inverting it to RULE-FIRST:
   1. A deterministic rule engine classifies the accident, computes severity, and resolves
      which agencies to dispatch — using a fixed knowledge base of 470 accident sub-types
-     (accident_index.json), a generic Indian-expressway taxonomy that applies unchanged to
+     (accident_index.json), a generic Indian-highway taxonomy that applies unchanged to
      this corridor.
   2. The LLM is called ONLY when the rule engine cannot confidently classify free-text
      input, OR when signals conflict. Even then the LLM does ONE cheap job: map free text
@@ -124,30 +124,28 @@ agency is in the vocabulary, baseSeverity ∈ {1,2,3,4}. Print PASS/FAIL. Don't 
 ## STEP 1B — Corridor profile (NEW — the only location-aware config)
 
 ```
-Create data/corridor_profile.json describing the Delhi–Dehradun corridor. The SEVERITY engine
-is location-agnostic; this profile is used ONLY to (a) resolve which jurisdiction's Police /
-SDRF / Forest unit to name in dispatch, and (b) flag corridor-relevant zones. Stub to confirm:
+Create data/corridor_profile.json describing the Guwahati NH-27 / AT Road corridor. The
+SEVERITY engine is location-agnostic; this profile is used ONLY to (a) resolve which
+jurisdiction's Police / SDRF / Forest unit to name in dispatch, and (b) flag
+corridor-relevant zones. Stub to confirm:
 
 {
-  "corridorId": "DEL-DDN-NH709B",
-  "totalKm": 210,
+  "corridorId": "GHY-NH27",
+  "name": "Guwahati NH-27 / AT Road corridor",
+  "totalKm": 35,
   "segments": [
-    { "name": "Delhi (Akshardham–EPE)",      "kmFrom": 0,   "kmTo": 32,  "state": "DELHI" },
-    { "name": "UP (Baghpat–Saharanpur)",      "kmFrom": 32,  "kmTo": 168, "state": "UP" },
-    { "name": "Uttarakhand (Rajaji–Dehradun)","kmFrom": 168, "kmTo": 210, "state": "UTTARAKHAND" }
+    { "name": "Jorabat–Khanapara",         "kmFrom": 0,  "kmTo": 9,  "state": "ASSAM" },
+    { "name": "Ganeshguri–Ulubari",        "kmFrom": 9,  "kmTo": 18, "state": "ASSAM" },
+    { "name": "Paltan Bazaar–Bharalumukh", "kmFrom": 18, "kmTo": 27, "state": "ASSAM" },
+    { "name": "Maligaon–Jalukbari",        "kmFrom": 27, "kmTo": 35, "state": "ASSAM" }
   ],
   "zones": {
-    "wildlifeCorridor": { "kmFrom": 190, "kmTo": 202, "note": "Rajaji NP elevated section — elephant/leopard risk" },
-    "tunnels": [
-      { "name": "Twin-tube tunnel", "kmApprox": 203 },
-      { "name": "Datkali tunnel",   "kmApprox": 207 }
-    ],
-    "tollPlazas": 5
+    "wildlifeCorridor": { "kmFrom": 0, "kmTo": 6, "note": "Amchang / Khanapara elephant corridor - elephant crossing risk near Jorabat and the Narengi hills" },
+    "tunnels": [],
+    "tollPlazas": 1
   },
   "jurisdictionByState": {
-    "DELHI":       { "POLICE": "Delhi Traffic Police",        "SDRF": "NDRF (Delhi)",          "FOREST_DEPT": "Delhi Forest Dept" },
-    "UP":          { "POLICE": "UP Police (Highway)",         "SDRF": "UP SDRF",               "FOREST_DEPT": "UP Forest Dept" },
-    "UTTARAKHAND": { "POLICE": "Uttarakhand Police (Highway)","SDRF": "Uttarakhand SDRF",      "FOREST_DEPT": "Rajaji / Uttarakhand Forest (Shivalik Div.)" }
+    "ASSAM": { "POLICE": "Assam Police (Traffic / Highway Patrol)", "SDRF": "Assam SDRF", "FOREST_DEPT": "Assam Forest Dept (Kamrup)" }
   }
 }
 
@@ -174,13 +172,12 @@ PRIORITY ORDER:
         explosion/IED/bomb            -> "Brawl / Human Conflict" or "Hazardous Material"
         bleve / (lpg|cng)+fire        -> "Fire Situations" (BLEVE record)
         tanker + (spill|leak|chemical|acid) -> "Hazardous Material"
-        collapse + (bridge|flyover|tunnel)  -> "Structural / Catastrophic"
+        collapse + (bridge|flyover)         -> "Structural / Catastrophic"
         flood/submerged/swept         -> "Flood / Water Emergency"
         landslide/rockfall/boulder    -> "Landslide / Cliff Fall"
-        elephant/leopard/cattle/animal -> "Vehicle to Animal"   <-- common in Rajaji stretch
+        elephant/cattle/animal -> "Vehicle to Animal"   <-- common near the Amchang / Khanapara stretch
         pedestrian/cyclist/child on road -> "Vehicle to Person"
         cardiac/stroke/childbirth/anaphylaxis/overdose -> "Driver / Passenger Medical"
-        tunnel + (fire|smoke|trapped|co|dark) -> "Tunnel Incidents"  <-- real for this corridor
      Normalize top score to confidence in [0,1] (e.g. top/(top+runnerUp+1)).
   3. DECIDE: confidence >= 0.62 AND one dominant category -> accept (source "rules").
      Else -> source "needs_llm"; return the top 3 candidate records as a shortlist.
@@ -189,9 +186,8 @@ Return ClassificationResult { record|None, confidence:float, source, candidates:
 
 CHECK (must pass WITHOUT any LLM):
   - subType "Rear-End Collision"                -> source operator, baseSeverity 2
-  - "lpg tanker on fire near km 40"             -> Fire Situations BLEVE, sev 4
-  - "elephant on the road in rajaji stretch"    -> Vehicle to Animal, source rules
-  - "smoke filling the tunnel cars stuck"       -> Tunnel Incidents, source rules
+  - "lpg tanker on fire near ganeshguri"        -> Fire Situations BLEVE, sev 4
+  - "elephant on the road near the amchang stretch" -> Vehicle to Animal, source rules
   - "weird thing happened on the road"          -> source needs_llm (low confidence)
 ```
 **👤 YOU DO:** Nothing manual — just confirm the CHECK cases pass.
@@ -230,7 +226,7 @@ CHECK:
   - Rear-End + 4 casualties + fire    -> verify the clamp math (2+1+1=4 -> CRITICAL) and set the
                                          test expectation to match THIS spec, not a guessed value
 ```
-**👤 YOU DO:** Open `accident_index.json` and skim the `baseSeverity` column against your own judgment for the incident types you care most about (wildlife strikes, tunnel events, pile-ups). Hand-edit any you disagree with — it's pure data, no code changes needed.
+**👤 YOU DO:** Open `accident_index.json` and skim the `baseSeverity` column against your own judgment for the incident types you care most about (wildlife strikes, urban pile-ups, hazmat spills). Hand-edit any you disagree with — it's pure data, no code changes needed.
 
 ---
 
@@ -252,8 +248,8 @@ Preserve index order first, append conditionals after, de-dupe.
 STATE-AWARE LABELING (corridor-specific, uses corridor_profile.json):
   If `location` carries a corridor km or lat/lng, map it to a segment -> state, then for the
   codes POLICE / SDRF / FOREST_DEPT attach the human-readable jurisdiction label from
-  jurisdictionByState (e.g. POLICE -> "Uttarakhand Police (Highway)" in the Dehradun segment;
-  FOREST_DEPT -> "Rajaji / Uttarakhand Forest" inside the wildlifeCorridor zone). The CODE
+  jurisdictionByState (e.g. POLICE -> "Assam Police (Traffic / Highway Patrol)" for any
+  segment; FOREST_DEPT -> "Assam Forest Dept (Kamrup)" inside the wildlifeCorridor zone). The CODE
   stays canonical; only the display label is localized. If location is unknown, return codes
   with a generic label and add to dataGaps.
 
@@ -265,10 +261,10 @@ Return { agencies:[{code,label}], dataGaps:[] }
 CHECK:
   - Head-On + roadBlocked -> AMBULANCE, POLICE, TOWING (no dupes)
   - any record + hazmat   -> FIRE and POLLUTION_CONTROL present
-  - Elephant strike at km 196 -> FOREST_DEPT labelled "Rajaji / Uttarakhand Forest", POLICE labelled "Uttarakhand Police"
+  - Elephant strike at km 3 (Amchang) -> FOREST_DEPT labelled "Assam Forest Dept (Kamrup)", POLICE labelled "Assam Police (Traffic / Highway Patrol)"
   - location unknown      -> generic labels + "exact location" appears in dataGaps
 ```
-**👤 YOU DO:** Confirm the `jurisdictionByState` labels in `corridor_profile.json` read correctly for each state segment.
+**👤 YOU DO:** Confirm the `jurisdictionByState` labels in `corridor_profile.json` read correctly for the Assam segments.
 
 ---
 
@@ -365,7 +361,7 @@ Add tests asserting the cost + determinism guarantees:
   - Same record + same signals -> identical severity + agencies over 100 runs (no nondeterminism).
   - ANTHROPIC_API_KEY unset -> no path throws; vague inputs degrade to rules + lowConfidence.
   - Snapshot 10 end-to-end incidents vs expected {severity, agencies}: Head-On, BLEVE,
-    pedestrian strike, flood-trapped, ELEPHANT STRIKE (Rajaji km 196), TUNNEL FIRE,
+    pedestrian strike, flood-trapped, ELEPHANT STRIKE (Amchang km 3),
     cardiac-at-wheel, mass-casualty 25, hazmat-unknown, bridge-collapse.
 ```
 **👤 YOU DO:** Run the suite locally, then deploy. Spot-check one real-looking incident end-to-end in the deployed app.
@@ -380,8 +376,8 @@ LLMs do expensively. The LLM is demoted to a last-resort, classification-only fa
 only on genuinely ambiguous free text and returns a tiny JSON key into the same table, so severity
 and agency decisions stay deterministic, auditable (appliedModifiers), and identical whether or not
 AI was consulted. The only corridor-specific layer is jurisdiction labeling — mapping a km/coordinate
-on the Delhi–Dehradun route to the right state's Police / SDRF / Forest unit (Rajaji forest and
-Uttarakhand SDRF in the wildlife-corridor and tunnel stretch). That keeps per-incident cost near zero
+on the Guwahati NH-27 route to Assam's Police / SDRF / Forest unit (the Assam Forest Dept and
+Assam SDRF in the Amchang wildlife-corridor stretch). That keeps per-incident cost near zero
 for the common path, satisfies the project's "no fake data / honesty" constraints, and closes the four
 failures in the call audit: instant Severity Assessment, an Impact note, a deterministic Question Flow
 from dataGaps, and the elimination of Time Loss from unstructured calls.

@@ -38,7 +38,7 @@ export const SYNC_PLACE_TYPES: GooglePlaceType[] = [
 // everything Google-sourced is refreshed (or re-confirmed) at this cadence.
 export const SYNC_TTL_MS = 24 * 60 * 60 * 1000;
 
-const SYNC_RADIUS_M = 15000;
+const SYNC_RADIUS_M = 8000; // Guwahati metro (city-scale); matches CORRIDOR_WAYPOINT_RADIUS_M
 
 interface RawPlace {
   id: string;

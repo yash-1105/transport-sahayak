@@ -1,224 +1,224 @@
 {
   "_meta": {
     "label": "Sample data — replace with official dataset.",
-    "source": "Illustrative towing / recovery posts along the Delhi–Dehradun Expressway. Static roster — no live GPS tracking."
+    "source": "Illustrative towing / recovery posts across the Guwahati metropolitan area, Assam. Static roster — no live GPS tracking."
   },
   "towingStations": [
     {
       "id": "tow-stn-001",
       "sample": true,
-      "name": "Recovery Post — Delhi EPE Junction",
-      "lat": 28.61805,
-      "lng": 77.33603,
-      "district": "East Delhi",
+      "name": "Recovery Post — Jorabat",
+      "lat": 26.099,
+      "lng": 91.862,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Eastern Peripheral Expressway northern entry"
+      "notes": "Covers the Jorabat interchange approach"
     },
     {
       "id": "tow-stn-002",
       "sample": true,
-      "name": "Recovery Post — Loni",
-      "lat": 28.686021,
-      "lng": 77.312037,
-      "district": "East Delhi",
+      "name": "Recovery Post — Khanapara",
+      "lat": 26.121,
+      "lng": 91.821,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Loni / Delhi–UP border stretch"
+      "notes": "Covers the Khanapara / NH-27 entry stretch"
     },
     {
       "id": "tow-stn-003",
       "sample": true,
-      "name": "Recovery Post — Baghpat",
-      "lat": 28.924672,
-      "lng": 77.204916,
-      "district": "Baghpat",
+      "name": "Recovery Post — Six Mile",
+      "lat": 26.131,
+      "lng": 91.804,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Baghpat expressway interchange"
+      "notes": "Covers the Six Mile and VIP Road stretch"
     },
     {
       "id": "tow-stn-004",
       "sample": true,
-      "name": "Recovery Post — Baraut",
-      "lat": 29.111967,
-      "lng": 77.265084,
-      "district": "Baghpat",
+      "name": "Recovery Post — Beltola",
+      "lat": 26.128,
+      "lng": 91.801,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Baraut stretch and surrounding villages"
+      "notes": "Covers Beltola and the surrounding residential areas"
     },
     {
       "id": "tow-stn-005",
       "sample": true,
-      "name": "Recovery Post — Khatauli / Muzaffarnagar",
-      "lat": 29.350541,
-      "lng": 77.289599,
-      "district": "Muzaffarnagar",
+      "name": "Recovery Post — Ganeshguri",
+      "lat": 26.150,
+      "lng": 91.782,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed",
         "Crane"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Muzaffarnagar western bypass and Khatauli approach"
+      "notes": "Covers Ganeshguri and the GS Road junction"
     },
     {
       "id": "tow-stn-006",
       "sample": true,
-      "name": "Recovery Post — Shamli",
-      "lat": 29.437908,
-      "lng": 77.321897,
-      "district": "Shamli",
+      "name": "Recovery Post — Dispur",
+      "lat": 26.145,
+      "lng": 91.788,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed",
         "Crane"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Shamli bypass and state highway junction — heavy-vehicle crane on site"
+      "notes": "Covers the Dispur secretariat area — heavy-vehicle crane on site"
     },
     {
       "id": "tow-stn-007",
       "sample": true,
-      "name": "Recovery Post — Deoband / Nakur",
-      "lat": 29.639246,
-      "lng": 77.418829,
-      "district": "Saharanpur",
+      "name": "Recovery Post — Hatigaon",
+      "lat": 26.140,
+      "lng": 91.790,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Deoband and Nakur approach roads"
+      "notes": "Covers Hatigaon and its approach roads"
     },
     {
       "id": "tow-stn-008",
       "sample": true,
-      "name": "Recovery Post — Saharanpur",
-      "lat": 29.953214,
-      "lng": 77.533251,
-      "district": "Saharanpur",
+      "name": "Recovery Post — Ulubari",
+      "lat": 26.168,
+      "lng": 91.754,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed",
         "Crane"
       ],
       "operatingHours": "24x7",
-      "notes": "Primary recovery dispatch for Saharanpur district"
+      "notes": "Primary recovery dispatch for the Ulubari core"
     },
     {
       "id": "tow-stn-009",
       "sample": true,
-      "name": "Recovery Post — Gangoh / Behat",
-      "lat": 30.051125,
-      "lng": 77.68955,
-      "district": "Saharanpur",
+      "name": "Recovery Post — Bhangagarh",
+      "lat": 26.159,
+      "lng": 91.769,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Gangoh and Behat stretch toward the Shivalik foothills"
+      "notes": "Covers Bhangagarh and the GS Road hospital belt"
     },
     {
       "id": "tow-stn-010",
       "sample": true,
-      "name": "Recovery Post — Ganeshpur / Roorkee",
-      "lat": 30.137218,
-      "lng": 77.881254,
-      "district": "Haridwar",
+      "name": "Recovery Post — Maligaon",
+      "lat": 26.150,
+      "lng": 91.696,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Ganeshpur and Roorkee approach"
+      "notes": "Covers Maligaon and the Jalukbari approach"
     },
     {
       "id": "tow-stn-011",
       "sample": true,
-      "name": "Recovery Post — Mohand Ghat",
-      "lat": 30.237253,
-      "lng": 77.962023,
-      "district": "Dehradun",
+      "name": "Recovery Post — Jalukbari",
+      "lat": 26.143,
+      "lng": 91.644,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed",
         "Crane"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers the Mohand Ghat hill-approach section — heavy recovery crane on site"
+      "notes": "Covers the Jalukbari / NH-27 junction — heavy recovery crane on site"
     },
     {
       "id": "tow-stn-012",
       "sample": true,
-      "name": "Recovery Post — Haridwar",
-      "lat": 29.931874,
-      "lng": 78.174764,
-      "district": "Haridwar",
+      "name": "Recovery Post — Zoo Road",
+      "lat": 26.170,
+      "lng": 91.780,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed",
         "Crane"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Haridwar city and Rishikesh approach"
+      "notes": "Covers Zoo Road tiniali and RG Baruah Road"
     },
     {
       "id": "tow-stn-013",
       "sample": true,
-      "name": "Recovery Post — Rishikesh Approach",
-      "lat": 30.067871,
-      "lng": 78.207751,
-      "district": "Dehradun",
+      "name": "Recovery Post — Rukminigaon",
+      "lat": 26.138,
+      "lng": 91.796,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers the Haridwar–Rishikesh–Dehradun link road"
+      "notes": "Covers the Rukminigaon–Six Mile link road"
     },
     {
       "id": "tow-stn-014",
       "sample": true,
-      "name": "Recovery Post — Dehradun Valley Entry",
-      "lat": 30.268277,
-      "lng": 77.998374,
-      "district": "Dehradun",
+      "name": "Recovery Post — Kahilipara",
+      "lat": 26.139,
+      "lng": 91.746,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers the expressway's Dehradun valley entry point"
+      "notes": "Covers the Kahilipara valley section"
     },
     {
       "id": "tow-stn-015",
       "sample": true,
-      "name": "Recovery Post — Dehradun",
-      "lat": 30.327882,
-      "lng": 78.019842,
-      "district": "Dehradun",
+      "name": "Recovery Post — Bharalumukh",
+      "lat": 26.173,
+      "lng": 91.730,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "1033",
       "vehicleTypes": [
         "Flatbed",
         "Crane"
       ],
       "operatingHours": "24x7",
-      "notes": "Primary recovery dispatch for Dehradun district"
+      "notes": "Primary recovery dispatch for the Bharalumukh riverside area"
     }
   ]
 }

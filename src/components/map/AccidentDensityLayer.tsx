@@ -17,7 +17,7 @@ import { C } from "@/lib/design";
 // client-only — see MapView's role branch + CLAUDE.md for that caveat.)
 
 // ~0.12° ≈ ~13 km cells — coarse enough that no single report is pinpointable,
-// fine enough that a real hotspot (e.g. the Noida cluster) stands out.
+// fine enough that a real hotspot (e.g. a Six Mile / Jorabat cluster) stands out.
 const CELL_DEG = 0.12;
 
 type Bucket = { color: string; fillOpacity: number };

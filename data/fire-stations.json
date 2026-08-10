@@ -1,116 +1,116 @@
 {
   "_meta": {
     "label": "Sample data — replace with official dataset.",
-    "source": "Illustrative fire & rescue posts along the Delhi–Dehradun Expressway. Static roster — no live GPS tracking."
+    "source": "Illustrative fire & rescue posts across the Guwahati metropolitan area, Assam. Static roster — no live GPS tracking."
   },
   "fireStations": [
     {
       "id": "fire-stn-001",
       "sample": true,
-      "name": "Fire Post — Delhi EPE Junction",
-      "lat": 28.645003,
-      "lng": 77.320052,
-      "district": "East Delhi",
+      "name": "Fire Post — Jorabat",
+      "lat": 26.099,
+      "lng": 91.862,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender",
         "Foam Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Eastern Peripheral Expressway northern entry"
+      "notes": "Covers the Jorabat interchange approach"
     },
     {
       "id": "fire-stn-002",
       "sample": true,
-      "name": "Fire Post — Loni",
-      "lat": 28.710122,
-      "lng": 77.298036,
-      "district": "East Delhi",
+      "name": "Fire Post — Khanapara",
+      "lat": 26.121,
+      "lng": 91.821,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Loni / Delhi–UP border stretch"
+      "notes": "Covers the Khanapara / NH-27 entry stretch"
     },
     {
       "id": "fire-stn-003",
       "sample": true,
-      "name": "Fire Post — Baghpat",
-      "lat": 28.960828,
-      "lng": 77.226186,
-      "district": "Baghpat",
+      "name": "Fire Post — Six Mile",
+      "lat": 26.131,
+      "lng": 91.804,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Baghpat expressway interchange"
+      "notes": "Covers the Six Mile and VIP Road stretch"
     },
     {
       "id": "fire-stn-004",
       "sample": true,
-      "name": "Fire Post — Baraut",
-      "lat": 29.109696,
-      "lng": 77.262077,
-      "district": "Baghpat",
+      "name": "Fire Post — Beltola",
+      "lat": 26.128,
+      "lng": 91.801,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Baraut stretch and surrounding villages"
+      "notes": "Covers Beltola and the surrounding residential areas"
     },
     {
       "id": "fire-stn-005",
       "sample": true,
-      "name": "Fire Post — Muzaffarnagar Bypass",
-      "lat": 29.339164,
-      "lng": 77.31078,
-      "district": "Muzaffarnagar",
+      "name": "Fire Post — Ganeshguri",
+      "lat": 26.150,
+      "lng": 91.782,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender",
         "Foam Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Khatauli and Muzaffarnagar western bypass — fuel-tanker traffic route"
+      "notes": "Covers Ganeshguri and the GS Road junction — fuel-tanker traffic route"
     },
     {
       "id": "fire-stn-006",
       "sample": true,
-      "name": "Fire Post — Shamli",
-      "lat": 29.463021,
-      "lng": 77.297534,
-      "district": "Shamli",
+      "name": "Fire Post — Dispur",
+      "lat": 26.145,
+      "lng": 91.788,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Shamli bypass and state highway junction"
+      "notes": "Covers the Dispur secretariat area and Last Gate"
     },
     {
       "id": "fire-stn-007",
       "sample": true,
-      "name": "Fire Post — Deoband / Nakur",
-      "lat": 29.658397,
-      "lng": 77.44105,
-      "district": "Saharanpur",
+      "name": "Fire Post — Hatigaon",
+      "lat": 26.140,
+      "lng": 91.790,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Deoband and Nakur approach roads"
+      "notes": "Covers Hatigaon and its approach roads"
     },
     {
       "id": "fire-stn-008",
       "sample": true,
-      "name": "Fire Post — Saharanpur",
-      "lat": 29.98001,
-      "lng": 77.56001,
-      "district": "Saharanpur",
+      "name": "Fire Post — Ulubari",
+      "lat": 26.168,
+      "lng": 91.754,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender",
@@ -118,100 +118,100 @@
         "Rescue Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Primary fire response for Saharanpur district"
+      "notes": "Primary fire response for the Ulubari core"
     },
     {
       "id": "fire-stn-009",
       "sample": true,
-      "name": "Fire Post — Gangoh / Behat",
-      "lat": 30.078242,
-      "lng": 77.713338,
-      "district": "Saharanpur",
+      "name": "Fire Post — Bhangagarh",
+      "lat": 26.159,
+      "lng": 91.769,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Gangoh and Behat stretch toward the Shivalik foothills"
+      "notes": "Covers Bhangagarh and the GS Road hospital belt"
     },
     {
       "id": "fire-stn-010",
       "sample": true,
-      "name": "Fire Post — Ganeshpur / Roorkee",
-      "lat": 30.160145,
-      "lng": 77.853516,
-      "district": "Haridwar",
+      "name": "Fire Post — Maligaon",
+      "lat": 26.150,
+      "lng": 91.696,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Ganeshpur and Roorkee approach"
+      "notes": "Covers Maligaon and the Jalukbari approach"
     },
     {
       "id": "fire-stn-011",
       "sample": true,
-      "name": "Fire Post — Mohand Ghat",
-      "lat": 30.255759,
-      "lng": 77.996859,
-      "district": "Dehradun",
+      "name": "Fire Post — Jalukbari",
+      "lat": 26.143,
+      "lng": 91.644,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Rescue Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers the Mohand Ghat hill-approach section"
+      "notes": "Covers the Jalukbari / NH-27 junction section"
     },
     {
       "id": "fire-stn-012",
       "sample": true,
-      "name": "Fire Post — Haridwar",
-      "lat": 29.954824,
-      "lng": 78.15286,
-      "district": "Haridwar",
+      "name": "Fire Post — Zoo Road",
+      "lat": 26.170,
+      "lng": 91.780,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender",
         "Foam Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Haridwar city and Rishikesh approach"
+      "notes": "Covers Zoo Road tiniali and RG Baruah Road"
     },
     {
       "id": "fire-stn-013",
       "sample": true,
-      "name": "Fire Post — Rishikesh Approach",
-      "lat": 30.086384,
-      "lng": 78.23726,
-      "district": "Dehradun",
+      "name": "Fire Post — Rukminigaon",
+      "lat": 26.138,
+      "lng": 91.796,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers the Haridwar–Rishikesh–Dehradun link road"
+      "notes": "Covers the Rukminigaon–Six Mile link road"
     },
     {
       "id": "fire-stn-014",
       "sample": true,
-      "name": "Fire Post — Dehradun Valley Entry",
-      "lat": 30.292041,
-      "lng": 78.02193,
-      "district": "Dehradun",
+      "name": "Fire Post — Kahilipara",
+      "lat": 26.139,
+      "lng": 91.746,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers the expressway's Dehradun valley entry point"
+      "notes": "Covers the Kahilipara valley section"
     },
     {
       "id": "fire-stn-015",
       "sample": true,
-      "name": "Fire Post — Dehradun",
-      "lat": 30.304962,
-      "lng": 78.045054,
-      "district": "Dehradun",
+      "name": "Fire Post — Bharalumukh",
+      "lat": 26.173,
+      "lng": 91.730,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "101",
       "vehicleTypes": [
         "Water Tender",
@@ -219,7 +219,7 @@
         "Rescue Tender"
       ],
       "operatingHours": "24x7",
-      "notes": "Primary fire response for Dehradun district"
+      "notes": "Primary fire response for the Bharalumukh riverside area"
     }
   ]
 }

@@ -1,6 +1,6 @@
 // OSRM public demo server client.
 // Returns free-flow driving estimates — NOT live traffic, NOT ETAs.
-// For production, run a self-hosted OSRM instance with road data for the Delhi–Dehradun corridor.
+// For production, run a self-hosted OSRM instance with road data for the Guwahati NH-27 corridor.
 
 export interface OsrmRoute {
   distanceM: number;    // metres

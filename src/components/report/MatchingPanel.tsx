@@ -181,7 +181,7 @@ const VEHICLE_ETA_CONFIG: Record<SimulatedVehicleKind, {
 };
 
 // Station names in the seed data follow "<Facility label> — <Location>" (e.g.
-// "108 Post — Baraut", "Fire Post — Ganeshpur / Roorkee"). The facility label
+// "108 Post — Ganeshguri", "Fire Post — Maligaon"). The facility label
 // ("108 Post"/"Fire Post"/"Recovery Post") reads as internal jargon to a
 // reporter — what actually matters to them is which location it's coming
 // from, so the card shows "<Service> inbound from <Location>" instead.

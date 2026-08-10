@@ -128,7 +128,7 @@ export default function SafetyProfileSheet({ showHindi, onClose }: { showHindi: 
             </div>
             <div style={{ flex: 1 }}>
               <Field label="Home city" suffix={showHindi ? "· शहर" : undefined}>
-                <TextInput value={s(form.home_city)} onChange={(e) => set("home_city", e.target.value)} placeholder="e.g. Dehradun" />
+                <TextInput value={s(form.home_city)} onChange={(e) => set("home_city", e.target.value)} placeholder="e.g. Guwahati" />
               </Field>
             </div>
           </div>

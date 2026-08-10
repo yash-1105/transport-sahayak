@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
           role: "user",
           parts: [
             {
-              text: `You are a road accident severity classifier for the Delhi–Dehradun Expressway Corridor.
+              text: `You are a road accident severity classifier for the Guwahati Metropolitan Area, Assam.
 Classify the accident severity as one of: CRITICAL, SERIOUS, MINOR, or UNKNOWN.
 
 Respond with JSON only, no prose:

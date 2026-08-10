@@ -1,16 +1,16 @@
 {
   "_meta": {
     "label": "Sample data — replace with official dataset.",
-    "source": "Illustrative 108 ambulance posts along the Delhi–Dehradun Expressway. Static roster — no live GPS tracking."
+    "source": "Illustrative 108 ambulance posts across the Guwahati metropolitan area, Assam. Static roster — no live GPS tracking."
   },
   "ambulanceStations": [
     {
       "id": "amb-stn-001",
       "sample": true,
-      "name": "108 Post — Delhi EPE Junction",
-      "lat": 28.631872,
-      "lng": 77.327548,
-      "district": "East Delhi",
+      "name": "108 Post — Jorabat",
+      "lat": 26.099,
+      "lng": 91.862,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 4,
       "types": [
@@ -18,75 +18,75 @@
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Eastern Peripheral Expressway northern entry"
+      "notes": "Covers the Jorabat interchange approach"
     },
     {
       "id": "amb-stn-002",
       "sample": true,
-      "name": "108 Post — Loni Border",
-      "lat": 28.698009,
-      "lng": 77.305154,
-      "district": "East Delhi",
+      "name": "108 Post — Khanapara",
+      "lat": 26.121,
+      "lng": 91.821,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Loni / Delhi–UP border stretch"
+      "notes": "Covers the Khanapara / NH-27 entry stretch"
     },
     {
       "id": "amb-stn-003",
       "sample": true,
-      "name": "108 Post — Baghpat",
-      "lat": 28.943543,
-      "lng": 77.217793,
-      "district": "Baghpat",
+      "name": "108 Post — Six Mile",
+      "lat": 26.131,
+      "lng": 91.804,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Baghpat expressway interchange"
+      "notes": "Covers the Six Mile and VIP Road stretch"
     },
     {
       "id": "amb-stn-004",
       "sample": true,
-      "name": "108 Post — Baraut",
-      "lat": 29.099063,
-      "lng": 77.254003,
-      "district": "Baghpat",
+      "name": "108 Post — Beltola",
+      "lat": 26.128,
+      "lng": 91.801,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Baraut stretch and surrounding villages"
+      "notes": "Covers Beltola and the surrounding residential areas"
     },
     {
       "id": "amb-stn-005",
       "sample": true,
-      "name": "108 Post — Khatauli / Muzaffarnagar",
-      "lat": 29.35537,
-      "lng": 77.294067,
-      "district": "Muzaffarnagar",
+      "name": "108 Post — Ganeshguri",
+      "lat": 26.150,
+      "lng": 91.782,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Muzaffarnagar western bypass and Khatauli approach"
+      "notes": "Covers Ganeshguri and the GS Road junction"
     },
     {
       "id": "amb-stn-006",
       "sample": true,
-      "name": "108 Post — Shamli",
-      "lat": 29.450036,
-      "lng": 77.30936,
-      "district": "Shamli",
+      "name": "108 Post — Dispur",
+      "lat": 26.145,
+      "lng": 91.788,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
@@ -94,30 +94,30 @@
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Shamli bypass and state highway junction"
+      "notes": "Covers the Dispur secretariat area and Last Gate"
     },
     {
       "id": "amb-stn-007",
       "sample": true,
-      "name": "108 Post — Deoband / Nakur",
-      "lat": 29.65038,
-      "lng": 77.431669,
-      "district": "Saharanpur",
+      "name": "108 Post — Hatigaon",
+      "lat": 26.140,
+      "lng": 91.790,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Deoband and Nakur approach roads"
+      "notes": "Covers Hatigaon and its approach roads"
     },
     {
       "id": "amb-stn-008",
       "sample": true,
-      "name": "108 Post — Saharanpur",
-      "lat": 29.967035,
-      "lng": 77.546044,
-      "district": "Saharanpur",
+      "name": "108 Post — Ulubari",
+      "lat": 26.168,
+      "lng": 91.754,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 3,
       "types": [
@@ -125,60 +125,60 @@
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Primary dispatch for Saharanpur district"
+      "notes": "Primary dispatch for the Ulubari core"
     },
     {
       "id": "amb-stn-009",
       "sample": true,
-      "name": "108 Post — Gangoh / Behat",
-      "lat": 30.065879,
-      "lng": 77.697457,
-      "district": "Saharanpur",
+      "name": "108 Post — Bhangagarh",
+      "lat": 26.159,
+      "lng": 91.769,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Gangoh and Behat stretch toward the Shivalik foothills"
+      "notes": "Covers Bhangagarh and the GS Road hospital belt"
     },
     {
       "id": "amb-stn-010",
       "sample": true,
-      "name": "108 Post — Ganeshpur",
-      "lat": 30.147284,
-      "lng": 77.867365,
-      "district": "Haridwar",
+      "name": "108 Post — Maligaon",
+      "lat": 26.150,
+      "lng": 91.696,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Ganeshpur and Roorkee approach"
+      "notes": "Covers Maligaon and the Jalukbari approach"
     },
     {
       "id": "amb-stn-011",
       "sample": true,
-      "name": "108 Post — Mohand Ghat",
-      "lat": 30.242463,
-      "lng": 77.970814,
-      "district": "Dehradun",
+      "name": "108 Post — Jalukbari",
+      "lat": 26.143,
+      "lng": 91.644,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers the Mohand Ghat hill-approach section"
+      "notes": "Covers the Jalukbari / NH-27 junction section"
     },
     {
       "id": "amb-stn-012",
       "sample": true,
-      "name": "108 Post — Haridwar",
-      "lat": 29.945189,
-      "lng": 78.163782,
-      "district": "Haridwar",
+      "name": "108 Post — Zoo Road",
+      "lat": 26.170,
+      "lng": 91.780,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 3,
       "types": [
@@ -186,45 +186,45 @@
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers Haridwar city and Rishikesh approach"
+      "notes": "Covers Zoo Road tiniali and RG Baruah Road"
     },
     {
       "id": "amb-stn-013",
       "sample": true,
-      "name": "108 Post — Rishikesh Approach",
-      "lat": 30.077596,
-      "lng": 78.222807,
-      "district": "Dehradun",
+      "name": "108 Post — Rukminigaon",
+      "lat": 26.138,
+      "lng": 91.796,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers the Haridwar–Rishikesh–Dehradun link road"
+      "notes": "Covers the Rukminigaon–Six Mile link road"
     },
     {
       "id": "amb-stn-014",
       "sample": true,
-      "name": "108 Post — Dehradun Valley Entry",
-      "lat": 30.279649,
-      "lng": 78.010684,
-      "district": "Dehradun",
+      "name": "108 Post — Kahilipara",
+      "lat": 26.139,
+      "lng": 91.746,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 2,
       "types": [
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Covers the expressway's Dehradun valley entry point"
+      "notes": "Covers the Kahilipara valley section"
     },
     {
       "id": "amb-stn-015",
       "sample": true,
-      "name": "108 Post — Dehradun",
-      "lat": 30.315994,
-      "lng": 78.032139,
-      "district": "Dehradun",
+      "name": "108 Post — Bharalumukh",
+      "lat": 26.173,
+      "lng": 91.730,
+      "district": "Kamrup Metropolitan",
       "contactNumber": "108",
       "ambulanceCount": 4,
       "types": [
@@ -232,7 +232,7 @@
         "BLS"
       ],
       "operatingHours": "24x7",
-      "notes": "Primary dispatch for Dehradun district"
+      "notes": "Primary dispatch for the Bharalumukh riverside area"
     }
   ]
 }

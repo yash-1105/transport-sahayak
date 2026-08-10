@@ -20,7 +20,7 @@ const notoDevanagari = Noto_Sans_Devanagari({
 });
 
 export const metadata: Metadata = {
-  title: "Transport Sahayak — Delhi–Dehradun Expressway Corridor",
+  title: "Transport Sahayak — Guwahati, Assam",
   description: "Road Accident First Response — Proof of Concept",
   manifest: "/manifest.json",
   icons: {

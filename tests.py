@@ -30,10 +30,10 @@ check("BLEVE -> CRITICAL", s.label == "CRITICAL")
 o = engine.assess({"subType": "Side-Swipe Collision"}, {"hazmat": True}, None)
 check("hazmat floors >= HIGH", o["severityScore"] >= 3)
 
-# state labeling
-o = engine.assess({"subType": "Head-On Collision"}, {}, {"km": 196})
+# state labeling (Guwahati corridor is entirely Assam)
+o = engine.assess({"subType": "Head-On Collision"}, {}, {"km": 20})
 labels = " ".join(a["label"] for a in o["agencies"])
-check("Uttarakhand police labeled in Dehradun segment", "Uttarakhand Police" in labels)
+check("Assam police labeled in the Guwahati corridor", "Assam Police" in labels)
 
 # cost: batch of 50, 45 selected + 5 vague, no key -> 0 actual LLM calls (key absent)
 calls = 0
@@ -268,9 +268,9 @@ class _RecordingWS:
 from severity_engine.dispatch_briefing import _CLOSING_EN, _responder_facts_en
 
 _full_services = {
-    "ambulance": {"name": "108 Post — Baraut", "etaMinutes": 26, "distanceKm": 18.2},
-    "fire": {"name": "Fire Post — Muzaffarnagar Bypass", "etaMinutes": 36, "distanceKm": 22.0},
-    "towing": {"name": "Recovery Post — Shamli", "etaMinutes": 23, "distanceKm": 15.1},
+    "ambulance": {"name": "108 Post — Ganeshguri", "etaMinutes": 26, "distanceKm": 18.2},
+    "fire": {"name": "Fire Post — Six Mile", "etaMinutes": 36, "distanceKm": 22.0},
+    "towing": {"name": "Recovery Post — Maligaon", "etaMinutes": 23, "distanceKm": 15.1},
     "hospital": {"name": "Ganga Amrit Hospital", "etaMinutes": 18, "distanceKm": 12.4},
     "police": {"name": "Jorabat PS", "etaMinutes": 12, "distanceKm": 7.0},
 }
@@ -282,7 +282,7 @@ check("_responder_facts_en returns exactly 5 lines when all services are present
 # "notified" and stating an "approximately N minutes" estimate. Hospital/police
 # still name their DESTINATION facility (trauma centre / notified station).
 check("_responder_facts_en drops the origin location for ambulance/fire/towing (states just the estimated time)",
-      not any(loc in _full_facts[i] for i, loc in enumerate(["Baraut", "Muzaffarnagar Bypass", "Shamli"]))
+      not any(loc in _full_facts[i] for i, loc in enumerate(["Ganeshguri", "Six Mile", "Maligaon"]))
       and all("notified" in _full_facts[i].lower() and "approximately" in _full_facts[i].lower()
               and str(eta) in _full_facts[i]
               for i, eta in [(0, 26), (1, 36), (2, 23)]))
@@ -291,7 +291,7 @@ check("_responder_facts_en still names the destination facility for the trauma c
       and "Jorabat PS" in _full_facts[4])
 
 _partial_facts = _responder_facts_en({
-    "ambulance": {"name": "108 Post — Baraut", "etaMinutes": 26, "distanceKm": 18.2},
+    "ambulance": {"name": "108 Post — Ganeshguri", "etaMinutes": 26, "distanceKm": 18.2},
     # fire, towing, hospital, police all missing
 })
 check("_responder_facts_en STILL returns exactly 5 lines when only 1 of 5 services is present",
@@ -314,7 +314,7 @@ from severity_engine.dispatch_briefing import _responder_facts_hi
 _hi_facts = _responder_facts_hi(_full_services)
 check("_responder_facts_hi drops the origin location for ambulance/fire/towing but keeps 'सूचित' + 'लगभग' estimate",
       len(_hi_facts) == 5
-      and "Baraut" not in _hi_facts[0] and "से आएगी" not in _hi_facts[0]
+      and "Ganeshguri" not in _hi_facts[0] and "से आएगी" not in _hi_facts[0]
       and "सूचित कर दिया गया है" in _hi_facts[0] and "लगभग" in _hi_facts[0]
       and "Ganga Amrit Hospital" in _hi_facts[3])
 
@@ -418,9 +418,9 @@ check("generate_dispatch_script discards Flash's output entirely if it omits any
 # service label + time must still be ACCEPTED, not falsely rejected.
 async def _flash_script_accepted_with_present_services():
     services = {
-        "ambulance": {"name": "108 Post — Baraut", "etaMinutes": 26},
-        "fire": {"name": "Fire Post — Muzaffarnagar", "etaMinutes": 36},
-        "towing": {"name": "Recovery Post — Shamli", "etaMinutes": 23},
+        "ambulance": {"name": "108 Post — Ganeshguri", "etaMinutes": 26},
+        "fire": {"name": "Fire Post — Six Mile", "etaMinutes": 36},
+        "towing": {"name": "Recovery Post — Maligaon", "etaMinutes": 23},
         "hospital": {"name": "Ganga Amrit Hospital", "etaMinutes": 18},
         "police": {"name": "Jorabat PS", "etaMinutes": 12},
     }
@@ -1437,7 +1437,7 @@ def _hi_staged(**state):
     s.state.category = "Vehicle Collisions"
     s.state.sub_type = "X"
     s.state.description = "x"
-    s.state.location = {"lat": 28.6, "lng": 77.2, "label": "NH-334"}
+    s.state.location = {"lat": 26.150, "lng": 91.780, "label": "NH-27"}
     for k, v in state.items():
         setattr(s.state, k, v)
     return s
@@ -1472,7 +1472,7 @@ async def _interim_dispatch_sends_frame_and_arms_line():
     ok_frame = (
         frame["type"] == "interim_dispatch"
         and frame["services"] == ["ambulance"]
-        and frame["location"]["label"] == "NH-334"
+        and frame["location"]["label"] == "NH-27"
     )
     # The single deterministic reassurance line is armed EMPATHY-FIRST, then the
     # "help is being arranged" part -- honest wording only (no ETA/minutes), and
@@ -1576,7 +1576,7 @@ def _fresh_hindi_session():
     s.state.category = "Vehicle Collisions"
     s.state.description = "Car collided with another car"
     s.state.vehicles_involved = 2
-    s.state.location = {"lat": 28.5, "lng": 77.3, "label": "Noida"}
+    s.state.location = {"lat": 26.140, "lng": 91.800, "label": "Guwahati"}
     return s
 
 s = _fresh_hindi_session()
@@ -2182,7 +2182,7 @@ check("#P2 general helpline mode imposes no accident next_question",
       _hi_general()._accident_mode is False and _hi_general()._compute_still_missing() == [])
 
 async def _p2_interim_suppressed_in_general():
-    s = _hi_general(); s.state.location = {"lat": 28.6, "lng": 77.2, "label": "Delhi"}
+    s = _hi_general(); s.state.location = {"lat": 26.150, "lng": 91.780, "label": "Guwahati"}
     s._ambulance_requested = True  # 'ambulance ka number' style -- must NOT dispatch
     before = len(s.websocket.sent)
     await s._maybe_interim_dispatch()
@@ -2217,24 +2217,24 @@ check("#P2 answer_info_question returns KB facts, honest miss, and never enters 
       asyncio.run(_p2_answer_info_question()))
 
 async def _p2_find_nearest_facility_roundtrip():
-    s = _hi_general(); s.state.location = {"lat": 28.6, "lng": 77.2, "label": "Delhi"}
+    s = _hi_general(); s.state.location = {"lat": 26.150, "lng": 91.780, "label": "Guwahati"}
     task = asyncio.create_task(s._dispatch_tool("find_nearest_facility", {"facility_type": "hospital"}))
     await asyncio.sleep(0.02)
     frame = s.websocket.sent[-1]
     ok_req = frame["type"] == "request_facility" and frame["facilityType"] == "hospital"
     s._resolve_helpline_client_message("facility_result", {"requestId": frame["requestId"],
-        "facility": {"name": "AIIMS", "contactNumber": "011-1", "distanceKm": 3.2, "etaMinutes": 9}})
+        "facility": {"name": "GMCH", "contactNumber": "011-1", "distanceKm": 3.2, "etaMinutes": 9}})
     res = await task
     # no-location path returns needs_location and sends no frame
     s2 = _hi_general()
     noloc = await s2._dispatch_tool("find_nearest_facility", {"facility_type": "mechanic"})
-    return (ok_req and res["ok"] and res["facility"]["name"] == "AIIMS"
+    return (ok_req and res["ok"] and res["facility"]["name"] == "GMCH"
             and noloc.get("needs_location") is True and s._accident_mode is False)
 check("#P2 find_nearest_facility does the request/resolve round-trip (needs_location without GPS)",
       asyncio.run(_p2_find_nearest_facility_roundtrip()))
 
 async def _p2_lodge_complaint_roundtrip():
-    s = _hi_general(); s.state.location = {"lat": 28.6, "lng": 77.2, "label": "NH-334"}
+    s = _hi_general(); s.state.location = {"lat": 26.150, "lng": 91.780, "label": "NH-27"}
     task = asyncio.create_task(s._dispatch_tool("lodge_complaint",
         {"description": "large pothole", "complaint_type": "pothole"}))
     await asyncio.sleep(0.02)
@@ -2274,7 +2274,7 @@ async def _p2_call_intent_classification():
     async def comp(description="", complaint_type="road_defect"):
         return {"ok": True, "reference_id": "HD-1"}
 
-    info = _hi_general(); info.state.location = {"lat": 28.6, "lng": 77.2, "label": "D"}
+    info = _hi_general(); info.state.location = {"lat": 26.150, "lng": 91.780, "label": "D"}
     info._tool_find_nearest_facility = fac; info._tool_lodge_complaint = comp
     await info._dispatch_tool("find_nearest_facility", {"facility_type": "hospital"})
     await info._dispatch_tool("answer_info_question", {"topic": "golden_hour_cashless"})
@@ -2282,7 +2282,7 @@ async def _p2_call_intent_classification():
     acc = _hi_general()
     await acc._dispatch_tool("search_incident_categories", {})
 
-    upg = _hi_general(); upg.state.location = {"lat": 28.6, "lng": 77.2, "label": "D"}
+    upg = _hi_general(); upg.state.location = {"lat": 26.150, "lng": 91.780, "label": "D"}
     upg._tool_find_nearest_facility = fac
     await upg._dispatch_tool("find_nearest_facility", {"facility_type": "tow"})
     await upg._dispatch_tool("search_incident_type", {"description": "crash"})
@@ -2409,12 +2409,12 @@ def _ex_session():
 
 async def _exotel_location_geocode_retry():
     _orig_geo = _EXSV.geocode_landmark  # restore after — the provider late-binds to this
-    async def _ok(_t): return {"lat": 28.9, "lng": 77.2, "label": "Baghpat"}
+    async def _ok(_t): return {"lat": 26.150, "lng": 91.780, "label": "Ganeshguri"}
     async def _fail(_t): return None
     try:
         _EXSV.geocode_landmark = _ok
-        s = _ex_session(); s.websocket.last_caller_utterance = "NH-334 Baghpat"
-        ok = (await s._tool_get_current_location())["status"] == "ok" and s.state.location["label"] == "Baghpat"
+        s = _ex_session(); s.websocket.last_caller_utterance = "NH-27 Ganeshguri"
+        ok = (await s._tool_get_current_location())["status"] == "ok" and s.state.location["label"] == "Ganeshguri"
         _EXSV.geocode_landmark = _fail
         s = _ex_session(); s.websocket.last_caller_utterance = "कुछ पता नहीं"
         r1 = await s._tool_get_current_location(); r2 = await s._tool_get_current_location(); r3 = await s._tool_get_current_location()
@@ -2432,15 +2432,15 @@ check("#EX location: geocode success sets it; failure asks for a landmark, then 
 # Composition: GeocodeLocationProvider is a standalone, injectable unit (the
 # geocode/retry/terminate policy lives here once, not duplicated in the session).
 async def _exotel_location_provider_composition():
-    async def _ok(_t): return {"lat": 28.9, "lng": 77.2, "label": "Baghpat"}
+    async def _ok(_t): return {"lat": 26.150, "lng": 91.780, "label": "Ganeshguri"}
     async def _fail(_t): return None
-    p_ok = GeocodeLocationProvider(lambda: "NH-334", geocode=_ok)
+    p_ok = GeocodeLocationProvider(lambda: "NH-27", geocode=_ok)
     o1 = await p_ok.acquire()
     p_silent = GeocodeLocationProvider(lambda: "", geocode=_ok)
     o2 = await p_silent.acquire()
     p_fail = GeocodeLocationProvider(lambda: "somewhere", geocode=_fail, max_attempts=3)
     a = await p_fail.acquire(); b = await p_fail.acquire(); c = await p_fail.acquire()
-    return (o1.ok and o1.location["label"] == "Baghpat"
+    return (o1.ok and o1.location["label"] == "Ganeshguri"
             and o2.silent and not o2.ok and o2.next_step is None
             and a.next_step and not a.terminate and not b.terminate and c.terminate)
 check("#EX GeocodeLocationProvider (composition): success / silent-when-empty / ask x2 then terminate — injectable, no default",
@@ -2448,44 +2448,44 @@ check("#EX GeocodeLocationProvider (composition): success / silent-when-empty / 
 
 # Location BACKSTOP (2026-08): the model doesn't reliably re-call
 # get_current_location after the caller names a place (live bug: stuck asking for
-# location for 5 turns after "Malviya Nagar near KFC"). try_opportunistic resolves
+# location for 5 turns after "Ganeshguri near Big Bazaar"). try_opportunistic resolves
 # it from the caller's own words, but ONLY for a place-looking utterance and ONLY a
 # verified hit -- an accident description must never set a bogus location.
 from integrations.exotel.location import looks_like_location, label_verifies
 check("#EX looks_like_location: place text (Latin token / Devanagari cue) True; accident description False",
-      looks_like_location("malviya nagar near kfc") and looks_like_location("मालवीय नगर के पास")
-      and looks_like_location("सेक्टर 62") and not looks_like_location("दो कारें आपस में टकराई हैं")
+      looks_like_location("ganeshguri near big bazaar") and looks_like_location("गणेशगुड़ी के पास")
+      and looks_like_location("गणेशगुड़ी रोड") and not looks_like_location("दो कारें आपस में टकराई हैं")
       and not looks_like_location("तीन लोग घायल हैं") and not looks_like_location("हाँ ठीक है"))
 check("#EX label_verifies: Latin query needs a token in the label; mismatch rejected; Devanagari-only trusted",
-      label_verifies("malviya nagar kfc", "Old Market, Malviya Nagar, New Delhi")
-      and not label_verifies("ambulance please", "Max Super Speciality Hospital, Saket")
-      and label_verifies("मालवीय नगर के पास", "Malviya Nagar, New Delhi"))
+      label_verifies("ganeshguri big bazaar", "GS Road, Ganeshguri, Guwahati")
+      and not label_verifies("ambulance please", "Nemcare Hospital, Bhangagarh")
+      and label_verifies("गणेशगुड़ी के पास", "Ganeshguri, Guwahati"))
 
 async def _exotel_backstop_opportunistic():
     async def _geo(text):  # a place resolves; a non-place returns Google's bogus business
-        if "malviya" in text.lower() or "मालवीय" in text:
-            return {"lat": 28.53, "lng": 77.21, "label": "Malviya Nagar, New Delhi"}
-        return {"lat": 28.6, "lng": 77.3, "label": "Some Random Shop, Noida"}  # bogus
-    resolved = GeocodeLocationProvider(lambda: "मालवीय नगर के पास", geocode=_geo)
+        if "ganeshguri" in text.lower() or "गणेशगुड़ी" in text:
+            return {"lat": 26.155, "lng": 91.782, "label": "Ganeshguri, Guwahati"}
+        return {"lat": 26.190, "lng": 91.670, "label": "Some Random Shop, Amingaon"}  # bogus
+    resolved = GeocodeLocationProvider(lambda: "गणेशगुड़ी के पास", geocode=_geo)
     accident = GeocodeLocationProvider(lambda: "दो कारें आपस में टकराई हैं", geocode=_geo)
     latin_nonplace = GeocodeLocationProvider(lambda: "ambulance please", geocode=_geo)
     r1 = await resolved.try_opportunistic()
     r2 = await accident.try_opportunistic()      # not place-looking -> never geocoded
     r3 = await latin_nonplace.try_opportunistic()  # geocoded but label fails verification
-    return (r1 and r1["label"].startswith("Malviya") and r2 is None and r3 is None
+    return (r1 and r1["label"].startswith("Ganeshguri") and r2 is None and r3 is None
             and resolved._attempts == 0)  # opportunistic must NOT touch the ask/terminate budget
 check("#EX backstop try_opportunistic: resolves a place, no-ops an accident description / unverified match, never counts an attempt",
       asyncio.run(_exotel_backstop_opportunistic()))
 
 async def _exotel_services_facility_roundtrip():
-    async def _resp(): return {"hospitals": [{"name": "AIIMS", "lat": 28.91, "lng": 77.21, "phone": "011"}]}
+    async def _resp(): return {"hospitals": [{"name": "GMCH", "lat": 26.164, "lng": 91.769, "phone": "011"}]}
     async def _no_routes(_o, _d): return None  # force the haversine fallback (hermetic, no HTTP)
     _EXSV.fetch_responders = _resp
     _EXSV.route_eta_minutes = _no_routes
     a = ExotelWebSocketAdapter(_FakeExotelWS([]), 16000)
-    await a.send_json({"type": "request_facility", "requestId": "r1", "facilityType": "hospital", "location": {"lat": 28.9, "lng": 77.2}})
+    await a.send_json({"type": "request_facility", "requestId": "r1", "facilityType": "hospital", "location": {"lat": 26.150, "lng": 91.780}})
     got = await asyncio.wait_for(a._inbound.get(), 2); p = _json.loads(got["text"])
-    return (p["type"] == "facility_result" and p["facility"]["name"] == "AIIMS"
+    return (p["type"] == "facility_result" and p["facility"]["name"] == "GMCH"
             and isinstance(p["facility"]["etaMinutes"], int))
 check("#EX request_facility is answered server-side (reuses responder data + ETA) and injected as facility_result",
       asyncio.run(_exotel_services_facility_roundtrip()))
@@ -2494,12 +2494,12 @@ check("#EX request_facility is answered server-side (reuses responder data + ETA
 # ambulance/fire/tow mirror matching.ts per-type haversine (tow 50 vs ambulance 40).
 async def _exotel_eta_reuses_app_logic():
     resp = {
-        "hospitals": [{"name": "H", "lat": 28.6, "lng": 77.2, "phone": "1", "traumaLevel": 1}],
-        "ambulanceStations": [{"name": "A", "lat": 28.6, "lng": 77.2, "contactNumber": "2"}],
-        "towingStations": [{"name": "T", "lat": 28.6, "lng": 77.2, "contactNumber": "3"}],
-        "policeStations": [{"name": "P", "lat": 28.6, "lng": 77.2, "phone": "4"}],
+        "hospitals": [{"name": "H", "lat": 26.150, "lng": 91.780, "phone": "1", "traumaLevel": 1}],
+        "ambulanceStations": [{"name": "A", "lat": 26.150, "lng": 91.780, "contactNumber": "2"}],
+        "towingStations": [{"name": "T", "lat": 26.150, "lng": 91.780, "contactNumber": "3"}],
+        "policeStations": [{"name": "P", "lat": 26.150, "lng": 91.780, "phone": "4"}],
     }
-    pt = (28.7, 77.2)  # ~11 km north
+    pt = (26.24, 91.78)  # ~11 km north of the corridor
     async def _routes(_o, _d): return 42  # the app's real Routes ETA for hospital/police
     _EXSV.route_eta_minutes = _routes
     hosp = await _EXSV.nearest_facility(resp, "hospital", pt)
@@ -2714,9 +2714,9 @@ from integrations.exotel.services import _clean_landmark as _EX_clean
 from integrations.exotel.session import _phone_location_prompt as _EX_phoneprompt
 from severity_engine.dispatcher_hindi import _hindi_system_prompt as _EX_hiprompt
 def _exotel_location_extraction_and_prompt():
-    clean_ok = (_EX_clean("I am injured near Malviya Nagar").lower() == "malviya nagar"
-                and _EX_clean("मैं मालवीय नगर के पास घायल हूँ") == "मालवीय नगर"
-                and _EX_clean("Malviya Nagar").lower() == "malviya nagar")  # clean input preserved
+    clean_ok = (_EX_clean("I am injured near Ganeshguri").lower() == "ganeshguri"
+                and _EX_clean("मैं गणेशगुड़ी के पास घायल हूँ") == "गणेशगुड़ी"
+                and _EX_clean("Ganeshguri").lower() == "ganeshguri")  # clean input preserved
     base = _EX_hiprompt()
     phone = _EX_phoneprompt(base)
     prompt_ok = ("मैप-पिन बटन" in base                    # browser base still instructs map-pin
@@ -2735,19 +2735,19 @@ check("#EX phone location: geocoder extracts place from a sentence; prompt drops
 async def _exotel_google_geocode_first():
     async def fake_send(method, url, **kw):
         if "places.googleapis" in url:
-            return {"places": [{"location": {"latitude": 28.5369, "longitude": 77.2119},
-                                "formattedAddress": "KFC, Old Market, Malviya Nagar"}]}
-        return [{"lat": "28.5300", "lon": "77.2000", "display_name": "Malviya Nagar (Nominatim)"}]
+            return {"places": [{"location": {"latitude": 26.1538, "longitude": 91.7820},
+                                "formattedAddress": "Big Bazaar, GS Road, Ganeshguri"}]}
+        return [{"lat": "26.1530", "lon": "91.7810", "display_name": "Ganeshguri (Nominatim)"}]
     _orig_send = _EXSV._send
     _orig_key = _EXSV.config.GOOGLE_MAPS_SERVER_KEY
     _EXSV._send = fake_send
     try:
         _EXSV.config.GOOGLE_MAPS_SERVER_KEY = "test-key"
-        r = await _EXSV.geocode_landmark("near Malviya Nagar KFC")
-        google_first = bool(r and abs(r["lat"] - 28.5369) < 1e-6 and "KFC" in r["label"])
+        r = await _EXSV.geocode_landmark("near Ganeshguri Big Bazaar")
+        google_first = bool(r and abs(r["lat"] - 26.1538) < 1e-6 and "Bazaar" in r["label"])
         _EXSV.config.GOOGLE_MAPS_SERVER_KEY = ""  # no key -> Nominatim fallback
-        r2 = await _EXSV.geocode_landmark("Malviya Nagar")
-        nominatim_fallback = bool(r2 and abs(r2["lat"] - 28.53) < 1e-6 and "Nominatim" in r2["label"])
+        r2 = await _EXSV.geocode_landmark("Ganeshguri")
+        nominatim_fallback = bool(r2 and abs(r2["lat"] - 26.153) < 1e-6 and "Nominatim" in r2["label"])
     finally:
         _EXSV._send = _orig_send
         _EXSV.config.GOOGLE_MAPS_SERVER_KEY = _orig_key
@@ -2766,9 +2766,9 @@ async def _exotel_instant_opening_and_filler():
         spoken.append((text, allow_bargein)); return True
     s._speak_or_fallback = _fake_speak
     async def _fake_lookup():
-        return {"ok": True, "name": "AIIMS Trauma Centre"}
+        return {"ok": True, "name": "GMCH Trauma Centre"}
     result = await s._speak_filler_during("एक पल... देख रहा हूँ।", _fake_lookup())
-    filler_ok = (result == {"ok": True, "name": "AIIMS Trauma Centre"}
+    filler_ok = (result == {"ok": True, "name": "GMCH Trauma Centre"}
                  and spoken == [("एक पल... देख रहा हूँ।", False)])  # spoken, uninterruptible
     distinct_fillers = (_EXsession_fillers("hospital") != _EXsession_fillers("mechanic")
                         and "अस्पताल" in _EXsession_fillers("hospital"))
@@ -3105,7 +3105,7 @@ def _fastpath_backend_agnostic():
     def mk(use_sarvam):
         s = dh.HindiDispatcherSession.__new__(dh.HindiDispatcherSession)
         s.state = DispatcherState(language="hi-IN")
-        s.state.location = {"lat": 28.6, "lng": 77.2, "label": "x"}
+        s.state.location = {"lat": 26.150, "lng": 91.780, "label": "x"}
         s.state.description = "car crash"
         s.state.sub_type = "Car vs. Car Collision"   # incident type filled -> next missing has a canonical Q
         s._accident_mode = True

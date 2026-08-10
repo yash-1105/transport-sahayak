@@ -1,62 +1,62 @@
 {
   "_meta": {
     "label": "Sample data — replace with official dataset.",
-    "source": "Illustrative police/highway patrol posts on the Delhi–Dehradun Expressway. Contact numbers illustrative."
+    "source": "Curated police stations in the Guwahati metropolitan area, Assam. Coordinates verified via Google Places; contact numbers illustrative."
   },
   "policeStations": [
     {
       "id": "ps-001",
       "sample": true,
-      "name": "Baghpat Highway Police Chowki",
-      "lat": 28.9440,
-      "lng": 77.2180,
-      "district": "Baghpat",
-      "circle": "NH-334 North",
-      "phone": "01232-261100",
+      "name": "Dispur Police Station",
+      "lat": 26.1433,
+      "lng": 91.7927,
+      "district": "Kamrup Metropolitan",
+      "circle": "Dispur — GS Road",
+      "phone": "0361-2261100",
       "emergency": "112"
     },
     {
       "id": "ps-002",
       "sample": true,
-      "name": "Shamli Traffic Police Post",
-      "lat": 29.4510,
-      "lng": 77.3130,
-      "district": "Shamli",
-      "circle": "Shamli Expressway",
-      "phone": "01398-221100",
+      "name": "Paltan Bazaar Police Station",
+      "lat": 26.1811,
+      "lng": 91.7510,
+      "district": "Kamrup Metropolitan",
+      "circle": "Paltan Bazaar — AT Road",
+      "phone": "0361-2540126",
       "emergency": "112"
     },
     {
       "id": "ps-003",
       "sample": true,
-      "name": "Saharanpur Highway Patrol",
-      "lat": 29.9750,
-      "lng": 77.5500,
-      "district": "Saharanpur",
-      "circle": "NH-334 North",
-      "phone": "0132-2712345",
+      "name": "Panbazar Police Station",
+      "lat": 26.1848,
+      "lng": 91.7409,
+      "district": "Kamrup Metropolitan",
+      "circle": "Panbazar — Riverfront",
+      "phone": "0361-2540128",
       "emergency": "112"
     },
     {
       "id": "ps-004",
       "sample": true,
-      "name": "Roorkee Traffic Police Station",
-      "lat": 29.8650,
-      "lng": 77.8910,
-      "district": "Haridwar",
-      "circle": "Haridwar East",
-      "phone": "01332-272100",
+      "name": "Fatasil Ambari Police Station",
+      "lat": 26.1597,
+      "lng": 91.7396,
+      "district": "Kamrup Metropolitan",
+      "circle": "Fatasil — West",
+      "phone": "0361-2470100",
       "emergency": "112"
     },
     {
       "id": "ps-005",
       "sample": true,
-      "name": "Dehradun Highway Patrol — Mohand",
-      "lat": 30.1200,
-      "lng": 77.9900,
-      "district": "Dehradun",
-      "circle": "Dehradun South",
-      "phone": "0135-2765100",
+      "name": "Bharalumukh Police Station",
+      "lat": 26.1732,
+      "lng": 91.7298,
+      "district": "Kamrup Metropolitan",
+      "circle": "Bharalumukh — AT Road West",
+      "phone": "0361-2540127",
       "emergency": "112"
     }
   ]

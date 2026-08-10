@@ -296,13 +296,20 @@ data/                          — all seed JSON, every record has "sample": tru
 
 ## Marker coordinate rules (Brahmaputra river)
 
-The south bank of the Brahmaputra through Guwahati is roughly:
-- lng 91.70 → bank ≈ 26.167N
-- lng 91.74 → bank ≈ 26.183N
-- lng 91.76 → bank ≈ 26.187N
-- lng 91.80 → bank ≈ 26.172N
+The south bank of the Brahmaputra through Guwahati is roughly (refined 2026-08 for
+the central riverfront, where Panbazar / Fancy Bazar / Uzan Bazar sit right on the
+bank at ≈26.19N — the earlier coarser table read ~0.01° low there and wrongly
+flagged real riverfront police stations / MMCH as "in river"):
+- lng 91.70 → bank ≈ 26.178N
+- lng 91.73 → bank ≈ 26.188N
+- lng 91.75 → bank ≈ 26.193N
+- lng 91.77 → bank ≈ 26.195N
+- lng 91.80 → bank ≈ 26.185N
 
-Any synthetic marker with `lat > bank_at_that_lng` is in the river. All current markers have been verified on land. When adding new seed data, run the bank check:
+Any synthetic marker with `lat > bank_at_that_lng` is in the river. All current
+synthetic markers are safely south of the bank; the curated GMCH/Nemcare/… and the
+Panbazar/Latasil/MMCH riverfront facilities use real (verified) coordinates and are
+on land. When adding new seed data, run the bank check:
 ```python
 # rough formula — see data correction session for full interpolation table
 if lat > bank_lat(lng):

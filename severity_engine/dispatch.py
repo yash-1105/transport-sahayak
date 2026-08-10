@@ -110,7 +110,7 @@ def resolve(record, signals, severity, location=None) -> DispatchResult:
         if c in _LOCALIZED and c in juris:
             label = juris[c]
             if c == "FOREST_DEPT" and _in_wildlife_zone(km):
-                label = juris["FOREST_DEPT"] + " (Rajaji wildlife corridor)"
+                label = juris["FOREST_DEPT"] + " (Amchang / Assam elephant corridor)"
         agencies.append({"code": c, "label": label})
 
     # ---- data gaps drive the structured question flow ----
