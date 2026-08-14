@@ -73,6 +73,7 @@ from severity_engine.dispatcher_live import (
 from severity_engine.dispatcher_live import SUPPORTED_LANGUAGES as _DISPATCHER_BASE_LANGUAGES
 from severity_engine.dispatcher_hindi import HindiDispatcherSession
 from severity_engine.dispatcher_assamese import AssameseDispatcherSession
+from severity_engine.dispatcher_chat import TextChatSession
 
 # Assamese (as-IN) is a THIRD dispatcher language (Saaras STT + ElevenLabs v3 TTS
 # + shared Sarvam reasoning — see dispatcher_assamese.py). It is added to the
@@ -352,6 +353,36 @@ async def dispatcher_ws(websocket: WebSocket) -> None:
         logger.exception("Unexpected error on /ws/dispatcher")
         await _safe_send_json(
             websocket, {"type": "error", "message": "Unexpected server error in the voice dispatcher."}
+        )
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+@app.websocket("/ws/chat")
+async def chat_ws(websocket: WebSocket) -> None:
+    """English-only AI TEXT-chat dispatcher (typed, no audio). Backed by
+    severity_engine/dispatcher_chat.TextChatSession, which SUBCLASSES the shared
+    DispatcherSession to reuse its tool handlers / DispatcherState / next_question
+    sequencing / submit gating / transcript backstop verbatim; reasoning is Sarvam
+    (sarvam-105b-conversations). Same browser-facing protocol as /ws/dispatcher
+    (form_update / request_location / submitted / dispatch_update / call_complete)
+    minus every audio frame, plus {user_text} in / {assistant_text} out. English
+    only — no locale routing. Degrades to deterministic replies if Sarvam is
+    unavailable; never touches the voice endpoints or Exotel."""
+    await websocket.accept()
+    logger.info("Client connected to /ws/chat")
+    session = TextChatSession(websocket)
+    try:
+        await session.run()
+    except WebSocketDisconnect:
+        logger.info("Client disconnected from /ws/chat")
+    except Exception:
+        logger.exception("Unexpected error on /ws/chat")
+        await _safe_send_json(
+            websocket, {"type": "error", "message": "Unexpected server error in the chat dispatcher."}
         )
     finally:
         try:

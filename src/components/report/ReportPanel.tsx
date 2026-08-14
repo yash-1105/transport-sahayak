@@ -9,6 +9,8 @@ import {
   type HelplineFacility,
 } from "@/hooks/useVoiceDispatcher";
 import { DispatcherSection } from "@/components/report/DispatcherSection";
+import { ChatSection } from "@/components/report/ChatSection";
+import { useTextChat } from "@/hooks/useTextChat";
 import { useEventLog } from "@/store/eventLog";
 import { reverseGeocode } from "@/lib/geocode";
 import { checkDuplicate, type DuplicateMatch } from "@/lib/dedup";
@@ -1246,7 +1248,7 @@ export interface ReportPanelProps {
   initialVoiceLocale?: VoiceLocale;
 }
 
-export type ReportMode = "SOS" | "TEXT" | "VOICE" | "DISPATCHER" | "POTHOLE";
+export type ReportMode = "SOS" | "TEXT" | "VOICE" | "DISPATCHER" | "CHAT" | "POTHOLE";
 type PanelStatus = "IDLE" | "BUSY" | "ASSESSING" | "MATCHING" | "COMPLETE" | "ERROR" | "POTHOLE_DONE";
 
 export default function ReportPanel({
@@ -1334,6 +1336,45 @@ export default function ReportPanel({
         location: loc,
         locationLabel: label,
         reportMode: "DISPATCHER",
+        vehiclesInvolved: payload.vehiclesInvolved,
+        estimatedCasualties: payload.casualties,
+        description: payload.description.trim(),
+        flags: payload.flags,
+        severity: "UNKNOWN",
+        severitySource: null,
+      });
+    },
+  });
+
+  // English-only TEXT-CHAT dispatcher (typed, no audio). Reuses the SAME field
+  // setters + the SAME assess → MatchingPanel → dispatch_update flow as the voice
+  // dispatcher; only submitted incidents get reportMode "CHAT" so the briefing
+  // effect below routes dispatch_update to the chat socket. Additive — the voice
+  // dispatcher above is untouched, and only one of the two is ever active (by
+  // mode), so they safely share description/vehicles/casualties/flags/location.
+  const chat = useTextChat({
+    onDescription: setDescription,
+    onVehiclesInvolved: (n) => setVehiclesInvolved(String(n)),
+    onCasualties: (n) => setCasualties(String(n)),
+    onSetFlag: setFlag,
+    onSubType: (v, cat) => { setSelectedSubType(v); setSelectedCategory(cat); },
+    onLocationCaptured: (loc, label) => setDispatcherLocation({ point: loc, label }),
+    getManualLocation: () => {
+      const point = dispatcherLocation?.point ?? pinnedLocation;
+      if (!point) return null;
+      const label = dispatcherLocation?.label || pinnedLabel || `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+      return { lat: point.lat, lng: point.lng, label };
+    },
+    onSubmitReady: (payload: DispatcherSubmitPayload) => {
+      const loc = dispatcherLocation?.point ?? payload.location ?? pinnedLocation;
+      if (!loc) return;
+      const label = dispatcherLocation?.label || pinnedLabel || `${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}`;
+      commitIncident({
+        id: makeIncidentId(),
+        timestamp: new Date().toISOString(),
+        location: loc,
+        locationLabel: label,
+        reportMode: "CHAT",
         vehiclesInvolved: payload.vehiclesInvolved,
         estimatedCasualties: payload.casualties,
         description: payload.description.trim(),
@@ -1523,14 +1564,17 @@ export default function ReportPanel({
   // ones.
   const briefingSentForRef = useRef<string | null>(null);
   const sendDispatchBriefing = dispatcher.sendDispatchBriefing;
+  const chatSendDispatchBriefing = chat.sendDispatchBriefing;
 
   // Link this dispatcher call's captured Post-Call Analytics to the committed
   // INC-… id (attachIncidentId is a stable ref-setter, so this fires once when
-  // the dispatcher incident is created).
+  // the dispatcher incident is created). CHAT incidents link to the chat hook.
   const attachIncidentId = dispatcher.attachIncidentId;
+  const chatAttachIncidentId = chat.attachIncidentId;
   useEffect(() => {
     if (createdIncident?.reportMode === "DISPATCHER") attachIncidentId(createdIncident.id);
-  }, [createdIncident, attachIncidentId]);
+    else if (createdIncident?.reportMode === "CHAT") chatAttachIncidentId(createdIncident.id);
+  }, [createdIncident, attachIncidentId, chatAttachIncidentId]);
 
   // ── PWA launch: auto-start the dispatcher ────────────────────────────────────
   // (initialMode is applied via the `mode` useState initializer above.)
@@ -1560,7 +1604,13 @@ export default function ReportPanel({
   useEffect(() => () => { autoStartedRef.current = false; }, []);
 
   useEffect(() => {
-    if (!createdIncident || createdIncident.reportMode !== "DISPATCHER") return;
+    // The SAME briefing wiring the voice dispatcher uses, extended to CHAT: once
+    // the matching flow has logged its ROUTE_ESTIMATED / HOSPITAL_MATCHED
+    // entries, hand the responder ETAs back to whichever dispatcher is active so
+    // it delivers the closing briefing (spoken for voice, a chat message for CHAT).
+    const isVoice = createdIncident?.reportMode === "DISPATCHER";
+    const isChat = createdIncident?.reportMode === "CHAT";
+    if (!createdIncident || (!isVoice && !isChat)) return;
     if (briefingSentForRef.current === createdIncident.id) return;
     const incidentId = createdIncident.id;
     const routeEntries = entries.filter(
@@ -1606,10 +1656,10 @@ export default function ReportPanel({
           };
         }
       }
-      sendDispatchBriefing(services);
+      (isChat ? chatSendDispatchBriefing : sendDispatchBriefing)(services);
     }, 2500);
     return () => clearTimeout(t);
-  }, [entries, createdIncident, sendDispatchBriefing]);
+  }, [entries, createdIncident, sendDispatchBriefing, chatSendDispatchBriefing]);
 
   function resetForm() {
     setPanelStatus("IDLE");
@@ -1928,6 +1978,7 @@ export default function ReportPanel({
               // (the mic lives inside the form now).
               { key: "TEXT" as ReportMode, en: "Describe", hi: "लिखें / बोलें", color: C.blue },
               { key: "DISPATCHER" as ReportMode, en: "Voice", hi: "वॉइस", color: C.blue },
+              { key: "CHAT" as ReportMode, en: "Chat", hi: "चैट", color: C.blue },
               { key: "POTHOLE" as ReportMode, en: "Pothole", hi: "गड्ढा", color: "#B06712" },
             ]).map((tab) => {
               const on = mode === tab.key;
@@ -1960,7 +2011,44 @@ export default function ReportPanel({
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {panelStatus === "ASSESSING" && createdIncident ? (
+          {mode === "CHAT" ? (
+            <div style={{ padding: "16px 20px 20px" }}>
+              <ChatSection
+                chat={chat}
+                selectedSubType={selectedSubType}
+                selectedCategory={selectedCategory}
+                description={description}
+                vehiclesInvolved={vehiclesInvolved}
+                casualties={casualties}
+                selectedFlags={selectedFlags}
+                dispatcherLocation={dispatcherLocation}
+                pinnedLocation={pinnedLocation}
+                pinnedLabel={pinnedLabel}
+                onRequestPin={onRequestPin}
+              />
+              {/* Headless matching for a SUBMITTED chat incident: runs the same
+                  assess + MatchingPanel routes work (logging ROUTE_ESTIMATED /
+                  HOSPITAL_MATCHED, which triggers the closing-briefing effect
+                  above) WITHOUT replacing the chat UI. The dashboard match view
+                  itself belongs to the voice/operator paths; the chat conveys the
+                  responder details as its closing message. */}
+              {createdIncident?.reportMode === "CHAT" && assessmentResult && respondersLoaded && responders.policeStations.length > 0 && (
+                <div style={{ display: "none" }} aria-hidden>
+                  <MatchingPanel
+                    hospitals={responders.hospitals}
+                    policeStations={responders.policeStations}
+                    ambulanceStations={responders.ambulanceStations}
+                    fireStations={responders.fireStations}
+                    towingStations={responders.towingStations}
+                    incident={createdIncident}
+                    assessment={assessmentResult}
+                    ambulanceDispatchedAt={null}
+                    onReady={() => setPanelStatus("COMPLETE")}
+                  />
+                </div>
+              )}
+            </div>
+          ) : panelStatus === "ASSESSING" && createdIncident ? (
             <AssessingView incidentId={createdIncident.id} />
           ) : panelStatus === "MATCHING" && createdIncident && !assessmentResult ? (
             <div className="flex flex-col items-center gap-3 p-8">

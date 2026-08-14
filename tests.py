@@ -3303,4 +3303,147 @@ check("#AS ElevenLabs speak re-chunks the stream to EVEN (sample-aligned) frames
 check("#AS ElevenLabs sample-alignment loses no audio bytes (even total preserved exactly)",
       b"".join(_yielded) == b"".join(_raw))
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ENGLISH TEXT-CHAT dispatcher (typed, no audio). TextChatSession SUBCLASSES
+# DispatcherSession to REUSE its tool handlers / DispatcherState / next_question
+# sequencing / submit gating / transcript backstop verbatim; reasoning is Sarvam
+# (sarvam_reasoning.py). Additive — NO voice pipeline is touched (verified by the
+# git-diff check in the build report, and by the reuse assertions here).
+# ─────────────────────────────────────────────────────────────────────────────
+from severity_engine import dispatcher_chat as _chat
+from severity_engine.sarvam_reasoning import (
+    NormalizedResult as _NR,
+    NormalizedToolCall as _NTC,
+    SarvamReasoningError as _SRE,
+)
+
+class _ChatFakeWS:
+    def __init__(self): self.sent = []
+    async def send_json(self, p): self.sent.append(p)
+
+# REUSE (not reimplement): the shared machinery methods resolve to
+# DispatcherSession's, not overridden copies.
+check("#CHAT TextChatSession subclasses DispatcherSession and REUSES shared handlers/sequencing/backstop",
+      issubclass(_chat.TextChatSession, DispatcherSession) and all(
+          getattr(_chat.TextChatSession, m) is getattr(DispatcherSession, m)
+          for m in ("_dispatch_tool", "_compute_still_missing", "_state_block",
+                    "_apply_local_signals_from_transcript", "_tool_search_incident_type",
+                    "_tool_update_form_field", "_tool_get_current_location",
+                    "_tool_submit_incident", "_is_critical", "_field_unanswered")))
+
+# Deterministic-fallback question coverage: every hint _compute_still_missing can
+# emit (3 essentials + every REQUIRED_FIELDS group hint) has an English question.
+_chat_need = set(_needed_hints) | {
+    "the incident type (call search_incident_type)",
+    "the location (call get_current_location)",
+    "a short description of what happened",
+}
+_chat_uncov = sorted(h for h in _chat_need if h not in _chat._CHAT_QUESTIONS_EN)
+check(f"#CHAT every next_question hint has a deterministic English question (uncovered: {_chat_uncov})",
+      not _chat_uncov)
+
+# Flow at the tool level: gated submit, then submit succeeds; correct sequence.
+async def _chat_flow():
+    ws = _ChatFakeWS(); s = _chat.TextChatSession(ws)
+    s.state.location = {"lat": 26.15, "lng": 91.78, "label": "NH-27"}
+    def nq(): return s._state_block()["next_question"]
+    order = [nq()]
+    r_gated = await s._dispatch_tool("submit_incident", {})            # blocked (no type/description)
+    await s._dispatch_tool("search_incident_type", {"description": "a car hit a truck"}); order.append(nq())
+    await s._dispatch_tool("update_form_field", {"field": "description", "text_value": "Car hit a truck"}); order.append(nq())
+    await s._dispatch_tool("update_form_field", {"field": "casualties", "number_value": 2}); order.append(nq())
+    r_ok = await s._dispatch_tool("submit_incident", {})              # now allowed
+    return order, r_gated, r_ok, s, ws
+_c_order, _c_gated, _c_ok, _c_sess, _c_ws = asyncio.run(_chat_flow())
+check("#CHAT submit is GATED until essentials present, then succeeds + emits the submitted frame",
+      _c_gated["ok"] is False and "incident type" in _c_gated.get("error", "")
+      and _c_ok["ok"] is True and _c_sess.state.submitted
+      and any(f.get("type") == "submitted" for f in _c_ws.sent))
+# The order is produced by the INHERITED _compute_still_missing/_state_block — the
+# exact same objects the voice dispatcher uses (asserted above), so it matches
+# voice by construction. Lock the concrete canonical sequence too.
+check("#CHAT next_question sequence matches the shared (voice) order: type -> description -> injured -> null (fast-track)",
+      _c_order == ["the incident type (call search_incident_type)",
+                   "a short description of what happened",
+                   "how many people are injured", None])
+check("#CHAT form_update frames were emitted by the inherited tool handlers",
+      sum(1 for f in _c_ws.sent if f.get("type") == "form_update") >= 3)
+
+# Transcript backstop (INHERITED) sets a hazard flag from typed text alone.
+async def _chat_backstop():
+    ws = _ChatFakeWS(); s = _chat.TextChatSession(ws)
+    s.state.caller_transcript = "there is a fire and someone is trapped"
+    await s._apply_local_signals_from_transcript()
+    return s.state.flags
+_bf = asyncio.run(_chat_backstop())
+check("#CHAT inherited transcript backstop flags hazards from typed text (Fire/Trapped)",
+      "Fire" in _bf and "Trapped" in _bf)
+
+# Reasoning turn: Sarvam SUCCESS dispatches shared tools + returns the reply.
+async def _chat_reason_ok():
+    ws = _ChatFakeWS(); s = _chat.TextChatSession(ws); s.state.location = {"lat": 1, "lng": 1, "label": "x"}
+    calls = {"n": 0}
+    async def fake(messages, tools, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _NR("", [_NTC("c1", "update_form_field", {"field": "description", "text_value": "Car hit truck"})])
+        return _NR("Thank you. How many vehicles were involved?", [])
+    _chat.sarvam_generate = fake
+    reply = await s._reason("a car hit a truck")
+    return reply, ws
+_r_ok, _r_ws = asyncio.run(_chat_reason_ok())
+check("#CHAT Sarvam reasoning turn dispatches the shared tools (form_update sent) and returns the reply text",
+      _r_ok and "vehicles" in _r_ok and any(f.get("type") == "form_update" for f in _r_ws.sent))
+
+# Reasoning turn: Sarvam FAILURE -> _reason returns None -> deterministic reply (never silence).
+async def _chat_reason_fail():
+    ws = _ChatFakeWS(); s = _chat.TextChatSession(ws); s.state.location = {"lat": 1, "lng": 1, "label": "x"}
+    async def boom(messages, tools, **kw): raise _SRE("down")
+    _chat.sarvam_generate = boom
+    reply = await s._reason("a car hit a truck")
+    det = s._deterministic_reply()
+    return reply, det
+_rf, _det = asyncio.run(_chat_reason_fail())
+check("#CHAT Sarvam failure -> _reason returns None; deterministic reply is a non-empty English question",
+      _rf is None and bool(_det.strip()) and "?" in _det)
+
+# Deterministic closing-briefing fallback: complete English text (facts + closing), no model call.
+def _chat_fallback_briefing():
+    ws = _ChatFakeWS(); s = _chat.TextChatSession(ws)
+    s.state.flags = {"Fire"}
+    s._dispatch_info = {"ambulance": {"name": "108 Post", "etaMinutes": 12}}
+    txt = s._compose_fallback_briefing()
+    return txt
+_fb = _chat_fallback_briefing()
+check("#CHAT deterministic closing-briefing fallback is complete English (responder fact + estimate + closing lines)",
+      "ambulance" in _fb.lower() and "approximately" in _fb.lower() and "two hours" in _fb.lower())
+
+# Pump routing: user_text queued, location_result resolves the pending future, dispatch_update sets ready.
+async def _chat_pump():
+    import json as _json
+    ws = _ChatFakeWS(); s = _chat.TextChatSession(ws)
+    frames = [
+        {"text": _json.dumps({"type": "user_text", "text": "hello"})},
+        {"text": _json.dumps({"type": "dispatch_update", "services": {"ambulance": {"name": "A", "etaMinutes": 5}}})},
+        {"type": "websocket.disconnect"},
+    ]
+    it = iter(frames)
+    async def receive():
+        try: return next(it)
+        except StopIteration:
+            await asyncio.sleep(5); return {"type": "websocket.disconnect"}
+    ws.receive = receive
+    await s._pump()
+    return s.state, s
+_pst, _psess = asyncio.run(_chat_pump())
+check("#CHAT pump routes user_text -> queue, dispatch_update -> ready+info, disconnect -> ended",
+      _psess._inbound_text.get_nowait() == "hello" and _psess._dispatch_ready.is_set()
+      and bool(_psess._dispatch_info) and _psess._ended.is_set())
+
+# /ws/chat routing target: the endpoint (app.py) constructs THIS class; verify it
+# constructs cleanly and is the reuse target (English, en-IN).
+_route_sess = _chat.TextChatSession(_ChatFakeWS())
+check("#CHAT /ws/chat routing target constructs (English en-IN, reuses DispatcherSession)",
+      _route_sess.state.language == "en-IN" and isinstance(_route_sess, DispatcherSession))
+
 print("\nALL TESTS PASSED")
