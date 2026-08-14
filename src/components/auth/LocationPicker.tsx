@@ -42,7 +42,9 @@ export default function LocationPicker({
   onConfirm,
 }: {
   initial: { lat: number; lng: number } | null;
-  radiusKm: number;
+  // Optional coverage radius (Suraksha Mitra). Omit for a plain location pick
+  // (e.g. the chat incident location) — no coverage circle is drawn.
+  radiusKm?: number;
   showHindi: boolean;
   onCancel: () => void;
   onConfirm: (point: { lat: number; lng: number }, label: string) => void;
@@ -50,8 +52,10 @@ export default function LocationPicker({
   const browserKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY ?? "";
   const [point, setPoint] = useState<{ lat: number; lng: number }>(initial ?? CORRIDOR_CENTER);
   const [busy, setBusy] = useState(false);
-  // Zoom so a ~radiusKm circle roughly fills the frame (8km ≈ zoom 11).
-  const initialZoom = radiusKm >= 10 ? 10 : radiusKm >= 8 ? 11 : 11;
+  const hasCoverage = radiusKm != null && radiusKm > 0;
+  // Zoom so a ~radiusKm circle roughly fills the frame (8km ≈ zoom 11); a plain
+  // location pick starts closer.
+  const initialZoom = !hasCoverage ? 13 : radiusKm! >= 10 ? 10 : 11;
 
   async function confirm() {
     setBusy(true);
@@ -86,8 +90,10 @@ export default function LocationPicker({
         </div>
 
         <div style={{ padding: "10px 18px 0", fontSize: 12, color: C.secondary }}>
-          Tap the map or drag the pin to your base point — the circle is your coverage zone.
-          {showHindi && <span style={{ display: "block", color: C.muted, marginTop: 1 }}>नक्शे पर टैप करें या पिन खींचें — घेरा आपका कवरेज क्षेत्र है।</span>}
+          {hasCoverage
+            ? "Tap the map or drag the pin to your base point — the circle is your coverage zone."
+            : "Tap the map or drag the pin to your exact location."}
+          {showHindi && hasCoverage && <span style={{ display: "block", color: C.muted, marginTop: 1 }}>नक्शे पर टैप करें या पिन खींचें — घेरा आपका कवरेज क्षेत्र है।</span>}
         </div>
 
         <div style={{ position: "relative", height: "min(48vh, 380px)", margin: "10px 18px 0", borderRadius: RADIUS.input, overflow: "hidden", border: `1px solid ${C.border}` }}>
@@ -104,7 +110,7 @@ export default function LocationPicker({
                 if (e.detail.latLng) setPoint({ lat: e.detail.latLng.lat, lng: e.detail.latLng.lng });
               }}
             >
-              <CoverageCircle center={point} radiusKm={radiusKm} />
+              {hasCoverage && <CoverageCircle center={point} radiusKm={radiusKm!} />}
               <AdvancedMarker
                 position={point}
                 draggable
@@ -119,7 +125,7 @@ export default function LocationPicker({
         </div>
 
         <div style={{ padding: "8px 18px 4px", fontSize: 11.5, color: C.muted }}>
-          {point.lat.toFixed(5)}, {point.lng.toFixed(5)} · {radiusKm} km coverage zone
+          {point.lat.toFixed(5)}, {point.lng.toFixed(5)}{hasCoverage ? ` · ${radiusKm} km coverage zone` : ""}
         </div>
 
         <div className="flex" style={{ gap: 10, padding: "8px 18px 16px" }}>

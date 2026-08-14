@@ -1,8 +1,11 @@
 "use client";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { C, RADIUS, BRAND_GRADIENT } from "@/lib/design";
-import { ShieldCrossIcon } from "@/components/ui/icons";
+import { ShieldCrossIcon, CrosshairIcon, MapIcon } from "@/components/ui/icons";
+import { reverseGeocode } from "@/lib/geocode";
+import LocationPicker from "@/components/auth/LocationPicker";
 import type { UseTextChat } from "@/hooks/useTextChat";
+import type { DispatchBriefingServices } from "@/hooks/useVoiceDispatcher";
 
 // AI TEXT-CHAT channel UI — a modern chatbot thread (assistant/user bubbles, a
 // typing indicator, a pill input with a Send icon) styled with the app's design
@@ -58,11 +61,165 @@ function Notice({ children, tone }: { children: React.ReactNode; tone?: "error" 
   );
 }
 
-export interface ChatSectionProps {
-  chat: UseTextChat;
+// ── ETA countdown cards (chat closing) ────────────────────────────────────────
+// Reuses the matching flow's countdown pattern (a client-side clock ticking down
+// from a fixed computedAt anchor — never a live position feed) in a compact chat
+// card, extended to cover hospital/police (which the dashboard EtaCountdownCard
+// does not). Numbers are the SAME `services` the dashboard/voice flow uses.
+function fmtClock(minutes: number): string {
+  const totalSec = Math.max(0, Math.round(minutes * 60));
+  return `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, "0")}`;
 }
 
-export function ChatSection({ chat }: ChatSectionProps) {
+type EtaKind = "ambulance" | "fire" | "towing" | "hospital" | "police";
+const CHAT_ETA_META: Record<EtaKind, { label: string; accent: string; bg: string; border: string; note: string }> = {
+  ambulance: { label: "Ambulance", accent: C.green, bg: C.greenSoftBg, border: C.greenSoftBorder, note: "notified · est. arrival" },
+  fire: { label: "Fire service", accent: C.red, bg: C.redSoftBg, border: C.redSoftBorder, note: "notified · est. arrival" },
+  towing: { label: "Towing / recovery", accent: "#57534e", bg: "#F2F1ED", border: C.border, note: "notified · est. arrival" },
+  hospital: { label: "Nearest trauma centre", accent: C.blue, bg: C.blueSoftBg, border: C.blueSoftBorder, note: "est. drive time" },
+  police: { label: "Nearest police station", accent: C.navy700, bg: C.blueSoftBg, border: C.blueSoftBorder, note: "notified · est. drive time" },
+};
+
+function ChatEtaCard({ kind, name, etaMinutes, distanceKm, computedAt }: {
+  kind: EtaKind; name: string; etaMinutes: number | null; distanceKm: number | null; computedAt: string;
+}) {
+  const meta = CHAT_ETA_META[kind];
+  const startedAt = useMemo(() => new Date(computedAt).getTime(), [computedAt]);
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (etaMinutes == null) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [etaMinutes]);
+  const elapsedMin = (now - startedAt) / 60000;
+  const remainingMin = etaMinutes != null ? Math.max(0, etaMinutes - elapsedMin) : null;
+  const overdue = etaMinutes != null && elapsedMin >= etaMinutes;
+  const progressPct = etaMinutes && etaMinutes > 0 ? Math.min(100, (elapsedMin / etaMinutes) * 100) : 0;
+  const barColor = overdue ? C.red : progressPct > 75 ? C.saffron : meta.accent;
+  return (
+    <div style={{ background: meta.bg, border: `1px solid ${meta.border}`, borderRadius: RADIUS.card, padding: "10px 12px" }}>
+      <div className="flex items-center" style={{ gap: 10 }}>
+        <div className="flex-1" style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 10, letterSpacing: ".07em", textTransform: "uppercase", fontWeight: 800, color: meta.accent }}>{meta.label}</div>
+          <div className="truncate" style={{ fontSize: 13, fontWeight: 600, color: C.ink, marginTop: 1 }}>{name}</div>
+          <div style={{ fontSize: 11, color: C.secondary, marginTop: 1 }}>
+            {etaMinutes != null ? `~${Math.round(etaMinutes)} min` : "ETA unavailable"}
+            {distanceKm != null ? ` · ${distanceKm.toFixed(1)} km` : ""} — {meta.note}
+          </div>
+        </div>
+        {etaMinutes != null && (
+          <div className="text-right flex-none">
+            <div style={{ fontSize: 20, fontWeight: 700, color: barColor, fontVariantNumeric: "tabular-nums" }}>{overdue ? "0:00" : fmtClock(remainingMin!)}</div>
+            <div style={{ fontSize: 8.5, letterSpacing: ".06em", color: C.muted }}>{overdue ? "WINDOW ELAPSED" : "MIN : SEC"}</div>
+          </div>
+        )}
+      </div>
+      {etaMinutes != null && (
+        <div style={{ marginTop: 7, height: 4, borderRadius: 2, background: "rgba(0,0,0,.06)", overflow: "hidden" }}>
+          <div className="transition-all duration-1000 ease-linear" style={{ width: `${progressPct}%`, height: "100%", background: barColor }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChatEtaCards({ services, computedAt }: { services: DispatchBriefingServices; computedAt: string }) {
+  const order: EtaKind[] = ["ambulance", "fire", "towing", "hospital", "police"];
+  const cards = order.map((k) => ({ k, s: services[k] })).filter((x) => x.s && x.s.name);
+  if (cards.length === 0) return null;
+  return (
+    <div className="self-stretch" style={{ display: "flex", flexDirection: "column", gap: 6, margin: "8px 2px" }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: C.muted, padding: "0 2px" }}>
+        Responders — estimated times
+      </div>
+      {cards.map(({ k, s }) => (
+        <ChatEtaCard key={k} kind={k} name={s!.name} etaMinutes={s!.etaMinutes} distanceKm={s!.distanceKm} computedAt={computedAt} />
+      ))}
+      <div style={{ fontSize: 10, color: C.muted, padding: "0 2px", lineHeight: 1.4 }}>
+        Calculated estimates — not live tracking. We don&rsquo;t track vehicles or confirm arrival.
+      </div>
+    </div>
+  );
+}
+
+// ── Location gate (shown before the chat begins) ──────────────────────────────
+// Reuses the Suraksha Mitra pattern: "Detect automatically" (GPS + reverse
+// geocode) or "Set on map" (LocationPicker). The chosen location feeds the
+// incident location so the bot greets with it confirmed and never asks in text.
+export function ChatLocationGate({ onLocation, showHindi = false }: {
+  onLocation: (point: { lat: number; lng: number }, label: string) => void;
+  showHindi?: boolean;
+}) {
+  const [detecting, setDetecting] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [geoError, setGeoError] = useState<string | null>(null);
+
+  function detect() {
+    setGeoError(null);
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setGeoError("Location isn't available on this device — set it on the map instead.");
+      return;
+    }
+    setDetecting(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude, lng = pos.coords.longitude;
+        let label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        try { label = await reverseGeocode(lat, lng); } catch { /* keep coords */ }
+        setDetecting(false);
+        onLocation({ lat, lng }, label);
+      },
+      (err) => {
+        setGeoError(err.code === err.PERMISSION_DENIED ? "Location permission denied — set it on the map instead." : "Couldn't detect your location — set it on the map instead.");
+        setDetecting(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full" style={{ gap: 14, textAlign: "center", padding: "8px 4px" }}>
+      <OperatorAvatar size={44} />
+      <div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>Set your location to begin</div>
+        <div style={{ fontSize: 12.5, color: C.secondary, marginTop: 4, maxWidth: 300, lineHeight: 1.5 }}>
+          So the dispatcher knows where you are — detect it automatically or set it on the map. The chat begins right after.
+        </div>
+      </div>
+      <div className="flex" style={{ gap: 10, width: "100%", maxWidth: 320 }}>
+        <button type="button" onClick={detect} disabled={detecting}
+          style={{ flex: 1, padding: "11px 12px", border: `1px solid ${C.border}`, borderRadius: RADIUS.input, background: "#fff", color: detecting ? C.muted : C.body, fontSize: 12.5, fontWeight: 600, cursor: detecting ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+          <CrosshairIcon size={15} style={{ flex: "none" }} />
+          {detecting ? "Detecting…" : "Detect automatically"}
+        </button>
+        <button type="button" onClick={() => setPickerOpen(true)}
+          style={{ flex: 1, padding: "11px 12px", border: `1px solid ${C.border}`, borderRadius: RADIUS.input, background: "#fff", color: C.body, fontSize: 12.5, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+          <MapIcon size={15} style={{ flex: "none" }} />
+          Set on map
+        </button>
+      </div>
+      {geoError && <Notice tone="error">{geoError}</Notice>}
+      {pickerOpen && (
+        <LocationPicker
+          initial={null}
+          showHindi={showHindi}
+          onCancel={() => setPickerOpen(false)}
+          onConfirm={(p, label) => { setPickerOpen(false); onLocation(p, label); }}
+        />
+      )}
+    </div>
+  );
+}
+
+export interface ChatSectionProps {
+  chat: UseTextChat;
+  /** Responder ETAs to render as countdown cards at the closing (chat only). */
+  services?: DispatchBriefingServices | null;
+  /** ISO timestamp the ETAs were computed — anchors the countdown. */
+  servicesAt?: string | null;
+}
+
+export function ChatSection({ chat, services, servicesAt }: ChatSectionProps) {
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -176,11 +333,14 @@ export function ChatSection({ chat }: ChatSectionProps) {
           </div>
         )}
 
-        {chat.status === "submitted" && (
+        {chat.status === "submitted" && !services && (
           <div className="self-center" style={{ margin: "10px 0", padding: "5px 12px", borderRadius: RADIUS.pill, background: C.saffronSoftBg, border: `1px solid ${C.saffronSoftBorder}`, fontSize: 11.5, fontWeight: 600, color: C.saffronSoftText }}>
             Finding nearest help…
           </div>
         )}
+        {/* Interactive ETA countdown cards — the widgets that replace the ETA
+            text wall in the closing (ambulance / fire / towing / hospital / police). */}
+        {services && servicesAt && <ChatEtaCards services={services} computedAt={servicesAt} />}
         {ended && (
           <div className="self-center" style={{ margin: "10px 0 2px", fontSize: 11.5, color: C.muted }}>
             Chat ended · your report has been filed

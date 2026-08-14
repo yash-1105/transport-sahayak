@@ -355,6 +355,16 @@ _CLOSING_HI = [
     "अब आप यह कॉल सुरक्षित रूप से समाप्त कर सकते हैं। अपना ध्यान रखिए... हमें उम्मीद है कि सभी सुरक्षित रहेंगे।",
 ]
 
+# TEXT-CHAT closing (English) — chat-appropriate wording, used ONLY by the chat
+# dispatcher (dispatcher_chat.py). Deliberately contains NO voice phrasing: no
+# "call", "line", "stay on the line", or "disconnect" anywhere. The voice
+# constants (_CLOSING_EN / _CLOSING_HI / _CLOSING_AS) are untouched.
+_CLOSING_CHAT = [
+    "Our team will follow up within the next two hours to confirm that help has reached you and to check on the situation.",
+    "If you need anything else, just send another message here.",
+    "Your report has been filed — take care, and stay safe.",
+]
+
 # ⚠ ASSAMESE (as-IN) — machine-authored, PENDING NATIVE REVIEW. Mirrors the
 # fixed 3-line form of _CLOSING_HI / _CLOSING_EN (two-hour follow-up →
 # call-back-if-missed → polite close). Used ONLY by the as-IN briefing path.
@@ -383,14 +393,52 @@ _CLOSING_AS = [
 # Hindi (build_briefing_instruction, directly below) is completely unaffected.
 
 
+# ── TEXT-CHAT closing (English only) ─────────────────────────────────────────
+
+def _build_chat_briefing_instruction(state) -> str:
+    """The chat closing instruction: responder ETAs are rendered as separate
+    countdown CARDS by the frontend, so this text must NOT list arrival times —
+    it briefly confirms the report is filed + which services were notified,
+    gives the SOP safety guidance, and closes with the chat-appropriate
+    _CLOSING_CHAT lines. Chat wording only — never "call"/"line"/"disconnect"."""
+    sops = select_sops(state)
+    sop_lines = [s["en"] for s in sops]
+    return (
+        "(SYSTEM UPDATE — not the user speaking. The report was submitted and the response "
+        "dashboard has matched the responding services. This is your FINAL message in this text "
+        "chat. The responder names and their estimated arrival times are shown to the user as "
+        "separate cards right here in the chat, so do NOT restate any arrival time, minutes, "
+        "distance, or facility name in your text — the cards already show them. Write ONE warm, "
+        "brief closing chat MESSAGE (this is a typed chat, never a phone call — never say \"call\", "
+        "\"line\", \"stay on the line\", or \"disconnect\"). Include, in this order:\n"
+        "1. One short sentence confirming the report has been filed and that the nearest emergency "
+        "services have been notified and are being arranged right now (services NOTIFIED — never "
+        "\"dispatched and tracked\", and NO times/numbers).\n"
+        "2. SAFETY INSTRUCTIONS while help is on the way — give exactly these, briefly, in order:\n"
+        + "\n".join(f"   - {line}" for line in sop_lines)
+        + "\n3. CLOSING — finish with these points, in order:\n"
+        + "\n".join(f"   - {line}" for line in _CLOSING_CHAT)
+        + "\n\nDo not ask the user any question, do not call any tool, and after this message say "
+        "nothing more.)"
+    )
+
+
 # ── The single combined turn (Hindi only) ───────────────────────────────────
 
-def build_briefing_instruction(state, services: Optional[dict], language_code: str) -> str:
+def build_briefing_instruction(state, services: Optional[dict], language_code: str, channel: str = "voice") -> str:
     """One synthetic model turn (same parenthesized-system-note convention as
     the kickoff/reconnect turns) that carries everything the agent must
     deliver before the call ends. `services` is the browser's dispatch_update
     payload — the exact values the dashboard is displaying — or None if it
-    never arrived (the ETA section is then skipped honestly, never invented)."""
+    never arrived (the ETA section is then skipped honestly, never invented).
+
+    channel="voice" (default) is the UNCHANGED voice path. channel="chat"
+    (English text chat only) returns a TEXT-appropriate instruction: the
+    responder ETAs are shown to the user as separate countdown CARDS, so the
+    text must NOT restate arrival times; and it uses chat wording with the
+    _CLOSING_CHAT lines (no "call"/"line"/"disconnect")."""
+    if channel == "chat":
+        return _build_chat_briefing_instruction(state)
     hindi = language_code == "hi-IN"
     assamese = language_code == "as-IN"
     sops = select_sops(state)

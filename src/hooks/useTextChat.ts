@@ -5,6 +5,7 @@ import { reverseGeocode } from "@/lib/geocode";
 import type {
   DispatchBriefingServices,
   DispatcherSubmitPayload,
+  HelplineFacility,
 } from "@/hooks/useVoiceDispatcher";
 
 // ── AI TEXT-CHAT dispatcher (English only) ────────────────────────────────────
@@ -52,6 +53,14 @@ export interface UseTextChatCallbacks {
   /** A manually-set incident location (map pin), or null. Used for the
    * dispatcher's location instead of device GPS when present. */
   getManualLocation?: () => { lat: number; lng: number; label: string } | null;
+  /** find_nearest_facility: the backend asks the frontend to compute the nearest
+   * facility of a type from responder data + the set location, and return the
+   * match (name / distance / estimated drive-time) or null. Real data only. */
+  onFacilityQuery?: (req: {
+    facilityType: string;
+    capability: string | null;
+    location: { lat: number; lng: number; label?: string } | null;
+  }) => HelplineFacility | null | Promise<HelplineFacility | null>;
 }
 
 export interface UseTextChat {
@@ -82,6 +91,9 @@ interface ServerEvent {
   message?: string;
   role?: string;
   text?: string;
+  facilityType?: string;
+  capability?: string | null;
+  location?: { lat: number; lng: number; label?: string } | null;
 }
 
 function getChatWsUrl(): string | null {
@@ -201,6 +213,31 @@ export function useTextChat(callbacks: UseTextChatCallbacks): UseTextChat {
           },
           { enableHighAccuracy: true, timeout: 7000 }
         );
+        break;
+      }
+      case "request_facility": {
+        // find_nearest_facility: compute the nearest facility from responder
+        // data (via onFacilityQuery) and reply. The backend awaits this (it
+        // times out gracefully if we can't answer).
+        const requestId = event.requestId;
+        if (!requestId) break;
+        const loc = event.location ?? null;
+        void (async () => {
+          let facility: HelplineFacility | null = null;
+          try {
+            facility = (await cb.onFacilityQuery?.({
+              facilityType: event.facilityType ?? "",
+              capability: event.capability ?? null,
+              location: loc,
+            })) ?? null;
+          } catch { /* reply null on any error */ }
+          wsRef.current?.send(JSON.stringify({
+            type: "facility_result",
+            requestId,
+            facility,
+            needsLocation: !facility && !loc && !cb.getManualLocation?.(),
+          }));
+        })();
         break;
       }
       case "submitted": {

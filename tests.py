@@ -3310,6 +3310,7 @@ check("#AS ElevenLabs sample-alignment loses no audio bytes (even total preserve
 # (sarvam_reasoning.py). Additive — NO voice pipeline is touched (verified by the
 # git-diff check in the build report, and by the reuse assertions here).
 # ─────────────────────────────────────────────────────────────────────────────
+import re
 from severity_engine import dispatcher_chat as _chat
 from severity_engine.sarvam_reasoning import (
     NormalizedResult as _NR,
@@ -3322,14 +3323,22 @@ class _ChatFakeWS:
     async def send_json(self, p): self.sent.append(p)
 
 # REUSE (not reimplement): the shared machinery methods resolve to
-# DispatcherSession's, not overridden copies.
+# DispatcherSession's, not overridden copies. (_dispatch_tool is intentionally
+# EXTENDED — it adds find_nearest_facility routing then delegates to the shared
+# dispatcher for the 5 accident tools — so it is checked separately below.)
 check("#CHAT TextChatSession subclasses DispatcherSession and REUSES shared handlers/sequencing/backstop",
       issubclass(_chat.TextChatSession, DispatcherSession) and all(
           getattr(_chat.TextChatSession, m) is getattr(DispatcherSession, m)
-          for m in ("_dispatch_tool", "_compute_still_missing", "_state_block",
+          for m in ("_compute_still_missing", "_state_block",
                     "_apply_local_signals_from_transcript", "_tool_search_incident_type",
                     "_tool_update_form_field", "_tool_get_current_location",
                     "_tool_submit_incident", "_is_critical", "_field_unanswered")))
+# find_nearest_facility (general helpline lookup) is wired via HelplineToolsMixin,
+# declared to the model, and _dispatch_tool delegates non-facility tools to super.
+check("#CHAT find_nearest_facility tool is wired (general helpline lookup) + accident tools still declared",
+      any(t["function"]["name"] == "find_nearest_facility" for t in
+          _chat.gemini_tools_to_openai(_chat._TOOL_DECLARATIONS + _chat._FACILITY_DECLARATIONS))
+      and hasattr(_chat.TextChatSession, "_tool_find_nearest_facility"))
 
 # Deterministic-fallback question coverage: every hint _compute_still_missing can
 # emit (3 essentials + every REQUIRED_FIELDS group hint) has an English question.
@@ -3407,16 +3416,29 @@ _rf, _det = asyncio.run(_chat_reason_fail())
 check("#CHAT Sarvam failure -> _reason returns None; deterministic reply is a non-empty English question",
       _rf is None and bool(_det.strip()) and "?" in _det)
 
-# Deterministic closing-briefing fallback: complete English text (facts + closing), no model call.
+# Deterministic closing-briefing fallback: chat-appropriate text (notified line +
+# SOPs + chat closing), NO ETA prose (cards show times), no voice wording.
 def _chat_fallback_briefing():
     ws = _ChatFakeWS(); s = _chat.TextChatSession(ws)
     s.state.flags = {"Fire"}
     s._dispatch_info = {"ambulance": {"name": "108 Post", "etaMinutes": 12}}
-    txt = s._compose_fallback_briefing()
-    return txt
-_fb = _chat_fallback_briefing()
-check("#CHAT deterministic closing-briefing fallback is complete English (responder fact + estimate + closing lines)",
-      "ambulance" in _fb.lower() and "approximately" in _fb.lower() and "two hours" in _fb.lower())
+    return s._compose_fallback_briefing()
+_fb = _chat_fallback_briefing().lower()
+check("#CHAT closing fallback: notified + follow-up + safety, NO ETA number, chat wording (no call/line/disconnect)",
+      "notified" in _fb and "two hours" in _fb and "12" not in _fb
+      and not re.search(r"\b(call|line|disconnect)\b", _fb))
+
+# The chat closing INSTRUCTION (channel="chat") uses chat closing lines, tells the
+# model not to restate ETAs, and the voice path is unchanged.
+from severity_engine.dispatch_briefing import build_briefing_instruction as _bbi2, _CLOSING_CHAT
+class _StCh:
+    def __init__(self): self.flags = {"Fire"}; self.flags_discussed = set()
+_svc_ch = {"ambulance": {"name": "A", "etaMinutes": 12}}
+_ci = _bbi2(_StCh(), _svc_ch, "en-IN", channel="chat")
+_vi = _bbi2(_StCh(), _svc_ch, "en-IN")  # default voice path
+check("#CHAT briefing channel='chat' omits ETA numbers + uses chat closing lines; voice path unchanged",
+      "12" not in _ci and _CLOSING_CHAT[0] in _ci
+      and ("12" in _vi or "minutes" in _vi.lower()) and _CLOSING_CHAT[0] not in _vi)
 
 # Pump routing: user_text queued, location_result resolves the pending future, dispatch_update sets ready.
 async def _chat_pump():
@@ -3445,5 +3467,28 @@ check("#CHAT pump routes user_text -> queue, dispatch_update -> ready+info, disc
 _route_sess = _chat.TextChatSession(_ChatFakeWS())
 check("#CHAT /ws/chat routing target constructs (English en-IN, reuses DispatcherSession)",
       _route_sess.state.language == "en-IN" and isinstance(_route_sess, DispatcherSession))
+
+# find_nearest_facility round-trip: with a location set, the tool sends a
+# request_facility frame and resolves on the browser's facility_result (reusing
+# the HelplineToolsMixin resolver via the chat pump).
+async def _chat_facility_roundtrip():
+    ws = _ChatFakeWS(); s = _chat.TextChatSession(ws)
+    s.state.location = {"lat": 26.15, "lng": 91.78, "label": "NH-27"}
+    task = asyncio.ensure_future(s._dispatch_tool("find_nearest_facility", {"facility_type": "hospital"}))
+    for _ in range(50):
+        await asyncio.sleep(0)
+        req = next((f for f in ws.sent if f.get("type") == "request_facility"), None)
+        if req:
+            break
+    handled = s._resolve_helpline_client_message("facility_result", {
+        "requestId": req["requestId"],
+        "facility": {"name": "GMCH", "distanceKm": 3.2, "etaMinutes": 6, "contactNumber": None, "note": None},
+    })
+    result = await task
+    return req, handled, result
+_freq, _fhandled, _fres = asyncio.run(_chat_facility_roundtrip())
+check("#CHAT find_nearest_facility sends request_facility and returns the resolved facility to the model",
+      _freq is not None and _freq.get("facilityType") == "hospital" and _fhandled is True
+      and _fres.get("ok") is True and _fres.get("facility", {}).get("name") == "GMCH")
 
 print("\nALL TESTS PASSED")

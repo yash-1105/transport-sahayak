@@ -9,7 +9,7 @@ import {
   type HelplineFacility,
 } from "@/hooks/useVoiceDispatcher";
 import { DispatcherSection } from "@/components/report/DispatcherSection";
-import { ChatSection } from "@/components/report/ChatSection";
+import { ChatSection, ChatLocationGate } from "@/components/report/ChatSection";
 import { useTextChat } from "@/hooks/useTextChat";
 import { useEventLog } from "@/store/eventLog";
 import { reverseGeocode } from "@/lib/geocode";
@@ -1367,6 +1367,9 @@ export default function ReportPanel({
       const label = dispatcherLocation?.label || pinnedLabel || `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
       return { lat: point.lat, lng: point.lng, label };
     },
+    // General helpline: nearest-facility answers reuse the SAME frontend compute
+    // the voice dispatcher uses (real responder data + set location).
+    onFacilityQuery: (req) => handleFacilityQuery(req),
     onSubmitReady: (payload: DispatcherSubmitPayload) => {
       const loc = dispatcherLocation?.point ?? payload.location ?? pinnedLocation;
       if (!loc) return;
@@ -1567,6 +1570,10 @@ export default function ReportPanel({
   const briefingSentForRef = useRef<string | null>(null);
   const sendDispatchBriefing = dispatcher.sendDispatchBriefing;
   const chatSendDispatchBriefing = chat.sendDispatchBriefing;
+  // Responder ETAs handed to the chat's closing so it can render interactive
+  // countdown CARDS (not a text wall). Same values the briefing text/voice use.
+  const [chatBriefingServices, setChatBriefingServices] = useState<DispatchBriefingServices | null>(null);
+  const [chatBriefingAt, setChatBriefingAt] = useState<string | null>(null);
 
   // Link this dispatcher call's captured Post-Call Analytics to the committed
   // INC-… id (attachIncidentId is a stable ref-setter, so this fires once when
@@ -1615,10 +1622,13 @@ export default function ReportPanel({
     if (!open) { chatAutoStartedRef.current = false; return; }
     if (!autoStartChat || chatAutoStartedRef.current) return;
     if (mode !== "CHAT" || !chatSupported) return;
+    // Wait for the location gate: the chat only auto-starts once the user has
+    // set their location (so the bot greets with it already confirmed).
+    if (!(dispatcherLocation?.point || pinnedLocation)) return;
     if (chatStatus !== "idle") return;
     chatAutoStartedRef.current = true;
     startChatSession();
-  }, [open, autoStartChat, mode, chatSupported, chatStatus, startChatSession]);
+  }, [open, autoStartChat, mode, chatSupported, chatStatus, startChatSession, dispatcherLocation, pinnedLocation]);
   useEffect(() => () => { chatAutoStartedRef.current = false; }, []);
 
   useEffect(() => {
@@ -1673,6 +1683,21 @@ export default function ReportPanel({
             distanceKm: p.nearestPolice.roadDistanceKm,
           };
         }
+      }
+      // Sanity-cap ETAs (the "1902 minutes" bug): a responder matched at an
+      // implausible distance — bad live coordinates from the Guwahati migration —
+      // yields a straight-line/road estimate of ~1900 min (≈31 h). Drop any
+      // responder whose ETA exceeds a sane local ceiling so the briefing/cards
+      // show only real local estimates (or "unavailable"), never a fabricated
+      // 31-hour number. Applies to BOTH voice and chat (they share `services`).
+      const MAX_SANE_ETA_MIN = 120;
+      for (const k of Object.keys(services) as (keyof DispatchBriefingServices)[]) {
+        const svc = services[k];
+        if (svc && svc.etaMinutes != null && svc.etaMinutes > MAX_SANE_ETA_MIN) delete services[k];
+      }
+      if (isChat) {
+        setChatBriefingServices(services);
+        setChatBriefingAt(new Date().toISOString());
       }
       (isChat ? chatSendDispatchBriefing : sendDispatchBriefing)(services);
     }, 2500);
@@ -2034,7 +2059,15 @@ export default function ReportPanel({
             // bottom (box-border: padding is inside the height). Fits within the
             // sheet's 82vh max on mobile and caps on desktop.
             <div style={{ height: "min(70vh, 540px)", padding: "16px 20px 18px" }}>
-              <ChatSection chat={chat} />
+              {!(dispatcherLocation?.point || pinnedLocation) ? (
+                // Location gate first — detect / set-on-map — before the chat begins.
+                <ChatLocationGate
+                  showHindi={showHindi}
+                  onLocation={(p, label) => setDispatcherLocation({ point: p, label })}
+                />
+              ) : (
+                <ChatSection chat={chat} services={chatBriefingServices} servicesAt={chatBriefingAt} />
+              )}
               {/* Headless matching for a SUBMITTED chat incident: runs the same
                   assess + MatchingPanel routes work (logging ROUTE_ESTIMATED /
                   HOSPITAL_MATCHED, which triggers the closing-briefing effect

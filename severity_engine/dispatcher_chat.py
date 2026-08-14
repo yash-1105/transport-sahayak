@@ -60,8 +60,7 @@ from fastapi import WebSocket
 from google.genai import types
 
 from .dispatch_briefing import (
-    _CLOSING_EN,
-    _responder_facts_en,
+    _CLOSING_CHAT,
     build_briefing_instruction,
     select_sops,
 )
@@ -71,12 +70,19 @@ from .dispatcher_live import (
     _TOOL_DECLARATIONS,
     DispatcherSession,
 )
+from .helpline_tools import HELPLINE_TOOL_DECLARATIONS, HelplineToolsMixin
 from .sarvam_reasoning import (
     SarvamReasoningError,
     gemini_history_to_openai_messages,
     gemini_tools_to_openai,
     sarvam_generate,
 )
+
+# The chat gets ONE helpline tool: find_nearest_facility (general "nearest
+# hospital / mechanic / fuel / police / tow" questions). The other helpline
+# tools (answer_info_question / lodge_complaint) are deliberately NOT declared,
+# so the model never calls them — chat stays accident-report + facility lookup.
+_FACILITY_DECLARATIONS = [d for d in HELPLINE_TOOL_DECLARATIONS if d["name"] == "find_nearest_facility"]
 
 logger = logging.getLogger("dispatcher_chat")
 
@@ -140,6 +146,8 @@ TONE: You are a trained, professional emergency-helpline operator — calm, comp
 
 OPENING (only the very first reply of the chat): greet with this exact sentence, word for word, first: "{_OPENING_TEXT}" You will be told the user's detected location (or that none was detected) in the message that starts the chat — do not call get_current_location for that, it is already resolved. If a location was detected, briefly confirm it ("I have your location as X — is that right?") and ask what happened, in this same first reply. Also find out, naturally, WHO you are chatting with in relation to the incident — are they involved/injured themselves, a bystander who witnessed it, or reporting on someone else's behalf. If no location was detected, ask them to share their location or type a nearby landmark, road, or town. Never repeat the welcome sentence again for the rest of the chat.
 
+GENERAL HELPLINE QUESTIONS (not an accident report): the user may just want to find the nearest facility — "nearest hospital / mechanic / fuel / petrol / police / tow / ambulance / fire station to me", "how far is the closest hospital", "where's a mechanic near me". For ANY such question, call find_nearest_facility with the right facility_type (hospital / mechanic / fuel / police / tow / ambulance / fire) — it returns the real nearest facility's name, distance, and an ESTIMATED drive-time from the helpline's responder data. Tell the user that facility's name, its distance, and the estimated drive-time (always as an estimate: "approximately N minutes"), and its contact number if one is given. HONESTY: this is real data but a straight-line estimate — never claim a place is open or closed (we do not track that), never invent a name/number/time. A facility question is NOT an accident report — do NOT call search_incident_type or start the report form for it; just answer and ask if they need anything else.
+
 INCIDENT TYPE: Never guess or invent an incident type yourself. Always call search_incident_type with the user's own description of what happened — it records a confident match automatically, so you do not need a separate confirmation step unless they say it is wrong. Refer to the incident only by the exact subType name it returns. If it is wrong, call search_incident_categories to browse alternatives, then update_form_field with field=incidentType and the exact subType. Recording it that way IS the confirmation — do not ask them to confirm the type again; acknowledge briefly and move on.
 
 FORM FILLING: Call update_form_field immediately every time the user gives you a new piece of information — INCLUDING conditions mentioned in passing. If they mention fire, hazmat, anyone trapped, consciousness, breathing, or bleeding anywhere in what they type, call update_form_field with field=flag for that condition right away — do not wait for a dedicated question.
@@ -159,23 +167,32 @@ AFTER SUBMISSION: when submit_incident succeeds, follow its "next_step" — tell
 HONESTY (never break these): every time you give is an ESTIMATE ("estimated", "approximately"); services are NOTIFIED / responding, never "dispatched and tracked"; never invent a responder name, number, or arrival time — only use what you are given."""
 
 
-class TextChatSession(DispatcherSession):
+class TextChatSession(HelplineToolsMixin, DispatcherSession):
     """English typed-chat dispatcher. Inherits DispatcherSession's shared tool
-    handlers / state / sequencing / backstop; adds a text run-loop + Sarvam
-    reasoning. No STT/TTS. Does not touch any voice pipeline."""
+    handlers / state / sequencing / backstop; mixes in HelplineToolsMixin ONLY to
+    reuse find_nearest_facility. Adds a text run-loop + Sarvam reasoning. No
+    STT/TTS. Does not touch any voice pipeline."""
 
     def __init__(self, websocket: WebSocket):
         super().__init__(websocket, "en-IN")  # shared state/handlers/backstop, English
+        self._init_helpline_state()  # _pending_facility (for find_nearest_facility)
         self._history: list = []  # types.Content conversation history for Sarvam
         self._inbound_text: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         self._ended = asyncio.Event()
         self._system_prompt = _chat_system_prompt()
-        # The SAME 5 accident tools the English/Hindi voice paths use, mapped once
-        # to OpenAI `tools` for Sarvam (no helpline tools — chat is accident-flow
-        # only, exactly like the English voice dispatcher).
-        self._openai_tools = gemini_tools_to_openai(_TOOL_DECLARATIONS)
+        # The SAME 5 accident tools the English/Hindi voice paths use, PLUS
+        # find_nearest_facility (general helpline lookups), mapped once to OpenAI
+        # `tools` for Sarvam.
+        self._openai_tools = gemini_tools_to_openai(_TOOL_DECLARATIONS + _FACILITY_DECLARATIONS)
         self._sarvam_http: Optional[httpx.AsyncClient] = None
         self._opening_pending = True
+
+    async def _dispatch_tool(self, name: str, args: dict) -> dict:
+        # Route the one helpline tool to the mixin; everything else to the shared
+        # accident-tool dispatcher (inherited from DispatcherSession).
+        if name == "find_nearest_facility":
+            return await self._tool_find_nearest_facility(**args)
+        return await super()._dispatch_tool(name, args)
 
     # ── Session lifecycle ────────────────────────────────────────────────────
     async def run(self) -> None:
@@ -239,6 +256,10 @@ class TextChatSession(DispatcherSession):
                 mtype = msg.get("type")
                 if mtype in ("end", "close"):
                     break
+                # facility lookup round-trip (find_nearest_facility) — reuse the
+                # HelplineToolsMixin resolver (resolves the pending future).
+                if self._resolve_helpline_client_message(mtype, msg):
+                    continue
                 if mtype == "user_text":
                     t = (msg.get("text") or "").strip()
                     if t:
@@ -358,7 +379,10 @@ class TextChatSession(DispatcherSession):
             logger.warning("Chat: no dispatch_update within %.0fs — briefing without ETAs", _DISPATCH_WAIT_S)
         if self._ended.is_set():
             return
-        instruction = build_briefing_instruction(self.state, self._dispatch_info, "en-IN")
+        # channel="chat": the responder ETAs are rendered as countdown CARDS by
+        # the frontend, so the text does NOT restate arrival times, and it uses
+        # chat wording (no "call"/"line"/"disconnect").
+        instruction = build_briefing_instruction(self.state, self._dispatch_info, "en-IN", channel="chat")
         reply = await self._reason(instruction, briefing=True)
         if not reply:
             reply = self._compose_fallback_briefing()
@@ -367,17 +391,14 @@ class TextChatSession(DispatcherSession):
         await self._safe_send_json({"type": "call_complete"})
 
     def _compose_fallback_briefing(self) -> str:
-        """Deterministic, complete English briefing text (no model call), used if
-        Sarvam is unavailable for the closing turn. Built from the SAME
-        dispatch_briefing building blocks the instruction is built from, so the
-        facts/SOPs/closing are identical and honesty-compliant."""
-        facts = _responder_facts_en(self._dispatch_info)
+        """Deterministic chat closing text (no model call), used if Sarvam is
+        unavailable for the closing turn. Chat-appropriate wording only (no
+        "call"/"line"/"disconnect"); the responder ETAs are shown as separate
+        countdown cards by the frontend, so this text carries NO arrival-time
+        prose — just a notified line, the SOP safety guidance, and the chat
+        closing lines."""
         sop_lines = [s["en"] for s in select_sops(self.state)]
-        parts = ["Thank you for staying with me. Here is where things stand."]
-        if facts:
-            parts.extend(facts)
-        else:
-            parts.append("The emergency services have been notified and are being arranged.")
+        parts = ["Your report has been filed, and the nearest emergency services have been notified and are being arranged."]
         parts.extend(sop_lines)
-        parts.extend(_CLOSING_EN)
+        parts.extend(_CLOSING_CHAT)
         return " ".join(p.strip() for p in parts if p and p.strip())
