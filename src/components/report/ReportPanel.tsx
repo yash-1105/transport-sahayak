@@ -1243,6 +1243,7 @@ export interface ReportPanelProps {
   // dispatcher call once. Undefined → normal behaviour (opens on the last mode).
   initialMode?: ReportMode;
   autoStartVoice?: boolean;
+  autoStartChat?: boolean;
   // Voice-bot language chosen at launch (PWA). Seeds the dispatcher locale;
   // undefined → derive from the app locale as before. The user can still switch.
   initialVoiceLocale?: VoiceLocale;
@@ -1261,6 +1262,7 @@ export default function ReportPanel({
   onAccidentSubmitted,
   initialMode,
   autoStartVoice,
+  autoStartChat,
   initialVoiceLocale,
 }: ReportPanelProps) {
   // Initialise from initialMode when provided (the PWA launch passes it from the
@@ -1602,6 +1604,22 @@ export default function ReportPanel({
   // dispatcher hook's unmount-only teardown so exactly one live connection
   // survives the cycle. Empty deps → only on unmount, never on prop churn.
   useEffect(() => () => { autoStartedRef.current = false; }, []);
+
+  // autoStartChat → open the text-chat dispatcher automatically (one shot), the
+  // direct consequence of tapping the map's Chat FAB (mirrors autoStartVoice).
+  const chatAutoStartedRef = useRef(false);
+  const startChatSession = chat.start;
+  const chatSupported = chat.supported;
+  const chatStatus = chat.status;
+  useEffect(() => {
+    if (!open) { chatAutoStartedRef.current = false; return; }
+    if (!autoStartChat || chatAutoStartedRef.current) return;
+    if (mode !== "CHAT" || !chatSupported) return;
+    if (chatStatus !== "idle") return;
+    chatAutoStartedRef.current = true;
+    startChatSession();
+  }, [open, autoStartChat, mode, chatSupported, chatStatus, startChatSession]);
+  useEffect(() => () => { chatAutoStartedRef.current = false; }, []);
 
   useEffect(() => {
     // The SAME briefing wiring the voice dispatcher uses, extended to CHAT: once
@@ -1969,8 +1987,9 @@ export default function ReportPanel({
           )}
         </div>
 
-        {/* Mode tabs — underline style, hidden while processing */}
-        {panelStatus === "IDLE" || panelStatus === "ERROR" ? (
+        {/* Mode tabs — underline style, hidden while processing. Also hidden in
+            CHAT mode: chat is a dedicated FAB-launched view, not a channel tab. */}
+        {(panelStatus === "IDLE" || panelStatus === "ERROR") && mode !== "CHAT" ? (
           <div className="flex flex-shrink-0" style={{ gap: 4, padding: "0 20px 12px", borderBottom: `1px solid ${C.hairline}` }}>
             {([
               { key: "SOS" as ReportMode, en: "SOS", hi: "एसओएस", color: C.red },
@@ -1978,7 +1997,6 @@ export default function ReportPanel({
               // (the mic lives inside the form now).
               { key: "TEXT" as ReportMode, en: "Describe", hi: "लिखें / बोलें", color: C.blue },
               { key: "DISPATCHER" as ReportMode, en: "Voice", hi: "वॉइस", color: C.blue },
-              { key: "CHAT" as ReportMode, en: "Chat", hi: "चैट", color: C.blue },
               { key: "POTHOLE" as ReportMode, en: "Pothole", hi: "गड्ढा", color: "#B06712" },
             ]).map((tab) => {
               const on = mode === tab.key;

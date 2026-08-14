@@ -697,6 +697,7 @@ export default function MapView() {
     launchIntent === "voice" ? "DISPATCHER" : undefined
   );
   const [reportAutoStartVoice, setReportAutoStartVoice] = useState(launchIntent === "voice");
+  const [reportAutoStartChat, setReportAutoStartChat] = useState(false);
   const [reportVoiceLocale, setReportVoiceLocale] = useState<"en-IN" | "hi-IN" | "as-IN" | null>(
     () => useAuthStore.getState().launchVoiceLocale
   );
@@ -786,19 +787,27 @@ export default function MapView() {
   }, []);
 
   function openReport() {
-    setReportInitialMode(undefined); setReportAutoStartVoice(false); setReportVoiceLocale(null);
+    setReportInitialMode(undefined); setReportAutoStartVoice(false); setReportAutoStartChat(false); setReportVoiceLocale(null);
     setReportSession((s) => s + 1);
     setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true);
   }
   function closeReport() {
     setReportOpen(false); setIsPickingPin(false);
-    setReportInitialMode(undefined); setReportAutoStartVoice(false); setReportVoiceLocale(null);
+    setReportInitialMode(undefined); setReportAutoStartVoice(false); setReportAutoStartChat(false); setReportVoiceLocale(null);
   }
   // Map SOS → open the Voice dispatcher in the given language and auto-start the
   // call. The SOS FAB passes hi-IN (auto-Hindi); English and Assamese are
   // reached via the in-call language switch in DispatcherSection.
   function startSosVoice(locale: "en-IN" | "hi-IN" | "as-IN") {
-    setReportInitialMode("DISPATCHER"); setReportAutoStartVoice(true); setReportVoiceLocale(locale);
+    setReportInitialMode("DISPATCHER"); setReportAutoStartVoice(true); setReportAutoStartChat(false); setReportVoiceLocale(locale);
+    setReportSession((s) => s + 1);
+    setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true);
+  }
+  // Map Chat FAB → open the English text-chat dispatcher and auto-start it. A
+  // dedicated floating button (below SOS, above Report Incident) — the chat is
+  // NOT a tab inside the report dialog anymore.
+  function startChat() {
+    setReportInitialMode("CHAT"); setReportAutoStartVoice(false); setReportAutoStartChat(true); setReportVoiceLocale(null);
     setReportSession((s) => s + 1);
     setPinnedLocation(null); setPinnedLabel(""); setReportOpen(true);
   }
@@ -1382,6 +1391,24 @@ export default function MapView() {
             SOS
           </button>
 
+          {/* Chat — English text-chat dispatcher. Its own floating button between
+              SOS and Report Incident (no longer a tab inside the report dialog). */}
+          <button
+            onClick={startChat}
+            aria-label="Chat with the dispatcher (English text chat)"
+            className="flex items-center gap-2"
+            style={{
+              background: "linear-gradient(135deg,#2456A6,#173B77)", color: "#fff", border: "none", borderRadius: 99,
+              padding: "10px 17px", fontSize: 13.5, fontWeight: 700, cursor: "pointer",
+              boxShadow: SHADOW.floatBtn,
+            }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            Chat
+          </button>
+
           {/* Report Incident — the full report sheet. Secondary (navy, no pulse),
               a touch smaller than SOS. */}
           <button
@@ -1422,6 +1449,7 @@ export default function MapView() {
         open={reportOpen}
         initialMode={reportInitialMode}
         autoStartVoice={reportAutoStartVoice}
+        autoStartChat={reportAutoStartChat}
         initialVoiceLocale={reportVoiceLocale ?? undefined}
         pinnedLocation={pinnedLocation}
         pinnedLabel={pinnedLabel}
