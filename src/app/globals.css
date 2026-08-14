@@ -52,6 +52,11 @@ body {
   from { transform: translateY(28px); opacity: 0; }
   to   { transform: translateY(0); opacity: 1; }
 }
+/* Chat "typing…" three-dot indicator (AI text-chat dispatcher). */
+@keyframes tsTyping {
+  0%, 60%, 100% { opacity: .3; transform: translateY(0); }
+  30%           { opacity: 1; transform: translateY(-3px); }
+}
 
 /* ── Themed scrollbars ─────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

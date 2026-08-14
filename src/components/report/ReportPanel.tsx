@@ -2030,20 +2030,11 @@ export default function ReportPanel({
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
           {mode === "CHAT" ? (
-            <div style={{ padding: "16px 20px 20px" }}>
-              <ChatSection
-                chat={chat}
-                selectedSubType={selectedSubType}
-                selectedCategory={selectedCategory}
-                description={description}
-                vehiclesInvolved={vehiclesInvolved}
-                casualties={casualties}
-                selectedFlags={selectedFlags}
-                dispatcherLocation={dispatcherLocation}
-                pinnedLocation={pinnedLocation}
-                pinnedLabel={pinnedLabel}
-                onRequestPin={onRequestPin}
-              />
+            // Definite height so the thread scrolls and the input pins to the
+            // bottom (box-border: padding is inside the height). Fits within the
+            // sheet's 82vh max on mobile and caps on desktop.
+            <div style={{ height: "min(70vh, 540px)", padding: "16px 20px 18px" }}>
+              <ChatSection chat={chat} />
               {/* Headless matching for a SUBMITTED chat incident: runs the same
                   assess + MatchingPanel routes work (logging ROUTE_ESTIMATED /
                   HOSPITAL_MATCHED, which triggers the closing-briefing effect
