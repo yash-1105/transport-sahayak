@@ -6,12 +6,12 @@
 // (no section scoping). Mounted only inside MapView's `tab === "NETWORK" &&
 // isOperator` overlay (isOperator is true for admins too), so it's fully gated.
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { C, RADIUS } from "@/lib/design";
 import { useBilingual } from "@/hooks/useI18n";
 import { useAuthStore, useIsAdmin } from "@/store/authStore";
 import type { DbAccident } from "@/lib/types";
-import { sectionOfEmail, sectionOfPoint } from "@/lib/sections";
+import { sectionOfEmail } from "@/lib/sections";
 import SignalsDashboardPanel from "@/components/signals/SignalsDashboardPanel";
 import OperatorCallAnalytics from "@/components/operator/OperatorCallAnalytics";
 import OperatorAmbiguityReview from "@/components/operator/OperatorAmbiguityReview";
@@ -44,13 +44,9 @@ export default function OperatorDashboard({
 
   const tabs = isAdmin ? [...BASE_TABS, ...ADMIN_TABS] : BASE_TABS;
 
-  // Operator scoping: a non-admin operator assigned to a section sees only that
-  // section's incidents; the admin (and any unassigned operator) sees all.
+  // The operator's monitored section (for the role/scope banner). Duplicate
+  // detection itself runs network-wide — see the Ambiguity tab below.
   const mySection = isAdmin ? null : sectionOfEmail(email);
-  const scopedAccidents = useMemo(() => {
-    if (isAdmin || !mySection) return accidents;
-    return accidents.filter((a) => typeof a.lat === "number" && typeof a.lng === "number" && sectionOfPoint(a).id === mySection.id);
-  }, [accidents, isAdmin, mySection]);
 
   return (
     <div className="flex flex-col" style={{ minHeight: "100%" }}>
@@ -104,7 +100,11 @@ export default function OperatorDashboard({
       <div className="flex-1">
         {sub === "network" && <SignalsDashboardPanel />}
         {sub === "analytics" && <OperatorCallAnalytics />}
-        {sub === "ambiguity" && <OperatorAmbiguityReview accidents={scopedAccidents} onReviewsChanged={onReviewsChanged} />}
+        {/* Duplicate detection is NETWORK-WIDE: duplicates can span section
+            boundaries, and scoping to one section made the review effectively
+            empty. The operator reviews likely-duplicate clusters across all
+            incidents (advisory only — Hard Rule 5). */}
+        {sub === "ambiguity" && <OperatorAmbiguityReview accidents={accidents} onReviewsChanged={onReviewsChanged} />}
         {sub === "sections" && isAdmin && <AdminSections accidents={accidents} />}
         {sub === "actions" && isAdmin && <AdminSuggestedActions accidents={accidents} onNavigate={setSub} />}
       </div>

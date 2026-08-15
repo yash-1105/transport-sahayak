@@ -42,7 +42,7 @@ export default function OperatorSignIn({ onClose }: { onClose: () => void }) {
     }
     // Defense-in-depth: if the session that actually landed is somehow not an
     // operator, sign it straight back out (belt-and-suspenders with the check
-    // above). On success the gate re-renders into the app on its own.
+    // above).
     const signedInEmail = useAuthStore.getState().user?.email ?? null;
     if (signedInEmail && !isOperatorEmail(signedInEmail)) {
       await signOut();
@@ -50,7 +50,17 @@ export default function OperatorSignIn({ onClose }: { onClose: () => void }) {
       setErr("This account is not authorised for operator access.");
       return;
     }
+    // Signed in as operator — ENTER THE APP, straight to the dispatch dashboard
+    // (Network tab), and close this modal. Without enterPwa() the gate keeps
+    // showing the launch/login screen even though the session has landed, and
+    // routing through the launch home's "View dashboard" is what wrongly opened
+    // the citizen safety-profile sheet. launchIntent "dashboard" (not "profile")
+    // lands the operator on the Network tab instead.
+    const store = useAuthStore.getState();
+    store.setLaunchIntent("dashboard");
+    store.enterPwa();
     setBusy(false);
+    onClose();
   }
 
   return (

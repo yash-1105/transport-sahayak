@@ -46,7 +46,13 @@ export default function AdminSignIn({ onClose }: { onClose: () => void }) {
       setErr("This account is not authorised for administrator access.");
       return;
     }
+    // Signed in as administrator — enter the app straight to the dashboard
+    // (Network tab) and close this modal (same reasoning as OperatorSignIn).
+    const store = useAuthStore.getState();
+    store.setLaunchIntent("dashboard");
+    store.enterPwa();
     setBusy(false);
+    onClose();
   }
 
   return (

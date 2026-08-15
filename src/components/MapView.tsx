@@ -15,7 +15,7 @@ import TimelinePanel from "@/components/TimelinePanel";
 import AuthControl from "@/components/auth/AuthControl";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import SafetyProfileSheet from "@/components/auth/SafetyProfileSheet";
-import { useIsOperator, useAuthStore } from "@/store/authStore";
+import { useIsOperator, useAuthStore, isOperatorEmail } from "@/store/authStore";
 import InstallPWA from "@/components/InstallPWA";
 import IncidentRecord from "@/components/IncidentRecord";
 import { useT, useBilingual } from "@/hooks/useI18n";
@@ -667,7 +667,14 @@ export default function MapView() {
   const { showHindi } = useBilingual();
   const browserKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_BROWSER_KEY ?? "";
 
-  const [tab, setTab] = useState<Tab>("SERVICES");
+  // An operator who signed in via the operator/admin door (launchIntent
+  // "dashboard") lands straight on the Network dispatch dashboard; everyone else
+  // opens on Services.
+  const [tab, setTab] = useState<Tab>(() =>
+    useAuthStore.getState().launchIntent === "dashboard" && isOperatorEmail(useAuthStore.getState().user?.email)
+      ? "NETWORK"
+      : "SERVICES"
+  );
   // Network tab is operator-only (Signals/Aggregator dispatch dashboard).
   const isOperator = useIsOperator();
   // Never let a non-operator sit on NETWORK (e.g. via stale state after sign-out
@@ -702,7 +709,9 @@ export default function MapView() {
     () => useAuthStore.getState().launchVoiceLocale
   );
   const [reportSession, setReportSession] = useState(0);
-  const [profileOpen, setProfileOpen] = useState(launchIntent === "profile");
+  // Operators are staff, not citizens — never auto-open the citizen safety
+  // profile for them (the "profile" launch intent belongs to citizen accounts).
+  const [profileOpen, setProfileOpen] = useState(() => launchIntent === "profile" && !isOperator);
   useEffect(() => {
     // Clear the one-shot intent once consumed (a store action, not a React
     // setState, so this never re-triggers a render loop).

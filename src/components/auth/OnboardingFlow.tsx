@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import { C } from "@/lib/design";
 import { useBilingual } from "@/hooks/useI18n";
-import { useAuthStore } from "@/store/authStore";
+import { useAuthStore, useIsOperator } from "@/store/authStore";
 import { Sheet, InfoBanner, PrimaryButton } from "@/components/auth/ui";
 import SafetyProfileSheet from "@/components/auth/SafetyProfileSheet";
 import SurakshaMitraSheet from "@/components/auth/SurakshaMitraSheet";
@@ -29,9 +29,13 @@ export default function OnboardingFlow() {
   const { showHindi } = useBilingual();
   const needsOnboarding = useAuthStore((s) => s.needsOnboarding);
   const finishOnboarding = useAuthStore((s) => s.finishOnboarding);
+  const isOperator = useIsOperator();
   const [step, setStep] = useState<Step>("welcome");
 
-  if (!needsOnboarding) return null;
+  // Operators/administrators are STAFF, not citizens — never run the citizen
+  // safety-profile onboarding for them (defensive: even if needsOnboarding is
+  // somehow set, they never see the safety-profile sheet).
+  if (!needsOnboarding || isOperator) return null;
 
   if (step === "welcome") {
     return (
