@@ -87,6 +87,19 @@ export const strings = {
   layerPotholes:    { EN: "Road Defects / Potholes", HI: "सड़क दोष / गड्ढे", AS: "পথৰ ত্ৰুটি / গাঁত" },
   layerReportedAccidents: { EN: "Reported Accidents", HI: "रिपोर्ट की गई दुर्घटनाएं", AS: "প্ৰতিবেদিত দুৰ্ঘটনা" },
 
+  // ── Launch / SOS home (PWAHome) ──────────────────────────────────────────────
+  sosKicker:    { EN: "Road accident first response",
+                  HI: "सड़क दुर्घटना प्रथम प्रतिक्रिया",
+                  AS: "পথ দুৰ্ঘটনা প্ৰথম সাড়া" },
+  sosSubtitle:  { EN: "Tap to talk to the AI dispatcher — it takes your report in English, Hindi or Assamese.",
+                  HI: "एआई डिस्पैचर से बात करने के लिए टैप करें — यह आपकी रिपोर्ट अंग्रेज़ी, हिंदी या असमिया में लेता है।",
+                  AS: "এআই ডিছপেচাৰৰ সৈতে কথা পাতিবলৈ টিপক — ই আপোনাৰ প্ৰতিবেদন ইংৰাজী, হিন্দী বা অসমীয়াত লয়।" },
+  viewDashboard: { EN: "View dashboard", HI: "डैशबोर्ड देखें", AS: "ডেশ্ববোৰ্ড চাওক" },
+  signIn:       { EN: "Sign in", HI: "साइन इन", AS: "ছাইন ইন" },
+  sosFooter:    { EN: "Highway helpline 1033 · Guwahati, Assam",
+                  HI: "हाईवे हेल्पलाइन 1033 · गुवाहाटी, असम",
+                  AS: "হাইৱে হেল্পলাইন 1033 · গুৱাহাটী, অসম" },
+
   // ── Report panel ─────────────────────────────────────────────────────────────
   reportTitle:      { EN: "Report Incident",           HI: "घटना रिपोर्ट करें",       AS: "ঘটনা প্ৰতিবেদন দিয়ক" },
   reportModeSOS:    { EN: "🚨 SOS",                    HI: "🚨 SOS",                   AS: "🚨 SOS" },

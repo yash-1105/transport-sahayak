@@ -3,7 +3,7 @@ import React, { useState } from "react";
 import { C, RADIUS, CTA_GRADIENT, BRAND_GRADIENT, SHADOW } from "@/lib/design";
 import { ShieldCrossIcon, UserIcon, MicIcon } from "@/components/ui/icons";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
-import { useBilingual } from "@/hooks/useI18n";
+import { useBilingual, useT } from "@/hooks/useI18n";
 import { useAuthStore } from "@/store/authStore";
 import AuthLanding from "@/components/auth/AuthLanding";
 
@@ -15,6 +15,9 @@ import AuthLanding from "@/components/auth/AuthLanding";
 // dashboard / Sign in / guest / operator flows are all preserved.
 export default function PWAHome() {
   const { showHindi } = useBilingual();
+  // The switcher (LanguageSwitcher → useLocaleStore) drives useT(), so this
+  // screen's text now follows the selected EN / हिं / অস language.
+  const t = useT();
   const user = useAuthStore((s) => s.user);
   const continueAsGuest = useAuthStore((s) => s.continueAsGuest);
   const setLaunchIntent = useAuthStore((s) => s.setLaunchIntent);
@@ -81,8 +84,7 @@ export default function PWAHome() {
             <ShieldCrossIcon size={19} style={{ color: "#fff" }} />
           </div>
           <div style={{ lineHeight: 1.15, minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: C.ink }} className="truncate">Transport Sahayak</div>
-            {showHindi && <div style={{ fontSize: 12, color: C.muted }}>परिवहन सहायक</div>}
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.ink }} className="truncate">{t("appName")}</div>
           </div>
         </div>
 
@@ -104,7 +106,7 @@ export default function PWAHome() {
             style={{ gap: 6, padding: "6px 12px", borderRadius: RADIUS.pill, border: `1px solid ${C.border}`, background: "#fff", color: C.body, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}
           >
             <UserIcon size={15} />
-            <span>Sign in{showHindi && <span style={{ color: C.muted, fontWeight: 500 }}> · साइन इन</span>}</span>
+            <span>{t("signIn")}</span>
           </button>
         )}
         </div>
@@ -113,7 +115,7 @@ export default function PWAHome() {
       {/* ── Center: SOS (auto-Hindi) + Report Incident + View dashboard ── */}
       <div className="flex flex-col items-center justify-center flex-1" style={{ gap: 20, padding: "12px 24px", overflowY: "auto" }}>
         <div style={{ fontSize: 12, letterSpacing: ".14em", textTransform: "uppercase", color: C.muted, fontWeight: 600, textAlign: "center" }}>
-          Road accident first response
+          {t("sosKicker")}
         </div>
 
         {/* SOS — emergency voice dispatch. The big red pulsing CTA (primary),
@@ -132,12 +134,12 @@ export default function PWAHome() {
         >
           <MicIcon size={40} />
           <span style={{ fontSize: 27, fontWeight: 800, letterSpacing: "-.01em" }}>
-            SOS{showHindi && <span style={{ fontSize: 17, fontWeight: 600, opacity: 0.92 }}> · एसओएस</span>}
+            SOS
           </span>
         </button>
 
         <p style={{ fontSize: 12.5, color: C.secondary, textAlign: "center", maxWidth: 300, lineHeight: 1.5 }}>
-          Tap to talk to the AI dispatcher — it takes your report in English or Hindi.
+          {t("sosSubtitle")}
         </p>
 
         {/* Report Incident — the full report sheet (secondary, navy), matching
@@ -152,20 +154,20 @@ export default function PWAHome() {
           }}
         >
           <span className="inline-flex items-center justify-center flex-none" style={{ width: 21, height: 21, borderRadius: "50%", background: "rgba(255,255,255,.18)", fontSize: 15, fontWeight: 600 }}>+</span>
-          Report Incident{showHindi && <span style={{ fontWeight: 500, opacity: 0.82 }}> · रिपोर्ट करें</span>}
+          {t("reportTitle")}
         </button>
 
         <button
           onClick={handleDashboard}
           style={{ background: "transparent", border: "none", color: C.blue, fontSize: 14, fontWeight: 600, cursor: "pointer", padding: "6px 14px" }}
         >
-          View dashboard{showHindi && <span style={{ color: C.muted, fontWeight: 500 }}> · डैशबोर्ड देखें</span>} ›
+          {t("viewDashboard")} ›
         </button>
       </div>
 
       {/* ── Footer (safe-area bottom) ── */}
       <div style={{ padding: "10px 20px calc(14px + env(safe-area-inset-bottom))", textAlign: "center", fontSize: 11, color: C.faint, letterSpacing: ".1em", textTransform: "uppercase", fontVariantNumeric: "tabular-nums" }}>
-        Highway helpline 1033 · Guwahati, Assam
+        {t("sosFooter")}
       </div>
       </div>{/* ── end centered max-width column ── */}
 
