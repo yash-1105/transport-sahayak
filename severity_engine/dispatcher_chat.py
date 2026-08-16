@@ -162,7 +162,7 @@ SUBMITTING (routine reports): when "next_question" comes back null and "fast_tra
 
 FAST-TRACK (injuries or life-threatening emergencies) — OVERRIDES the confirmation above: every tool response includes "fast_track". When it is true, the user has already reported an injury or life-threatening condition, so "next_question" stops asking routine secondary questions and goes null as soon as you have the incident type, location, and a short description. Then do NOT ask permission and do NOT gather more — briefly reassure them that help is being arranged RIGHT NOW ("I'm getting help arranged for you right now"), and in that SAME turn call submit_incident. HONESTY (hard rules): say help is being ARRANGED right now — NEVER that a vehicle has been dispatched, is on its way, is being tracked, or will arrive in N minutes. This only creates a notification record.
 
-AFTER SUBMISSION: when submit_incident succeeds, follow its "next_step" — tell the user their report has been registered and that you are checking which emergency services are responding, and ask them to stay in the chat for a moment. This is the LAST thing you write. Do not say goodbye, do not ask anything further, and do not call any more tools.
+AFTER SUBMISSION: when submit_incident succeeds, follow its "next_step" — tell the user their report has been registered and that you are checking which emergency services are responding, and ask them to stay in the chat for a moment. Then the responder details are shown to them. The chat then STAYS OPEN — do NOT end it, do not say a final goodbye. If the user asks anything else afterwards (for example "nearest hospital / mechanic / fuel / police to me", or how far something is), keep helping them: use find_nearest_facility for facility questions, exactly as described above. Only stop when the user themselves is done.
 
 HONESTY (never break these): every time you give is an ESTIMATE ("estimated", "approximately"); services are NOTIFIED / responding, never "dispatched and tracked"; never invent a responder name, number, or arrival time — only use what you are given."""
 
@@ -186,6 +186,11 @@ class TextChatSession(HelplineToolsMixin, DispatcherSession):
         self._openai_tools = gemini_tools_to_openai(_TOOL_DECLARATIONS + _FACILITY_DECLARATIONS)
         self._sarvam_http: Optional[httpx.AsyncClient] = None
         self._opening_pending = True
+        # The closing briefing is delivered exactly once (the first time the
+        # incident is submitted); after it, the chat stays OPEN so the user can
+        # keep asking follow-up questions (nearest hospital / mechanic / fuel /
+        # police, etc.) — it is NOT ended.
+        self._briefing_delivered = False
 
     async def _dispatch_tool(self, name: str, args: dict) -> dict:
         # Route the one helpline tool to the mixin; everything else to the shared
@@ -215,15 +220,19 @@ class TextChatSession(HelplineToolsMixin, DispatcherSession):
                 f"confirm the location if one was detected, and ask what happened — all in one short reply.)",
                 opening=True,
             )
-            while not self._ended.is_set() and not self.state.submitted:
+            while not self._ended.is_set():
                 user_text = await self._inbound_text.get()
                 if user_text is None:
                     break
                 self.state.caller_transcript += " " + user_text
                 await self._apply_local_signals_from_transcript()  # shared backstop
                 await self._turn(user_text)
-            if self.state.submitted and not self._ended.is_set():
-                await self._deliver_briefing()
+                # The moment the incident is submitted, deliver the closing
+                # briefing ONCE (ETA cards + safety guidance), then keep looping so
+                # the chat stays open for follow-up questions.
+                if self.state.submitted and not self._briefing_delivered and not self._ended.is_set():
+                    self._briefing_delivered = True
+                    await self._deliver_briefing()
         finally:
             pump.cancel()
             try:
@@ -304,7 +313,10 @@ class TextChatSession(HelplineToolsMixin, DispatcherSession):
         self._opening_pending = False
         await self._safe_send_json({"type": "transcript", "role": "assistant", "text": reply})
         await self._safe_send_json({"type": "assistant_text", "text": reply})
-        if not self.state.submitted:
+        # Re-enable the input after a turn EXCEPT during the brief matching window
+        # (submitted, but the closing briefing not yet delivered). Once the
+        # briefing is out, the chat is open for follow-ups, so re-enable it again.
+        if not self.state.submitted or self._briefing_delivered:
             await self._safe_send_json({"type": "status", "state": "listening"})
 
     async def _reason(self, user_text: str, briefing: bool = False) -> Optional[str]:
@@ -371,7 +383,8 @@ class TextChatSession(HelplineToolsMixin, DispatcherSession):
     async def _deliver_briefing(self) -> None:
         """After the frontend's matching flow sends dispatch_update, deliver the
         English closing briefing (dispatch_briefing, "en-IN") as ONE
-        assistant_text, then call_complete. Same honesty rules as voice: if
+        assistant_text, then re-enable the input (the chat stays open for
+        follow-up questions — it is NOT ended). Same honesty rules as voice: if
         dispatch_update never arrives, the briefing skips ETAs (never invents)."""
         try:
             await asyncio.wait_for(self._dispatch_ready.wait(), timeout=_DISPATCH_WAIT_S)
@@ -388,7 +401,11 @@ class TextChatSession(HelplineToolsMixin, DispatcherSession):
             reply = self._compose_fallback_briefing()
         await self._safe_send_json({"type": "transcript", "role": "assistant", "text": reply})
         await self._safe_send_json({"type": "assistant_text", "text": reply})
-        await self._safe_send_json({"type": "call_complete"})
+        # Do NOT end the chat here — the report is filed, but the user can keep
+        # asking follow-up questions (nearest hospital / mechanic / fuel /
+        # police, etc.). Re-enable the input; the chat only ends when the user
+        # closes it (or the socket drops).
+        await self._safe_send_json({"type": "status", "state": "listening"})
 
     def _compose_fallback_briefing(self) -> str:
         """Deterministic chat closing text (no model call), used if Sarvam is

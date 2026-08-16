@@ -213,13 +213,9 @@ export function ChatLocationGate({ onLocation, showHindi = false }: {
 
 export interface ChatSectionProps {
   chat: UseTextChat;
-  /** Responder ETAs to render as countdown cards at the closing (chat only). */
-  services?: DispatchBriefingServices | null;
-  /** ISO timestamp the ETAs were computed — anchors the countdown. */
-  servicesAt?: string | null;
 }
 
-export function ChatSection({ chat, services, servicesAt }: ChatSectionProps) {
+export function ChatSection({ chat }: ChatSectionProps) {
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -289,8 +285,13 @@ export function ChatSection({ chat, services, servicesAt }: ChatSectionProps) {
         )}
 
         {chat.messages.map((m, i) => {
+          // Inline ETA countdown cards (the closing widgets) — rendered as a
+          // full-width block in the flow so follow-up messages appear AFTER them.
+          if (m.kind === "eta" && m.services) {
+            return <ChatEtaCards key={i} services={m.services} computedAt={new Date(m.at).toISOString()} />;
+          }
           const prev = chat.messages[i - 1];
-          const startGroup = !prev || prev.role !== m.role;
+          const startGroup = !prev || prev.role !== m.role || prev.kind === "eta";
           const isUser = m.role === "user";
           return (
             <div
@@ -333,14 +334,12 @@ export function ChatSection({ chat, services, servicesAt }: ChatSectionProps) {
           </div>
         )}
 
-        {chat.status === "submitted" && !services && (
+        {/* Matching in progress — shown until the ETA cards message arrives. */}
+        {chat.status === "submitted" && !chat.messages.some((m) => m.kind === "eta") && (
           <div className="self-center" style={{ margin: "10px 0", padding: "5px 12px", borderRadius: RADIUS.pill, background: C.saffronSoftBg, border: `1px solid ${C.saffronSoftBorder}`, fontSize: 11.5, fontWeight: 600, color: C.saffronSoftText }}>
             Finding nearest help…
           </div>
         )}
-        {/* Interactive ETA countdown cards — the widgets that replace the ETA
-            text wall in the closing (ambulance / fire / towing / hospital / police). */}
-        {services && servicesAt && <ChatEtaCards services={services} computedAt={servicesAt} />}
         {ended && (
           <div className="self-center" style={{ margin: "10px 0 2px", fontSize: 11.5, color: C.muted }}>
             Chat ended · your report has been filed

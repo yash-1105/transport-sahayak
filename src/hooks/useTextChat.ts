@@ -40,6 +40,11 @@ export interface ChatMessage {
   role: "user" | "assistant";
   text: string;
   at: number;
+  /** "eta" = the responder ETA countdown cards, rendered inline in the thread at
+   * the closing (carrying the services payload). Default/undefined = a text
+   * bubble. Inline so follow-up messages appear AFTER the cards, not below them. */
+  kind?: "text" | "eta";
+  services?: DispatchBriefingServices;
 }
 
 export interface UseTextChatCallbacks {
@@ -76,6 +81,9 @@ export interface UseTextChat {
    * displaying so it can deliver the closing briefing as a chat message. No-op
    * if the chat already ended. */
   sendDispatchBriefing: (services: DispatchBriefingServices) => void;
+  /** Append the responder ETA countdown cards as an inline message in the thread
+   * (called by ReportPanel once the matching flow has the ETAs). */
+  appendEtaCards: (services: DispatchBriefingServices) => void;
   /** Link this chat's committed INC-… id (kept for parity with the voice hook;
    * chat does not post call metrics). */
   attachIncidentId: (id: string) => void;
@@ -151,8 +159,12 @@ export function useTextChat(callbacks: UseTextChatCallbacks): UseTextChat {
       case "ready":
         break; // backend follows this with its opening reply (status + assistant_text)
       case "status":
+        // "listening" always re-enables the input (the backend only sends it
+        // when the user may type — including AFTER the closing briefing, so the
+        // chat stays open for follow-up questions; it is suppressed during the
+        // brief matching window).
         if (event.state === "thinking") setStatus("thinking");
-        else if (event.state === "listening") setStatus((s) => (s === "submitted" ? s : "waiting"));
+        else if (event.state === "listening") setStatus("waiting");
         break;
       case "assistant_text":
         if (typeof event.text === "string" && event.text.trim()) {
@@ -321,6 +333,14 @@ export function useTextChat(callbacks: UseTextChatCallbacks): UseTextChat {
     ws.send(JSON.stringify({ type: "dispatch_update", services }));
   }, []);
 
+  const appendEtaCards = useCallback((services: DispatchBriefingServices) => {
+    setMessages((prev) => {
+      // Guard against a duplicate cards message (the briefing effect can re-fire).
+      if (prev.some((m) => m.kind === "eta")) return prev;
+      return [...prev, { role: "assistant", text: "", kind: "eta", services, at: Date.now() }];
+    });
+  }, []);
+
   const attachIncidentId = useCallback((id: string) => {
     incidentIdRef.current = id;
   }, []);
@@ -338,6 +358,7 @@ export function useTextChat(callbacks: UseTextChatCallbacks): UseTextChat {
     stop,
     send,
     sendDispatchBriefing,
+    appendEtaCards,
     attachIncidentId,
   };
 }

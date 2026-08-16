@@ -1570,10 +1570,9 @@ export default function ReportPanel({
   const briefingSentForRef = useRef<string | null>(null);
   const sendDispatchBriefing = dispatcher.sendDispatchBriefing;
   const chatSendDispatchBriefing = chat.sendDispatchBriefing;
-  // Responder ETAs handed to the chat's closing so it can render interactive
-  // countdown CARDS (not a text wall). Same values the briefing text/voice use.
-  const [chatBriefingServices, setChatBriefingServices] = useState<DispatchBriefingServices | null>(null);
-  const [chatBriefingAt, setChatBriefingAt] = useState<string | null>(null);
+  // Responder ETAs are rendered in the chat as an inline countdown-cards message
+  // (so follow-up questions appear after them, and the chat stays open).
+  const chatAppendEtaCards = chat.appendEtaCards;
 
   // Link this dispatcher call's captured Post-Call Analytics to the committed
   // INC-… id (attachIncidentId is a stable ref-setter, so this fires once when
@@ -1695,14 +1694,11 @@ export default function ReportPanel({
         const svc = services[k];
         if (svc && svc.etaMinutes != null && svc.etaMinutes > MAX_SANE_ETA_MIN) delete services[k];
       }
-      if (isChat) {
-        setChatBriefingServices(services);
-        setChatBriefingAt(new Date().toISOString());
-      }
+      if (isChat) chatAppendEtaCards(services);   // inline countdown-cards message
       (isChat ? chatSendDispatchBriefing : sendDispatchBriefing)(services);
     }, 2500);
     return () => clearTimeout(t);
-  }, [entries, createdIncident, sendDispatchBriefing, chatSendDispatchBriefing]);
+  }, [entries, createdIncident, sendDispatchBriefing, chatSendDispatchBriefing, chatAppendEtaCards]);
 
   function resetForm() {
     setPanelStatus("IDLE");
@@ -2066,7 +2062,7 @@ export default function ReportPanel({
                   onLocation={(p, label) => setDispatcherLocation({ point: p, label })}
                 />
               ) : (
-                <ChatSection chat={chat} services={chatBriefingServices} servicesAt={chatBriefingAt} />
+                <ChatSection chat={chat} />
               )}
               {/* Headless matching for a SUBMITTED chat incident: runs the same
                   assess + MatchingPanel routes work (logging ROUTE_ESTIMATED /

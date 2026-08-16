@@ -405,8 +405,9 @@ def _build_chat_briefing_instruction(state) -> str:
     sop_lines = [s["en"] for s in sops]
     return (
         "(SYSTEM UPDATE — not the user speaking. The report was submitted and the response "
-        "dashboard has matched the responding services. This is your FINAL message in this text "
-        "chat. The responder names and their estimated arrival times are shown to the user as "
+        "dashboard has matched the responding services. This is the closing summary of the report "
+        "(the chat then stays open for any follow-up questions). The responder names and their "
+        "estimated arrival times are shown to the user as "
         "separate cards right here in the chat, so do NOT restate any arrival time, minutes, "
         "distance, or facility name in your text — the cards already show them. Write ONE warm, "
         "brief closing chat MESSAGE (this is a typed chat, never a phone call — never say \"call\", "
@@ -418,8 +419,9 @@ def _build_chat_briefing_instruction(state) -> str:
         + "\n".join(f"   - {line}" for line in sop_lines)
         + "\n3. CLOSING — finish with these points, in order:\n"
         + "\n".join(f"   - {line}" for line in _CLOSING_CHAT)
-        + "\n\nDo not ask the user any question, do not call any tool, and after this message say "
-        "nothing more.)"
+        + "\n\nDo not ask the user a question and do not call any tool in THIS closing message. "
+        "Do NOT end the chat or say a final goodbye — after this, the chat stays open and you keep "
+        "helping if the user asks anything else.)"
     )
 
 

@@ -3491,4 +3491,34 @@ check("#CHAT find_nearest_facility sends request_facility and returns the resolv
       _freq is not None and _freq.get("facilityType") == "hospital" and _fhandled is True
       and _fres.get("ok") is True and _fres.get("facility", {}).get("name") == "GMCH")
 
+# Chat STAYS OPEN after the closing briefing: _deliver_briefing sends the summary
+# + re-enables the input (status "listening") and does NOT send call_complete, so
+# the user can keep asking follow-up questions (nearest hospital/mechanic/etc.).
+async def _chat_stays_open():
+    ws = _ChatFakeWS(); s = _chat.TextChatSession(ws)
+    s.state.submitted = True
+    s._dispatch_info = {"ambulance": {"name": "A", "etaMinutes": 8}}
+    s._dispatch_ready.set()
+    async def fake_reason(text, briefing=False): return "Your report is filed. Stay safe."
+    s._reason = fake_reason
+    await s._deliver_briefing()
+    return ([f.get("type") for f in ws.sent],
+            [f.get("state") for f in ws.sent if f.get("type") == "status"])
+_frames, _states = asyncio.run(_chat_stays_open())
+check("#CHAT closing briefing keeps the chat OPEN (re-enables input, NO call_complete)",
+      "assistant_text" in _frames and "call_complete" not in _frames and "listening" in _states)
+
+# A follow-up turn AFTER the briefing re-enables the input even though the
+# incident is already submitted (so the input isn't stuck disabled).
+async def _chat_followup_reenables():
+    ws = _ChatFakeWS(); s = _chat.TextChatSession(ws)
+    s.state.submitted = True
+    s._briefing_delivered = True
+    async def fake_reason(text, briefing=False): return "The nearest hospital is GMCH, ~6 min away."
+    s._reason = fake_reason
+    await s._turn("nearest hospital to me")
+    return [f.get("state") for f in ws.sent if f.get("type") == "status"]
+check("#CHAT a follow-up turn after the briefing re-enables the input (listening)",
+      "listening" in asyncio.run(_chat_followup_reenables()))
+
 print("\nALL TESTS PASSED")
